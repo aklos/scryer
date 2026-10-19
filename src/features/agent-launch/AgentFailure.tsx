@@ -1,18 +1,15 @@
 /**
  * Agent-run failure modal.
  *
- * Any agent run (model build, drift check, per-node fill, preview fixtures) can
- * die mid-flight — most often an auth (401) or network error from the underlying
- * AI agent. A toast is too easy to miss for something that aborted real work, so
- * a failure surfaces here as a blocking modal that states two things plainly:
- * WHAT failed (the raw error from the agent) and WHAT SCRYER DID about it (the
- * recovery decision — e.g. "your drift state was left unchanged"), so the user
- * knows the model is in a known, safe state and what to do next.
+ * An agent run (such as a preview-fixture fill) can die mid-flight — most often
+ * an auth (401) or network error from the underlying AI agent. A toast is too
+ * easy to miss for something that aborted real work, so a failure surfaces
+ * here as a blocking modal that states WHAT failed (the raw error) and WHAT
+ * SCRYER DID about it (e.g. "nothing was changed"), so the user knows the
+ * project is in a known, safe state.
  *
  * Mirrors the ToastProvider shape: a provider holds the one pending failure and
  * the `useAgentFailure()` consumer hook hands callers a `report` function.
- *
- * Surfaces a failed agent run (drift check, build, fill) as a blocking modal with its recovery outcome
  */
 
 import { createContext, useCallback, useContext, useEffect, useState } from "react";

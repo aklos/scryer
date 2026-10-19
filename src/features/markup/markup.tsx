@@ -1,35 +1,20 @@
 /**
- * Statement markup — the display structure of a responsibility claim.
+ * Statement markup — the display structure of a claim.
  *
  * A statement carries exactly one markdown-lite marker: `**bold**` on the scan
  * anchors — the EARS keyword (including "then") and the response verbs (rule
- * 21). The markers live inside the canonical statement string — there is no
- * schema field — so everything here is presentation: parse for display, strip
- * for comparison, search, and word-diffing. Malformed or unmatched markers are
- * never an error; they render literally.
+ * 21). The markers live inside the statement string — there is no schema
+ * field — so everything here is presentation: parse for display, strip for
+ * comparison, search, word-diffing, and writing into a test. Malformed or
+ * unmatched markers are never an error; they render literally. Wherever a
+ * statement is shown it goes through {@link StatementText}, so no surface leaks
+ * asterisks at the reader.
  *
- * Wherever a statement is shown it goes through {@link StatementText} — markup
- * is ALWAYS rendered, never printed raw and never silently flattened, so no
- * surface leaks asterisks at the reader.
- *
- * Two producers write markers: agents author them directly (rule 21), and the
- * editor mints them for hand-typed marker-free statements via the positional
- * EARS pass ({@link earsTokenize} / {@link serializeEars}) — a tokenizer over
- * the grammar's closed keyword set and fixed clause order, never a linguistic
- * guess. {@link MarkupMirror} renders the live char-exact preview behind the
- * editor's transparent text, so what the author sees is what commits.
- *
- * Parses and mints a claim statement's bold scan-anchor markup, styling marker-free text from EARS grammar alone
- *
- * Word-diffs two strings for reworded claims, descriptions, and link labels
- *
- * Flags rule-21 EARS-grammar violations in a claim statement — dangling conditions, compound responses, and the like
- *
- * Positionally styles a marker-free EARS statement from the grammar's fixed shape alone
- *
- * Flags EARS-grammar violations in a claim statement
- *
- * Parses a claim statement's bold scan-anchor markup into renderable segments
+ * Marker-free statements are styled by the positional EARS pass
+ * ({@link earsTokenize} / {@link serializeEars}) — a tokenizer over the
+ * grammar's closed keyword set and fixed clause order, never a linguistic
+ * guess. {@link lintEars} flags grammar slips from the same shape, and
+ * {@link MarkupMirror} renders the live preview behind the editor's text.
  */
 import type { ReactNode } from "react";
 

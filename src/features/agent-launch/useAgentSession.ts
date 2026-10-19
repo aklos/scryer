@@ -1,5 +1,8 @@
 /**
- * Subscribes to the live agent event stream and derives running/label/activity/outcome state for the UI
+ * The in-app agent session: starts a run (the preview-fixture fill), follows the
+ * `agent-event` stream into running / label / activity / outcome state for the
+ * UI, reports a failed or unstartable run to the failure modal, and cancels on
+ * request. One run at a time.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";

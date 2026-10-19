@@ -1,17 +1,12 @@
 /**
- * Deterministic preview server access (Track B). Asks the backend to start
- * (or reuse) the project's shared Vite dev server and exposes its URL plus
- * the list of renderable components it discovered. No agent involved —
- * components render by pointing an iframe at
- * `{url}/__preview?file=...&export=...`.
+ * Deterministic preview server access. Asks the backend to start (or reuse)
+ * the project's shared Vite dev server and exposes its URL plus the list of
+ * renderable components it discovered. No agent involved — components render
+ * by pointing an iframe at `{url}/__preview?file=...&export=...`.
  *
- * Matches a model symbol to the sidecar's mountable export for it
- *
- * Connects to the project's preview sidecar and tracks its discovered component list
- *
- * Matches a model symbol to the sidecar's mountable export for it, by name and anchored file
- *
- * Connects to the project's preview sidecar and tracks its discovered component list
+ * Preview-ability is derived here, never stored: a symbol gets a preview when
+ * the sidecar reports an export of exactly its name, the anchored file breaking
+ * a tie between same-named exports.
  */
 
 import { useEffect, useState } from "react";

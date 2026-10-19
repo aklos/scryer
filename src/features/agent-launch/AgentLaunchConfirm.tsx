@@ -6,8 +6,6 @@
  * configured model is expensive or their quota is thin. "Don't ask again" clears
  * the gate (persisted via the subagent settings); the violet button styling then
  * remains the standing cue that the action still spawns an agent.
- *
- * Gates every agent-spawning UI action behind a confirm modal, skippable via a persisted "don't ask again" setting
  */
 
 import { useCallback, useEffect, useState } from "react";

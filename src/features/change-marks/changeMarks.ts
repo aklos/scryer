@@ -1,8 +1,8 @@
 /**
  * Change marks — the single-letter vocabulary the UI uses to show how the plan
- * (`planned`) diverges from the committed model, plus the two drift flags. One
- * letter summarizes a row in the tree gutter; the node page and status bar
- * spell the same changes out in full.
+ * (`planned`, the tree plus its todo stubs) diverges from the committed tree,
+ * plus the two drift flags. One letter summarizes a row in the tree gutter or a
+ * card on the diagram, and rolls up onto collapsed branches.
  *
  *   A  added       — new in the plan (green)
  *   M  modified    — fields reworded, or own content added/removed (amber)
@@ -11,23 +11,9 @@
  *   Q  undescribed — a vagrant claim: code does it, the model didn't say so (orange, drift)
  *   X  stale       — a committed claim the code regressed from (orange, drift)
  *
- * A/M/D/R are PLAN marks (the model→code work queue, `diff(committed,planned)`);
- * Q/X are DRIFT marks (model↔code mismatch, carried as flags on claims). A row
- * can have both; the plan mark wins for the single glanceable letter.
- *
- * Resolves the kind silhouette icon shown for every node
- *
- * Bubbles descendant plan and drift marks up the tree so a collapsed branch still shows what it hides
- *
- * Builds the single authoritative list of pending plan work that the tree gutter, lens counts, and Changes page all read from
- *
- * Derives the single glanceable plan or drift mark for any element from its own and its children's changes
- *
- * Derives a drift mark (post-sign-off proposal, vagrant, or stale) for a set of claims
- *
- * Derives a single glanceable plan mark (added/modified/deleted/relocated) for an element
- *
- * Bubbles descendant marks up the tree so a collapsed branch still shows what it hides
+ * A/M/D/R are PLAN marks (`diff(committed, planned)`); Q/X are DRIFT marks,
+ * carried as flags on claims. A row can have both; the plan mark wins for the
+ * single glanceable letter.
  */
 
 import type { Change, ElementChange, ModelDiff } from "../../entities/model/planDiff";

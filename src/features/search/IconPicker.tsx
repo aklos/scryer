@@ -1,12 +1,9 @@
 /**
- * Popover for picking an icon override for a card or a group.
- *
- * Curated set of lucide-react icons (~80) that cover the common cases. The
- * picked name is stored on `node.icon` / `group.icon`; the rendering layer
- * falls back to the kind silhouette (see kindIcon) when no override is set.
- * To clear an override, the user picks the "Default" item at the top.
- *
- * Lets the user choose a display icon for a node or group
+ * Icon overrides: a curated set of lucide-react icons (~80), `lookupIcon` to
+ * resolve a stored name (a node's or group's `icon`, a concern's icon) to its
+ * component, and the popover for picking one. Without an override the
+ * rendering layer falls back to the kind silhouette (see kindIcon); the
+ * "Default" item at the top of the picker clears it.
  */
 
 import {

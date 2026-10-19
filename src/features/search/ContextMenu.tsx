@@ -1,9 +1,7 @@
 /**
- * Right-click context menu. Anchored to a screen position; filtered search;
- * arrow-key navigation; Enter / click runs the item; Esc or outside-click
- * dismisses.
- *
- * Generic searchable right-click menu used throughout the app
+ * The app's searchable menu, for right-click and dropdown menus alike.
+ * Anchored to a screen position; optional type-to-filter; arrow-key
+ * navigation; Enter / click runs the item; Esc or outside-click dismisses.
  */
 
 import {
