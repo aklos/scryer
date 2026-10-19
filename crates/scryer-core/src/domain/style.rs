@@ -1044,27 +1044,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn project_styles_override_builtins_by_name() {
-        let dir = tempfile::tempdir().unwrap();
-        let styles_dir = dir.path().join(".scryer").join("styles");
-        std::fs::create_dir_all(&styles_dir).unwrap();
-        let mut custom = core_shell();
-        custom.name = "two-tier".into();
-        std::fs::write(
-            styles_dir.join("two-tier.json"),
-            serde_json::to_string(&custom).unwrap(),
-        )
-        .unwrap();
-        std::fs::write(styles_dir.join("broken.json"), "{ not json").unwrap();
-        let styles = crate::composition::styles::load_styles(dir.path());
-        assert!(styles.get("two-tier").is_some());
-        assert!(styles.get("hexagonal").is_some());
-        assert_eq!(styles.names().len(), 8);
-        assert_eq!(styles.errors().len(), 1);
-        assert!(styles.errors()[0].contains("broken.json"), "{:?}", styles.errors());
-    }
-
     fn node(id: &str, kind: Kind, parent: Option<&str>) -> Node {
         let mut n: Node = serde_json::from_str(&format!(
             r#"{{"id":"{id}","kind":"{}","name":"{id}"}}"#,

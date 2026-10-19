@@ -88,9 +88,14 @@ pub fn sessions_since(r: &ModelRef, since: u64) -> Vec<(String, Vec<crate::domai
         .collect()
 }
 
+/// The project's exclusive lock, held until dropped.
+pub struct ProjectLock {
+    _held: verdict_store::ProjectLock,
+}
+
 /// Take the project's exclusive lock for a read-modify-write of its caches.
-pub fn lock_project(r: &ModelRef) -> Result<crate::infrastructure::verdict_store::ProjectLock, String> {
-    verdict_store::lock_project_dir(&r.dir())
+pub fn lock_project(r: &ModelRef) -> Result<ProjectLock, String> {
+    verdict_store::lock_project_dir(&r.dir()).map(|held| ProjectLock { _held: held })
 }
 
 /// The last ingested mutation results.

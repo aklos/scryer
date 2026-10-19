@@ -95,18 +95,11 @@ pub fn worktree_path(project: &Path) -> PathBuf {
     probes_root().join(slug_for(project))
 }
 
-/// One of the project's git worktrees.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GitWorktree {
-    pub path: PathBuf,
-    /// `None` for a detached HEAD.
-    pub branch: Option<String>,
-}
-
-/// The project's live git worktrees, its main checkout first: every one
-/// whose directory still exists, leaving out scryer's own probe trees.
-/// Empty when the project is not a git repository.
-pub fn list_worktrees(project: &Path) -> Vec<GitWorktree> {
+/// The project's live git worktrees as `(path, branch)`, its main checkout
+/// first: every one whose directory still exists, leaving out scryer's own
+/// probe trees. The branch is `None` for a detached HEAD. Empty when the
+/// project is not a git repository.
+pub fn list_worktrees(project: &Path) -> Vec<(PathBuf, Option<String>)> {
     let Ok(out) = git(project, &["worktree", "list", "--porcelain"]) else { return Vec::new() };
     let probes = probes_root();
     let mut found = Vec::new();
@@ -121,7 +114,7 @@ pub fn list_worktrees(project: &Path) -> Vec<GitWorktree> {
             }
         }
         if let Some(path) = path.filter(|p| p.is_dir() && !p.starts_with(&probes)) {
-            found.push(GitWorktree { path, branch });
+            found.push((path, branch));
         }
     }
     found
@@ -389,7 +382,7 @@ mod tests {
         let listed = list_worktrees(&repo);
         let names: Vec<(String, Option<String>)> = listed
             .iter()
-            .map(|w| (w.path.file_name().unwrap().to_string_lossy().to_string(), w.branch.clone()))
+            .map(|(path, branch)| (path.file_name().unwrap().to_string_lossy().to_string(), branch.clone()))
             .collect();
         assert_eq!(names, vec![("repo".into(), Some("main".into())), ("side".into(), Some("feature".into()))]);
         std::fs::remove_dir_all(&side).unwrap();

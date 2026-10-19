@@ -4,7 +4,7 @@
 
 use rmcp::model::{CallToolResult, Content};
 use rmcp::ErrorData as McpError;
-use scryer_core::infrastructure::verdict_store::ProjectLock;
+use scryer_core::derived_tree::ProjectLock;
 use scryer_core::{Kind, ModelRef, Node, ScryModel};
 
 use std::collections::HashMap;

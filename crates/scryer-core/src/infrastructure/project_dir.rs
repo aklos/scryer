@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-pub use crate::domain::product_code::*;
+use crate::domain::product_code::*;
 
 /// Scan a project directory and return an annotated tree of architecturally relevant files.
 /// Quick check: does the directory look like a codebase?

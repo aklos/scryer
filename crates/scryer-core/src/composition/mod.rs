@@ -12,6 +12,7 @@ pub mod edges;
 pub mod session;
 pub mod settings_store;
 pub mod styles;
+pub mod worktree;
 
 pub use codebase::*;
 pub use derived_store::*;

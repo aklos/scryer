@@ -4,7 +4,7 @@
 //! which components more than one session touched. Read off the session
 //! logs and the derived status; nothing is recorded for it.
 
-use crate::domain::derived_status::{ClaimState, DerivedStatus};
+use crate::domain::derived_status::{ClaimState, ClaimStatus, DerivedStatus};
 use crate::domain::derived_tree::DerivedTree;
 use crate::domain::session::{SessionEntry, SessionLog};
 use serde::{Deserialize, Serialize};
@@ -174,7 +174,7 @@ pub fn landing(
     status: &DerivedStatus,
     since: u64,
 ) -> Landing {
-    let states: HashMap<&str, &crate::domain::derived_status::ClaimStatus> =
+    let states: HashMap<&str, &ClaimStatus> =
         status.claims.iter().map(|c| (c.resp_id.as_str(), c)).collect();
     let dark: BTreeSet<&str> = tree.dark_files.iter().map(String::as_str).collect();
     let mut out = Landing { since, ..Default::default() };
