@@ -1,5 +1,7 @@
 /**
- * Renders a node's build completeness as a semi-filled pie gauge
+ * A node's completeness as a small pie gauge: the wedge fills clockwise to the
+ * share of its claims that read through to code, and a dashed ring means there
+ * is nothing to measure yet.
  */
 
 import type { Completeness } from "./health";

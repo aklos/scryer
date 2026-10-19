@@ -1,13 +1,10 @@
 /**
- * Kind iconography + type tag — the C4 abstraction read at a glance.
- *
- * The card icon used to be `tokenIcon(node.id)` — a hash of the id into a random
- * glyph, which carried no type meaning (a Person and an external system got
- * unrelated icons). Type is now SEEN: a distinct silhouette per C4 kind, with the
- * bracketed type tag as the quiet textual fallback underneath. A user-set
- * `node.icon` override still wins (resolved by the caller via `lookupIcon`).
- *
- * Picks the kind silhouette icon for a node — person, external, previewable, data shape, code, or C4 box by altitude
+ * Kind iconography and type tag — the C4 abstraction read at a glance.
+ * `kindIcon` gives each kind a distinct silhouette (person, external system,
+ * previewable component, data shape, code symbol, or the C4 box family by
+ * altitude); `typeTag` is the bracketed type line under the name, its textual
+ * fallback. A user-set `node.icon` override still wins, resolved by the caller
+ * via `lookupIcon`.
  */
 
 import type { ComponentType } from "react";

@@ -1,18 +1,13 @@
 /**
- * On-disk schema (v0.3) + derived view types.
+ * The tree's schema (v0.3) plus derived view types.
  *
  * `ScryModel`, `Node`, `Link`, `Group`, `Responsibility`, `Source`,
- * `SchemaProperty`, `Kind` mirror the Rust types in
- * `crates/scryer-core/src/lib.rs` exactly — what gets read from
- * `{project}/.scryer/model.scry` IS the in-memory model.
- *
- * Dates every claim/property whose truth-bearing content is new or changed, at the single model write chokepoint
- *
- * Normalizes every claim's concern tag and keeps the concern registry in sync with what's actually tagged
- *
- * Re-parents a node and its whole subtree, enforcing the C4 kind hierarchy and detaching it from its old group
- *
- * Mints a collision-checked random element id
+ * `SchemaProperty` and `Kind` mirror the Rust types in
+ * `crates/scryer-core/src/domain/model.rs`, so the derived tree the backend
+ * serves parses straight into them. The rest are pure helpers over that
+ * shape: the kind hierarchy, data-shape and empty checks, the concern
+ * registry, id minting, and immutable edits to nodes, links, groups, claims
+ * and properties.
  */
 
 export const SCRY_VERSION = "0.3" as const;
