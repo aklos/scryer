@@ -62,6 +62,7 @@ pub mod derived_tree {
     pub use crate::composition::derived_store::*;
     pub use crate::domain::derived_status::*;
     pub use crate::domain::derived_tree::*;
+    pub use crate::domain::landing::*;
 }
 
 /// The build's dependency graph: its shape, its derivation, and its cache.

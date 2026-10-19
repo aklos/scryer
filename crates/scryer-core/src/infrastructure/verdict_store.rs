@@ -60,3 +60,18 @@ pub fn anchors_untouched_since(
             .is_ok_and(|mtime| mtime < recorded)
     })
 }
+
+/// When each claim id first appeared in a derived tree, unix seconds.
+pub fn read_first_seen(path: &Path) -> BTreeMap<String, u64> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+pub fn write_first_seen(path: &Path, seen: &BTreeMap<String, u64>) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(path, serde_json::to_string(seen).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+}

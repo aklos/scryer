@@ -73,6 +73,47 @@ pub fn anchors_untouched_since(
     verdict_store::anchors_untouched_since(model, project, resp_id, fingerprints, recorded_at)
 }
 
+/// What changed since `since`, per agent session, against this tree and
+/// status. Claims new to the first-seen ledger are dated by their test
+/// file's mtime (or now), so a stub reads as written when its file was.
+pub fn landing_at(
+    r: &ModelRef,
+    tree: &DerivedTree,
+    status: &DerivedStatus,
+    since: u64,
+) -> crate::domain::landing::Landing {
+    let seen_path = r.claims_seen_path();
+    let mut seen = verdict_store::read_first_seen(&seen_path);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut grew = false;
+    for c in &tree.claims {
+        seen.entry(c.id.clone()).or_insert_with(|| {
+            grew = true;
+            std::fs::metadata(r.project_path().join(&c.file))
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(now, |d| d.as_secs().min(now))
+        });
+    }
+    if grew {
+        let _ = verdict_store::write_first_seen(&seen_path, &seen);
+    }
+    let sessions: Vec<(String, Vec<crate::domain::session::SessionEntry>)> =
+        crate::infrastructure::session_store::list(r)
+            .into_iter()
+            .filter(|(_, updated)| *updated >= since)
+            .map(|(id, _)| {
+                let entries = crate::infrastructure::session_store::read(r, &id);
+                (id, entries)
+            })
+            .collect();
+    crate::domain::landing::landing(&sessions, tree, status, &seen, since)
+}
+
 /// The last ingested mutation results.
 pub fn read_mutations_at(r: &ModelRef) -> MutationCache {
     verdict_store::read_mutations(&r.mutations_path())

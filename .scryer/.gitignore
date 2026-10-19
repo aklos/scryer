@@ -9,3 +9,4 @@ preview/
 build-logs/
 .derived_tree.json
 .mutations.json
+.claims-seen.json

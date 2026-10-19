@@ -123,6 +123,14 @@ impl ModelRef {
         }
     }
 
+    /// When each derived claim was first seen, so the landing page can tell
+    /// a stub written this session from an older one. Regenerable.
+    pub fn claims_seen_path(&self) -> PathBuf {
+        match self {
+            ModelRef::ProjectLocal(path) => path.join(".scryer").join(".claims-seen.json"),
+        }
+    }
+
     /// The fold-refusal ledger — claims `mark_implemented` last declined to
     /// fold and why (see `crate::refusals`). Regenerable, git-free.
     pub fn fold_refusals_path(&self) -> PathBuf {
