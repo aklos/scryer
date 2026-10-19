@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { ToastProvider } from "../shared/feedback/Toast";
 import { AgentFailureProvider } from "../features/agent-launch/AgentFailure";
@@ -266,6 +267,16 @@ function Workspace({
     }, 5000);
     return () => clearTimeout(t);
   }, [externalGeneration, writing, refreshObservability]);
+
+  // The derived status rides on the health report, and a report ingest moves
+  // it without touching the tree: refresh it when the verdict cache changes.
+  useEffect(() => {
+    if (!derived) return;
+    const un = listen("test-results-changed", () => refreshHealth());
+    return () => {
+      void un.then((f) => f());
+    };
+  }, [derived, refreshHealth]);
 
   const [selected, setSelected] = useState<Selected | null>(null);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
