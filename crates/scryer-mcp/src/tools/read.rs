@@ -10,7 +10,6 @@ use rmcp::{
     model::{CallToolResult, Content},
     tool, tool_router, ErrorData as McpError,
 };
-use scryer_core::derived_tree::DerivedTree;
 use scryer_core::{Kind, ModelRef, Node, ScryModel};
 use std::collections::HashSet;
 
@@ -260,7 +259,7 @@ fn normalize_project_rel(model_ref: &ModelRef, path: &str) -> String {
 }
 
 /// Load the derived tree, or the error result to answer with.
-fn load_or_err(model_ref: &ModelRef) -> Result<DerivedTree, CallToolResult> {
+fn load_or_err(model_ref: &ModelRef) -> Result<derived::Loaded, CallToolResult> {
     derived::load(model_ref).map_err(|e| {
         CallToolResult::error(vec![Content::text(format!(
             "Could not derive the tree for {model_ref}: {e}"
@@ -268,7 +267,7 @@ fn load_or_err(model_ref: &ModelRef) -> Result<DerivedTree, CallToolResult> {
     })
 }
 
-fn layer_of(tree: &DerivedTree, layer: Layer) -> &ScryModel {
+fn layer_of(tree: &scryer_core::derived_tree::DerivedTree, layer: Layer) -> &ScryModel {
     match layer {
         Layer::Plan => &tree.planned,
         Layer::Committed => &tree.committed,
@@ -327,7 +326,8 @@ fn fit_orient(mut payload: serde_json::Value) -> String {
 
 /// What the tree says about one file: its node chain, layer, module
 /// description, claims and where new stubs go.
-fn file_report(tree: &DerivedTree, file: &str, claims_cap: Option<usize>) -> serde_json::Value {
+fn file_report(loaded: &derived::Loaded, file: &str, claims_cap: Option<usize>) -> serde_json::Value {
+    let tree = &loaded.tree;
     let model = &tree.planned;
     let node = derived::file_node(tree, model, file);
     let claims = derived::file_claims(tree, node, file);
@@ -339,7 +339,8 @@ fn file_report(tree: &DerivedTree, file: &str, claims_cap: Option<usize>) -> ser
         "path": node.map(|n| derived::chain(model, &n.id)),
         "layer": node.and_then(|n| n.layer.clone()),
         "description": node.and_then(|n| n.description.clone()),
-        "claims": claims.iter().take(shown).map(|c| derived::claim_line(c)).collect::<Vec<_>>(),
+        "probe": node.and_then(|n| loaded.node_probe(&n.id)),
+        "claims": claims.iter().take(shown).map(|c| loaded.claim_line(c)).collect::<Vec<_>>(),
         "moreClaims": (more > 0).then(|| format!("{more} more — locate {{file}}")),
         "stubs": derived::stub_file(tree, node, file),
     });
@@ -363,11 +364,11 @@ impl ScryerServer {
         Parameters(req): Parameters<ReadModelRequest>,
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
-        let tree = match load_or_err(&model_ref) {
+        let loaded = match load_or_err(&model_ref) {
             Ok(t) => t,
             Err(e) => return Ok(e),
         };
-        let model = layer_of(&tree, req.layer);
+        let model = layer_of(&loaded.tree, req.layer);
 
         // Above this serialized size a subtree risks blowing the agent's
         // context, so it degrades to a child skeleton instead of dumping.
@@ -436,11 +437,11 @@ impl ScryerServer {
         Parameters(req): Parameters<SearchModelRequest>,
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
-        let tree = match load_or_err(&model_ref) {
+        let loaded = match load_or_err(&model_ref) {
             Ok(t) => t,
             Err(e) => return Ok(e),
         };
-        let model = layer_of(&tree, req.layer);
+        let model = layer_of(&loaded.tree, req.layer);
 
         let kind_filter = match req.kind.as_deref() {
             Some(k) => Some(parse_kind(k)?),
@@ -502,19 +503,20 @@ impl ScryerServer {
         Parameters(req): Parameters<LocateRequest>,
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
-        let tree = match load_or_err(&model_ref) {
+        let loaded = match load_or_err(&model_ref) {
             Ok(t) => t,
             Err(e) => return Ok(e),
         };
+        let tree = &loaded.tree;
         let file = normalize_project_rel(&model_ref, &req.file);
-        let mut payload = file_report(&tree, &file, Some(0));
-        let node = derived::file_node(&tree, &tree.planned, &file);
-        let claims: Vec<serde_json::Value> = derived::file_claims(&tree, node, &file)
+        let mut payload = file_report(&loaded, &file, Some(0));
+        let node = derived::file_node(tree, &tree.planned, &file);
+        let claims: Vec<serde_json::Value> = derived::file_claims(tree, node, &file)
             .into_iter()
             .map(|c| {
                 serde_json::json!({
                     "claim": c.description,
-                    "status": derived::claim_status(c),
+                    "status": loaded.claim_status(c),
                     "level": derived::test_level(c.level),
                     "test": c.junit_name,
                     "at": format!("{}:{}", c.file, c.line),
@@ -557,15 +559,16 @@ impl ScryerServer {
         if let (Some(task), Some(sid)) = (task, self.session_id(&model_ref)) {
             let _ = scryer_core::session::record_task(&model_ref, &sid, task);
         }
-        let tree = match load_or_err(&model_ref) {
+        let loaded = match load_or_err(&model_ref) {
             Ok(t) => t,
             Err(e) => return Ok(e),
         };
+        let tree = &loaded.tree;
 
         let mut files_out: Vec<serde_json::Value> = files
             .iter()
             .take(ORIENT_FILES)
-            .map(|f| file_report(&tree, &normalize_project_rel(&model_ref, f), Some(ORIENT_CLAIMS_PER_FILE)))
+            .map(|f| file_report(&loaded, &normalize_project_rel(&model_ref, f), Some(ORIENT_CLAIMS_PER_FILE)))
             .collect();
         if files.len() > ORIENT_FILES {
             files_out.push(serde_json::json!({
@@ -661,7 +664,7 @@ mod tests {
         assert_eq!(draft["path"], "notes / notes / draft", "{out}");
         assert_eq!(draft["description"], "Holds the user's draft.");
         let claims: Vec<&str> = draft["claims"].as_array().unwrap().iter().filter_map(|c| c.as_str()).collect();
-        assert!(claims.iter().any(|c| c.starts_with("[unknown] When a save fails, keeps the draft [persistence]")), "{claims:?}");
+        assert!(claims.iter().any(|c| c.starts_with("[stale] When a save fails, keeps the draft [persistence]")), "{claims:?}");
         assert!(claims.iter().any(|c| c.starts_with("[planned] Merges two drafts")), "{claims:?}");
         assert_eq!(draft["stubs"], "crates/notes/src/draft.rs", "Rust unit tests go in the file's own test module");
         assert_eq!(out["files"][1]["stubs"], "crates/notes/src/sync.rs");
@@ -705,7 +708,7 @@ mod tests {
         assert_eq!(claim["claim"], "Saves and reloads a draft unchanged", "{it}");
         assert_eq!(claim["level"], "integration");
         assert_eq!(claim["test"], "roundtrip");
-        assert_eq!(claim["status"], "unknown");
+        assert_eq!(claim["status"], "stale", "no report has covered it yet");
         let abs = format!("{}/crates/notes/src/draft.rs", dir.path().display());
         assert_eq!(at(&abs)["file"], "crates/notes/src/draft.rs", "an absolute path is accepted");
         assert!(at("README.md")["note"].as_str().unwrap().contains("No container or component"));
@@ -722,7 +725,7 @@ mod tests {
         };
         let text = read(None, Layer::Plan).to_string();
         assert!(text.contains("\"draft\"") && text.contains("\"store\""), "{text}");
-        let tree = derived::load(&ModelRef::ProjectLocal(dir.path().to_path_buf())).unwrap();
+        let tree = derived::load(&ModelRef::ProjectLocal(dir.path().to_path_buf())).unwrap().tree;
         let draft = tree.planned.nodes.iter().find(|n| n.name == "draft").unwrap().id.clone();
         let count = |layer| read(Some(draft.clone()), layer)["node"]["responsibilities"].as_array().unwrap().len();
         assert_eq!(count(Layer::Plan), 2);

@@ -15,13 +15,13 @@ use rmcp::{
     model::{CallToolResult, Content},
     tool, tool_router, ErrorData as McpError,
 };
-use scryer_core::derived_tree::{DerivedClaim, DerivedTree};
+use scryer_core::derived_tree::{ClaimState, DerivedClaim, DerivedTree};
 use scryer_core::test_results::TestOutcome;
 use scryer_core::worktree;
 use scryer_core::ModelRef;
 use scryer_extract::test_status::{
-    ingest_report, record_probe_result, render_test_command, reports_dir, set_test_command, test_command,
-    test_statuses, RadiusTest,
+    ingest_mutation_report, ingest_report, record_probe_result, render_test_command, reports_dir, set_test_command,
+    test_command, RadiusTest,
 };
 
 /// How many radius tests a response lists by name; the command carries all.
@@ -31,7 +31,7 @@ fn error(text: impl Into<String>) -> Result<CallToolResult, McpError> {
     Ok(CallToolResult::error(vec![Content::text(text.into())]))
 }
 
-fn load(model_ref: &ModelRef) -> Result<DerivedTree, String> {
+fn load(model_ref: &ModelRef) -> Result<derived::Loaded, String> {
     derived::load(model_ref).map_err(|e| format!("Could not derive the tree for {model_ref}: {e}"))
 }
 
@@ -65,15 +65,11 @@ fn has_product_code(tree: &DerivedTree, file: &str) -> bool {
     tree.planned.source_map.values().flatten().any(|l| l.pattern == file)
 }
 
-/// The claim's fresh verdict, when one is recorded. SEAM: verdicts are keyed
-/// by derived claim id once status derivation lands (step 3); until then a
-/// missing verdict is not a refusal.
-fn verdict(model_ref: &ModelRef, claim: &DerivedClaim) -> Option<(TestOutcome, bool)> {
-    test_statuses(model_ref)
-        .ok()?
-        .into_iter()
-        .find(|s| s.resp_id == claim.id)
-        .map(|s| (s.outcome, s.stale))
+/// Read a report file named absolute or project-relative.
+fn read_report(model_ref: &ModelRef, path: &str) -> Result<String, String> {
+    let path = std::path::Path::new(path);
+    let abs = if path.is_absolute() { path.to_path_buf() } else { model_ref.project_path().join(path) };
+    std::fs::read_to_string(&abs).map_err(|e| format!("Failed to read report '{}': {e}", abs.display()))
 }
 
 #[tool_router(router = tool_router_testing, vis = "pub(crate)")]
@@ -89,14 +85,12 @@ impl ScryerServer {
         Parameters(req): Parameters<IngestReportRequest>,
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
-        let path = std::path::Path::new(&req.path);
-        let abs = if path.is_absolute() { path.to_path_buf() } else { model_ref.project_path().join(path) };
-        let xml = match std::fs::read_to_string(&abs) {
+        let xml = match read_report(&model_ref, &req.path) {
             Ok(x) => x,
-            Err(e) => return error(format!("Failed to read report '{}': {e}", abs.display())),
+            Err(e) => return error(e),
         };
         // Only to name the claims in the answer by their tests.
-        let tree = load(&model_ref).ok();
+        let tree = load(&model_ref).ok().map(|l| l.tree);
         // Two agents ingesting at once must not lose one report's verdicts
         // to a read-modify-write race.
         let _lock = match lock_or_err(&model_ref) {
@@ -105,7 +99,7 @@ impl ScryerServer {
         };
         let summary = match ingest_report(&model_ref, &xml) {
             Ok(s) => s,
-            Err(e) => return error(format!("Failed to ingest '{}': {e}", abs.display())),
+            Err(e) => return error(format!("Failed to ingest '{}': {e}", req.path)),
         };
         drop(_lock);
 
@@ -157,8 +151,29 @@ impl ScryerServer {
         &self,
         Parameters(req): Parameters<IngestReportRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let _ = resolve_model_ref(req.project.as_deref())?;
-        error("ingest_mutation_report is not yet available: mutation reports land with status derivation.")
+        let model_ref = resolve_model_ref(req.project.as_deref())?;
+        let report = match read_report(&model_ref, &req.path) {
+            Ok(x) => x,
+            Err(e) => return error(e),
+        };
+        let _lock = match lock_or_err(&model_ref) {
+            Ok(l) => l,
+            Err(e) => return Ok(e),
+        };
+        let s = match ingest_mutation_report(&model_ref, &report) {
+            Ok(s) => s,
+            Err(e) => return error(format!("Failed to ingest '{}': {e}", req.path)),
+        };
+        drop(_lock);
+        let mut msg = format!(
+            "Ingested {} mutant(s) from {} ({}) across {} file(s): {} caught, {} survived.",
+            s.mutants, req.path, s.tool, s.files, s.caught, s.survived
+        );
+        if s.survived > 0 {
+            msg.push_str("
+A survivor is a finding: locate the files it names and strengthen their tests.");
+        }
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
     #[tool(
@@ -188,7 +203,7 @@ impl ScryerServer {
             return error("Name the `files` you changed — this session has recorded no edits yet.");
         }
         let tree = match load(&model_ref) {
-            Ok(t) => t,
+            Ok(l) => l.tree,
             Err(e) => return error(e),
         };
         let edges = match file_edges(&model_ref) {
@@ -259,25 +274,34 @@ impl ScryerServer {
         Parameters(req): Parameters<ProbeRequest>,
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
-        let tree = match load(&model_ref) {
-            Ok(t) => t,
+        let loaded = match load(&model_ref) {
+            Ok(l) => l,
             Err(e) => return error(e),
         };
-        let claim = match derived::claim_for_test(&tree, &req.test) {
+        let tree = &loaded.tree;
+        let claim = match derived::claim_for_test(tree, &req.test) {
             Ok(c) => c.clone(),
             Err(e) => return error(e),
         };
-        if claim.planned {
-            return error(format!("{} is a todo test — implement it before probing it.", claim.junit_name));
-        }
-        let verdict = verdict(&model_ref, &claim);
-        match verdict {
-            Some((TestOutcome::Passed, false)) | None => {}
-            Some((_, true)) => return error(format!("{}'s verdict is stale — re-run it and ingest_test_report first.", claim.junit_name)),
-            Some((o, _)) => return error(format!("{} is {o:?} — a probe needs a passing test.", claim.junit_name)),
+        // A probe means something only against a test that passes on the
+        // code as it stands.
+        match loaded.status_of(&claim).map(|s| s.state) {
+            Some(ClaimState::Proven) => {}
+            Some(ClaimState::Planned) => {
+                return error(format!("{} is a todo test — implement it before probing it.", claim.junit_name))
+            }
+            Some(ClaimState::Failing) => {
+                return error(format!("{} is failing — a probe needs a passing test.", claim.junit_name))
+            }
+            Some(ClaimState::Stale) | None => {
+                return error(format!(
+                    "{} has no current verdict — run it, ingest_test_report, then probe.",
+                    claim.junit_name
+                ))
+            }
         }
         let edges = file_edges(&model_ref).unwrap_or_default();
-        let targets = probe_targets(&tree, &edges, &claim);
+        let targets = probe_targets(tree, &edges, &claim);
         // Sync BEFORE answering: the path handed back has to already hold the
         // developer's current code, or a break would land on a stale copy.
         let wt = match worktree::ensure_synced(model_ref.project_path()) {
@@ -305,9 +329,6 @@ impl ScryerServer {
         } else {
             msg.push_str(&format!("\nBreak in: {}", targets.join(", ")));
         }
-        if verdict.is_none() {
-            msg.push_str("\nNo verdict is recorded for this test: run it green in the worktree before the first break.");
-        }
         msg.push_str(
             "\nAim each break at what the claim says — its trigger, its response — then run only \
              this test in the worktree and expect it to FAIL. A test that still passes is a \
@@ -330,7 +351,7 @@ impl ScryerServer {
         Parameters(req): Parameters<CloseProbeRequest>,
     ) -> Result<CallToolResult, McpError> {
         let model_ref = resolve_model_ref(req.project.as_deref())?;
-        let tree = load(&model_ref);
+        let tree = load(&model_ref).map(|l| l.tree);
         let claim = tree.as_ref().ok().and_then(|t| derived::claim_for_test(t, &req.test).ok().cloned());
         let targets = match (&tree, &claim) {
             (Ok(t), Some(c)) => probe_targets(t, &file_edges(&model_ref).unwrap_or_default(), c),
@@ -482,49 +503,11 @@ mod tests {
         )
     }
 
-    /// A probe opens on a test by its JUnit name: it names the worktree, the
-    /// claim and the product files the test imports, and the worktree already
-    /// holds the code to break. Closing resets the worktree; the developer's
-    /// own file is never touched.
+    /// A probe needs a test that passes on the code as it stands: a todo
+    /// test, an unknown name and a test with no current verdict are refused.
+    /// (The opened probe is exercised end to end in tests/probe_flow.rs.)
     #[test]
-    fn a_probe_opens_on_a_test_and_closing_resets_the_worktree() {
-        isolate_probes_root();
-        let dir = project();
-        git_init(dir.path());
-        let server = ScryerServer::new();
-        let text = text_of(&open(&server, &dir, "keeps_draft"));
-        let wt = scryer_core::worktree::worktree_path(dir.path());
-        assert!(text.contains(&wt.display().to_string()), "{text}");
-        assert!(text.contains("Claim: When a save fails, keeps the draft"), "{text}");
-        assert!(text.contains("Break in: crates/notes/src/draft.rs, crates/notes/src/store/mod.rs"), "{text}");
-
-        let store = "crates/notes/src/store/mod.rs";
-        let original = std::fs::read_to_string(dir.path().join(store)).unwrap();
-        std::fs::write(wt.join(store), original.replace("true", "false")).unwrap();
-        let closed = close(&server, &dir, "keeps_draft", 2, vec!["put returning false went unnoticed".into()]);
-        assert!(closed.contains("2 break(s) tried, 1 survived") && closed.contains("finding"), "{closed}");
-        assert_eq!(std::fs::read_to_string(wt.join(store)).unwrap(), original, "the worktree is reset");
-        assert_eq!(std::fs::read_to_string(dir.path().join(store)).unwrap(), original);
-        std::fs::remove_dir_all(&wt).ok();
-    }
-
-    /// A round with no break left in the worktree learned nothing and says so.
-    #[test]
-    fn a_round_with_no_break_in_the_worktree_records_nothing() {
-        isolate_probes_root();
-        let dir = project();
-        git_init(dir.path());
-        let server = ScryerServer::new();
-        open(&server, &dir, "keeps_draft");
-        assert!(close(&server, &dir, "keeps_draft", 3, Vec::new()).contains("UNPROBED"));
-        std::fs::remove_dir_all(scryer_core::worktree::worktree_path(dir.path())).ok();
-    }
-
-    /// A todo test has nothing to probe, an unknown name is refused, and
-    /// without git there is nowhere safe to break code.
-    #[test]
-    fn a_probe_is_refused_for_a_todo_an_unknown_test_or_no_git() {
-        isolate_probes_root();
+    fn a_probe_is_refused_without_a_passing_test() {
         let dir = project();
         let server = ScryerServer::new();
         let refused = |test: &str| {
@@ -534,7 +517,18 @@ mod tests {
         };
         assert!(refused("merges").contains("todo test"));
         assert!(refused("nope").contains("No test named"));
-        assert!(refused("keeps_draft").contains("not a git repository"));
+        assert!(refused("keeps_draft").contains("no current verdict"));
+    }
+
+    /// Closing a probe with no break left in the worktree records nothing
+    /// and says the test stays unprobed.
+    #[test]
+    fn closing_with_no_break_in_the_worktree_records_nothing() {
+        isolate_probes_root();
+        let dir = project();
+        git_init(dir.path());
+        let text = close(&ScryerServer::new(), &dir, "keeps_draft", 3, Vec::new());
+        assert!(text.contains("UNPROBED"), "{text}");
     }
 
     /// The tool names it, so the agent never delegates the probe loop.
@@ -562,17 +556,36 @@ mod tests {
         assert!(text_of(&r).contains("Failed to read report"));
     }
 
-    /// Mutation ingest waits on status derivation, and says so.
+    /// A cargo-mutants report is read per file, and a survivor shows on the
+    /// claims of the component it landed in.
     #[test]
-    fn mutation_ingest_says_it_is_not_yet_available() {
+    fn a_mutation_report_marks_the_claims_it_reaches() {
         let dir = project();
-        let r = ScryerServer::new()
-            .ingest_mutation_report(Parameters(IngestReportRequest {
-                project: project_arg(&dir),
-                path: "mutants.out/outcomes.json".into(),
-            }))
+        write(
+            dir.path(),
+            "mutants.out/outcomes.json",
+            r#"{"outcomes":[
+              {"scenario":"Baseline","summary":"Success"},
+              {"scenario":{"Mutant":{"package":"notes","file":"crates/notes/src/draft.rs","function":{"function_name":"save"},"span":{"start":{"line":4,"column":1}},"replacement":"true","genre":"FnValue"}},"summary":"MissedMutant"}
+            ],"total_mutants":1}"#,
+        );
+        let server = ScryerServer::new();
+        let text = text_of(
+            &server
+                .ingest_mutation_report(Parameters(IngestReportRequest {
+                    project: project_arg(&dir),
+                    path: "mutants.out/outcomes.json".into(),
+                }))
+                .unwrap(),
+        );
+        assert!(text.contains("1 mutant(s)") && text.contains("1 survived"), "{text}");
+        let loaded = derived::load(&ModelRef::ProjectLocal(dir.path().to_path_buf())).unwrap();
+        let keeps = loaded.tree.claims.iter().find(|c| c.identifier == "keeps_draft").unwrap();
+        assert_eq!(loaded.node_probe(&keeps.node_id), Some("a break survived in this code"));
+
+        let bad = server
+            .ingest_mutation_report(Parameters(IngestReportRequest { project: project_arg(&dir), path: "Cargo.toml".into() }))
             .unwrap();
-        assert_eq!(r.is_error, Some(true));
-        assert!(text_of(&r).contains("not yet available"));
+        assert_eq!(bad.is_error, Some(true));
     }
 }

@@ -2,25 +2,61 @@
 //! authored model. Claims are behaviour tests; a file maps to the component
 //! whose boundary holds it; status comes from the test, not from a tool call.
 
-use scryer_core::derived_tree::{ClaimLevel, DerivedClaim, DerivedTree};
+use scryer_core::derived_tree::{
+    ClaimLevel, ClaimState, ClaimStatus, DerivedClaim, DerivedStatus, DerivedTree, ProbeMark,
+};
 use scryer_core::{Kind, ModelRef, Node, ScryModel};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-/// Refresh the project's derived tree (cached on file mtimes, so an unchanged
-/// project costs a walk, not a parse) and return it.
-pub(crate) fn load(r: &ModelRef) -> Result<DerivedTree, String> {
-    scryer_extract::derived_tree::derived_tree(r.project_path())
+/// The derived tree with each claim's status.
+pub(crate) struct Loaded {
+    pub tree: DerivedTree,
+    pub status: DerivedStatus,
 }
 
-/// A claim's status as one word. SEAM: until status derivation lands (step 3,
-/// `derived_status`), a written test reads `unknown` and a todo stub
-/// `planned`; replace this one function when it does.
-pub(crate) fn claim_status(c: &DerivedClaim) -> &'static str {
-    if c.planned {
-        "planned"
-    } else {
-        "unknown"
+impl Loaded {
+    pub(crate) fn status_of(&self, c: &DerivedClaim) -> Option<&ClaimStatus> {
+        self.status.claims.iter().find(|s| s.resp_id == c.id)
     }
+
+    /// A claim's status in words: `proven`, `stale`, `failing` or `planned`,
+    /// and the probe mark when a probe or mutation run left one.
+    pub(crate) fn claim_status(&self, c: &DerivedClaim) -> String {
+        let s = self.status_of(c);
+        let state = match (c.planned, s.map(|s| s.state)) {
+            (true, _) | (_, Some(ClaimState::Planned)) => "planned",
+            (_, Some(ClaimState::Proven)) => "proven",
+            (_, Some(ClaimState::Failing)) => "failing",
+            (_, Some(ClaimState::Stale)) | (_, None) => "stale",
+        };
+        match s.and_then(|s| s.probe) {
+            Some(ProbeMark::Crosshair) => format!("{state}, a break survived"),
+            Some(ProbeMark::DoubleCheck) => format!("{state}, probed"),
+            None => state.to_string(),
+        }
+    }
+
+    /// What a probe or mutation run found on a node's own code, in words.
+    pub(crate) fn node_probe(&self, node_id: &str) -> Option<&'static str> {
+        match self.status.nodes.get(node_id)?.probe? {
+            ProbeMark::Crosshair => Some("a break survived in this code"),
+            ProbeMark::DoubleCheck => Some("every break in this code was caught"),
+        }
+    }
+
+    /// One line per claim: status, the claim, where its test is.
+    pub(crate) fn claim_line(&self, c: &DerivedClaim) -> String {
+        let concerns: String = c.concerns.iter().map(|t| format!(" [{t}]")).collect();
+        format!("[{}] {}{concerns} — {}:{}", self.claim_status(c), c.description, c.file, c.line)
+    }
+}
+
+/// Refresh the project's derived tree (cached on file mtimes, so an unchanged
+/// project costs a walk, not a parse) and derive each claim's status from the
+/// recorded verdicts, probes and mutation runs.
+pub(crate) fn load(r: &ModelRef) -> Result<Loaded, String> {
+    let (tree, status) = scryer_extract::test_status::derived_status(r)?;
+    Ok(Loaded { tree, status })
 }
 
 /// The test level that carries a claim at this C4 level.
@@ -32,20 +68,18 @@ pub(crate) fn test_level(level: ClaimLevel) -> &'static str {
     }
 }
 
-/// One line per claim: status, the claim, where its test is.
-pub(crate) fn claim_line(c: &DerivedClaim) -> String {
-    let concerns: String = c.concerns.iter().map(|t| format!(" [{t}]")).collect();
-    format!("[{}] {}{concerns} — {}:{}", claim_status(c), c.description, c.file, c.line)
-}
-
 fn matches(pattern: &str, file: &str) -> bool {
     pattern == file || glob::Pattern::new(pattern).is_ok_and(|p| p.matches(file))
 }
 
-/// The node a project file belongs to: the component whose boundary holds it,
-/// else the container. A test file belongs where its claims nest.
+/// The node a project file belongs to: the innermost component that holds
+/// it, else the one whose boundary matches, else the container. A test file
+/// belongs where its claims nest.
 pub(crate) fn file_node<'m>(tree: &DerivedTree, model: &'m ScryModel, file: &str) -> Option<&'m Node> {
     let by_id: HashMap<&str, &Node> = model.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    if let Some(n) = tree.file_nodes.get(file).and_then(|id| by_id.get(id.as_str())) {
+        return Some(n);
+    }
     let owner = |kind: Kind| {
         model
             .boundaries
@@ -243,7 +277,15 @@ mod tests {
     }
 
     fn tree(claims: Vec<DerivedClaim>) -> DerivedTree {
-        DerivedTree { fingerprint: 0, committed: ScryModel::new(), planned: ScryModel::new(), claims }
+        DerivedTree {
+            fingerprint: 0,
+            committed: ScryModel::new(),
+            planned: ScryModel::new(),
+            claims,
+            file_nodes: Default::default(),
+            dark_files: Vec::new(),
+            style_violations: Vec::new(),
+        }
     }
 
     /// A unit test is reached by import, transitively; an integration test
