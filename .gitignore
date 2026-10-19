@@ -60,3 +60,6 @@ test-results/
 
 # Local plan notes — kept on disk, never committed
 plans/
+demo/out/
+# Derived by `pnpm demo:derive`; fixture.ts is the fallback.
+demo/fixture.json

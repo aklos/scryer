@@ -50,6 +50,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let args: Vec<String> = std::env::args().skip(2).collect();
             return cli::run_migrate(&args);
         }
+        // The derived data as one JSON document, in the app's shapes.
+        Some("export") => {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            return cli::run_export(&args);
+        }
         // Opt-in CI gate: exit 0 clean, 1 findings, 2 unusable.
         Some("check") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
