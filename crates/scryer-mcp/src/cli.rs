@@ -249,9 +249,8 @@ pub(crate) fn run_export(args: &[String]) -> Result<(), Box<dyn std::error::Erro
 }
 
 pub(crate) fn export(project: &Path) -> Result<serde_json::Value, String> {
-    use scryer_core::infrastructure::session_store;
     let (tree, status) = derived_status(project)?;
-    let s = scryer_extract::infrastructure::derived_tree::read_structure(project)?;
+    let s = scryer_extract::derived_tree::read_structure(project)?;
     let structure = serde_json::json!({
         "system": { "name": s.system.name, "persons": s.system.persons, "externals": s.system.externals },
         "levels": { "e2e": s.levels.e2e, "integration": s.levels.integration },
@@ -260,11 +259,9 @@ pub(crate) fn export(project: &Path) -> Result<serde_json::Value, String> {
         }).collect::<serde_json::Map<_, _>>(),
     });
     let r = ModelRef::ProjectLocal(project.to_path_buf());
-    let sessions: Vec<serde_json::Value> = session_store::list(&r)
+    let sessions: Vec<serde_json::Value> = scryer_core::derived_tree::sessions_since(&r, 0)
         .into_iter()
-        .map(|(id, _)| {
-            serde_json::json!({ "id": id, "entries": session_store::read(&r, &id) })
-        })
+        .map(|(id, entries)| serde_json::json!({ "id": id, "entries": entries }))
         .collect();
     let layout: serde_json::Map<_, _> = tree
         .planned
