@@ -245,19 +245,7 @@ pub(crate) fn radius<'t>(
     files: &[String],
     with_e2e: bool,
 ) -> Vec<RadiusHit<'t>> {
-    let mut importers: HashMap<&str, Vec<&str>> = HashMap::new();
-    for (src, dst) in edges {
-        importers.entry(dst.as_str()).or_default().push(src.as_str());
-    }
-    let mut reached: HashSet<&str> = files.iter().map(String::as_str).collect();
-    let mut frontier: Vec<&str> = reached.iter().copied().collect();
-    while let Some(f) = frontier.pop() {
-        for &imp in importers.get(f).into_iter().flatten() {
-            if reached.insert(imp) {
-                frontier.push(imp);
-            }
-        }
-    }
+    let reached = reach(edges, files);
     let model = &tree.planned;
     let holds = |node_id: &str| {
         model
@@ -280,6 +268,25 @@ pub(crate) fn radius<'t>(
         })
         .map(|claim| RadiusHit { claim })
         .collect()
+}
+
+/// The files a change to `files` reaches: those files, and every file that
+/// imports one of them, directly or through others.
+pub(crate) fn reach<'e>(edges: &'e [(String, String)], files: &'e [String]) -> HashSet<&'e str> {
+    let mut importers: HashMap<&str, Vec<&str>> = HashMap::new();
+    for (src, dst) in edges {
+        importers.entry(dst.as_str()).or_default().push(src.as_str());
+    }
+    let mut reached: HashSet<&str> = files.iter().map(String::as_str).collect();
+    let mut frontier: Vec<&str> = reached.iter().copied().collect();
+    while let Some(f) = frontier.pop() {
+        for &imp in importers.get(f).into_iter().flatten() {
+            if reached.insert(imp) {
+                frontier.push(imp);
+            }
+        }
+    }
+    reached
 }
 
 /// The claim a test name points at: its JUnit name, or its identifier.

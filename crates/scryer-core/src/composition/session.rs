@@ -293,6 +293,58 @@ pub fn bind_pid(r: &ModelRef, session: &str, pid: u32) -> Result<(), String> {
     std::fs::write(path, session).map_err(|e| e.to_string())
 }
 
+/// Another session working in this project now, as orient shows it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiveSession {
+    pub id: String,
+    /// The task it oriented on, if any.
+    pub task: Option<String>,
+    pub touched: Vec<String>,
+    /// The todo tests it owns, `(file, junit_name)`.
+    pub stubs: Vec<(String, String)>,
+}
+
+/// How recent a touch keeps a session live without a running process.
+const LIVE_SECS: u64 = 3600;
+
+/// The sessions live in this project besides `except`: a harness process
+/// bound to it is still running, or it touched a file in the last hour.
+pub fn live_sessions(r: &ModelRef, except: Option<&str>) -> Vec<LiveSession> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let running: HashSet<String> = std::fs::read_dir(r.sessions_dir().join(".by-pid"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_name().to_str().and_then(|p| p.parse::<u32>().ok()).is_some_and(process_alive))
+        .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+        .map(|s| s.trim().to_string())
+        .collect();
+    session_store::list(r)
+        .into_iter()
+        .filter(|(id, _)| Some(id.as_str()) != except)
+        .filter_map(|(id, _)| {
+            let entries = session_store::read(r, &id);
+            let recent = entries
+                .iter()
+                .any(|e| matches!(e.event, SessionEvent::Touch { .. }) && e.at + LIVE_SECS >= now);
+            if !recent && !running.contains(&id) {
+                return None;
+            }
+            let log = SessionLog::from_events(&entries);
+            Some(LiveSession { id, task: log.task, touched: log.touched, stubs: log.stubs })
+        })
+        .collect()
+}
+
+/// Whether process `pid` is running. Known on Linux; elsewhere a session is
+/// live only by its recent touches.
+fn process_alive(pid: u32) -> bool {
+    cfg!(target_os = "linux") && std::path::Path::new(&format!("/proc/{pid}")).exists()
+}
+
 /// The session harness process `pid` last bound, if any.
 pub fn session_for_pid(r: &ModelRef, pid: u32) -> Option<String> {
     let s = std::fs::read_to_string(r.sessions_dir().join(".by-pid").join(pid.to_string())).ok()?;
@@ -478,6 +530,27 @@ mod tests {
 
         assert_eq!(record_shell_edits(&r, "a", Some("call-1")).unwrap(), vec!["src/mine.rs"]);
         assert!(!session_log(&r, "a").touched.contains(&"src/theirs.rs".to_string()));
+    }
+
+    /// A session is live while a process bound to it runs or it touched a
+    /// file in the last hour; the caller is never its own peer.
+    #[test]
+    fn live_sessions_are_running_or_recently_touching() {
+        let (_dir, r) = project();
+        record_touch(&r, "recent", "src/a.rs").unwrap();
+        record_task(&r, "recent", "rename drafts").unwrap();
+        crate::infrastructure::session_store::append(&r, "idle", SessionEvent::Stop).unwrap();
+        crate::infrastructure::session_store::append(&r, "bound", SessionEvent::Stop).unwrap();
+        bind_pid(&r, "bound", std::process::id()).unwrap();
+        record_touch(&r, "me", "src/a.rs").unwrap();
+
+        let mut live: Vec<LiveSession> = live_sessions(&r, Some("me"));
+        live.sort_by(|a, b| a.id.cmp(&b.id));
+        let ids: Vec<&str> = live.iter().map(|s| s.id.as_str()).collect();
+        let expected: &[&str] = if cfg!(target_os = "linux") { &["bound", "recent"] } else { &["recent"] };
+        assert_eq!(ids, expected);
+        let recent = live.iter().find(|s| s.id == "recent").unwrap();
+        assert_eq!((recent.task.as_deref(), recent.touched.as_slice()), (Some("rename drafts"), &["src/a.rs".to_string()][..]));
     }
 
     #[test]
