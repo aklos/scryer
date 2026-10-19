@@ -1,0 +1,300 @@
+/*
+ * The placeholder shell's look: plain panels in the app's dark zinc palette.
+ * Step 4's App.tsx mount replaces the shell; this file goes with it.
+ */
+
+.sh {
+  --sh-bg: #18181b;
+  --sh-panel: #1f1f23;
+  --sh-line: rgba(255, 255, 255, 0.08);
+  --sh-fg: #e4e4e7;
+  --sh-dim: #8b8b94;
+  --sh-ghost: #5c5c66;
+  --sh-proven: #4ade80;
+  --sh-stale: #fbbf24;
+  --sh-failing: #f87171;
+  --sh-planned: #a78bfa;
+  --sh-accent: #60a5fa;
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--sh-bg);
+  color: var(--sh-fg);
+  font-family: "Inter Variable", system-ui, sans-serif;
+  font-size: 15px;
+  letter-spacing: -0.011em;
+}
+
+/* --- Top bar with the health counts ----------------------------------------- */
+
+.sh-top {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 1.1rem;
+  height: 46px;
+  padding: 0 1rem;
+  border-bottom: 1px solid var(--sh-line);
+  background: var(--sh-panel);
+}
+.sh-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+}
+.sh-brand img {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+}
+.sh-project {
+  color: var(--sh-dim);
+  font-weight: 400;
+}
+.sh-health {
+  margin-left: auto;
+  display: flex;
+  gap: 0.9rem;
+  font-size: 13px;
+  color: var(--sh-dim);
+}
+.sh-health b {
+  color: var(--sh-fg);
+  font-weight: 600;
+  margin-right: 0.25rem;
+}
+.sh-health .sh-hot b {
+  color: var(--sh-failing);
+}
+
+.sh-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.sh-eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--sh-dim);
+  margin: 0 0 0.6rem;
+}
+
+/* --- Claim rows ---------------------------------------------------------------- */
+
+.sh-claim {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 0.38rem 0.6rem;
+  border-radius: 6px;
+  line-height: 1.35;
+}
+.sh-claim--flash {
+  background: rgba(96, 165, 250, 0.16);
+}
+.sh-claim--dim {
+  opacity: 0.22;
+}
+.sh-claim-text {
+  flex: 1;
+  min-width: 0;
+}
+.sh-claim-at {
+  flex: none;
+  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
+  font-size: 11.5px;
+  color: var(--sh-ghost);
+}
+.sh-tag {
+  margin-left: 0.4rem;
+  padding: 0 0.35rem;
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--sh-accent);
+  background: rgba(96, 165, 250, 0.12);
+}
+.sh-del {
+  flex: none;
+  color: var(--sh-ghost);
+  font-size: 13px;
+}
+.sh-mark {
+  flex: none;
+  width: 1.1em;
+  text-align: center;
+  font-weight: 700;
+}
+.sh-mark--proven { color: var(--sh-proven); }
+.sh-mark--stale { color: var(--sh-stale); }
+.sh-mark--failing { color: var(--sh-failing); }
+.sh-mark--planned { color: var(--sh-planned); }
+.sh-probe { flex: none; font-size: 13px; }
+.sh-probe--crosshair { color: var(--sh-failing); }
+.sh-probe--doubleCheck { color: var(--sh-proven); }
+
+/* --- Tree view ------------------------------------------------------------------ */
+
+.sh-nav {
+  flex: none;
+  width: 300px;
+  padding: 0.9rem 0.6rem;
+  border-right: 1px solid var(--sh-line);
+  overflow: hidden;
+}
+.sh-chips {
+  display: flex;
+  gap: 0.4rem;
+  margin: 0 0.4rem 0.9rem;
+}
+.sh-chip {
+  padding: 0.18rem 0.6rem;
+  border-radius: 9999px;
+  font-size: 12.5px;
+  color: var(--sh-dim);
+  border: 1px solid var(--sh-line);
+}
+.sh-chip--on {
+  color: #fff;
+  background: rgba(96, 165, 250, 0.22);
+  border-color: rgba(96, 165, 250, 0.6);
+}
+.sh-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.5rem;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+.sh-row--sel {
+  background: rgba(255, 255, 255, 0.07);
+}
+.sh-row--child {
+  padding-left: 1.7rem;
+  color: var(--sh-dim);
+}
+.sh-count {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--sh-ghost);
+}
+.sh-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 9999px;
+  flex: none;
+}
+
+.sh-main {
+  flex: 1;
+  min-width: 0;
+  padding: 1.1rem 1.4rem;
+  overflow: hidden;
+}
+.sh-group {
+  margin-bottom: 1rem;
+}
+.sh-group-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sh-dim);
+  margin: 0 0 0.25rem 0.6rem;
+}
+
+/* --- Node page ---------------------------------------------------------------- */
+
+.sh-title {
+  font-size: 1.9rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+.sh-chain {
+  color: var(--sh-dim);
+  font-size: 13px;
+  margin-bottom: 0.3rem;
+}
+.sh-desc {
+  color: var(--sh-dim);
+  margin: 0.4rem 0 1.4rem;
+}
+.sh-style {
+  display: inline-block;
+  margin-left: 0.8rem;
+  padding: 0.1rem 0.55rem;
+  border-radius: 5px;
+  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
+  font-size: 12.5px;
+  color: var(--sh-accent);
+  background: rgba(96, 165, 250, 0.1);
+  vertical-align: middle;
+}
+
+/* --- Landing ------------------------------------------------------------------ */
+
+.sh-landing {
+  flex: 1;
+  padding: 1.6rem 1.8rem;
+  overflow: hidden;
+}
+.sh-sessions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin: 1rem 0 1.4rem;
+}
+.sh-card {
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--sh-line);
+  border-radius: 10px;
+  background: var(--sh-panel);
+}
+.sh-card-task {
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+.sh-card-meta {
+  color: var(--sh-dim);
+  font-size: 13px;
+}
+.sh-shared {
+  display: inline-block;
+  margin-top: 0.6rem;
+  padding: 0.12rem 0.55rem;
+  border-radius: 5px;
+  font-size: 12.5px;
+  color: #fde68a;
+  background: rgba(251, 191, 36, 0.14);
+}
+.sh-columns {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.2rem;
+}
+
+/* --- Diagram ------------------------------------------------------------------ */
+
+.sh-diagram {
+  flex: 1;
+  position: relative;
+}
+.sh-annot {
+  position: absolute;
+  left: 1.6rem;
+  top: 1.2rem;
+  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
+  font-size: 14px;
+  color: var(--sh-dim);
+}
+.sh-annot b {
+  color: var(--sh-accent);
+  font-weight: 500;
+}

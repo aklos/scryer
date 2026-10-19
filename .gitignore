@@ -59,3 +59,4 @@ test-results/
 
 # Local plan notes — kept on disk, never committed
 plans/
+demo/out/
