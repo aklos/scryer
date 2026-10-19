@@ -12,7 +12,7 @@ pub use domain::agent_settings::{AgentSettings, SubagentSettings};
 pub use infrastructure::storage::ModelLock;
 pub use domain::model::*;
 pub use domain::model_ref::*;
-pub use domain::{build_edges as build_edges_derive, ears, ids, ownership, rules, seed, style, style_health, test_results};
+pub use domain::{build_edges as build_edges_derive, ears, ids, ownership, rules, seed, style, style_health, test_results, verdicts};
 pub use domain::ids::*;
 /// Looking a file up in the model.
 pub mod locate {
@@ -66,6 +66,7 @@ pub mod settings {
 /// The C4 tree derived from packaging and tests: its shape and its cache.
 pub mod derived_tree {
     pub use crate::composition::derived_store::*;
+    pub use crate::domain::derived_status::*;
     pub use crate::domain::derived_tree::*;
 }
 

@@ -3,6 +3,7 @@
 //! `.scryer/.test-results.json`.
 
 use crate::domain::anchors::{is_glob_pattern, resolve_span, span_hash};
+use crate::domain::mutations::{parse_mutation_report, MutationSummary};
 use crate::domain::test_status::*;
 use crate::infrastructure::anchors::FileCache;
 use scryer_core::test_results::{match_report, parse_junit, ReportMatch, TestOutcome};
@@ -17,7 +18,13 @@ use std::path::Path;
 /// its implementation anchor — and the verdict-gated fold needs its verdict to
 /// record and read BEFORE it folds. Committed alone would make every unfolded
 /// claim invisible here, and the gate could never be satisfied.
+///
+/// With `SCRYER_DERIVED_TREE=1` it is the derived tree's planned layer
+/// instead, so verdicts, probes and the radius key on derived claim ids.
 fn working_model(r: &ModelRef) -> Result<ScryModel, String> {
+    if scryer_core::derived_tree::derived_tree_enabled() {
+        return crate::infrastructure::derived_tree::derived_tree(r.project_path()).map(|t| t.planned);
+    }
     let committed = read_model_at(r)?;
     match read_planned_at(r) {
         Ok(planned) => Ok(working_view(&committed, &planned)),
@@ -581,10 +588,14 @@ pub fn session_probe_check(r: &ModelRef, touched: &[String]) -> ProbeCheck {
 /// match summary out — unmatched, ambiguous, and unseen included, so the
 /// caller can surface what the report did NOT settle alongside what it did.
 pub fn ingest_report_file(r: &ModelRef, xml: &str) -> Result<IngestSummary, String> {
-    let model = working_model(r)?;
+    ingest_report_on(r, &working_model(r)?, xml)
+}
+
+/// [`ingest_report_file`] matched against `model`.
+fn ingest_report_on(r: &ModelRef, model: &ScryModel, xml: &str) -> Result<IngestSummary, String> {
     let cases = parse_junit(xml)?;
     let report = match_report(&model.test_map, &cases);
-    let recorded = store_test_results(r, &report)?;
+    let recorded = store_results_on(r, model, &report)?;
     keep_cases(r, &cases)?;
     Ok(IngestSummary { cases: cases.len(), recorded, report })
 }
@@ -893,6 +904,61 @@ pub fn read_probe_statuses(r: &ModelRef) -> Result<Vec<ClaimProbeStatus>, String
     }
     out.sort_by(|a, b| a.resp_id.cmp(&b.resp_id));
     Ok(out)
+}
+
+/// The derived tree with every claim's status and the health counts, each
+/// verdict re-verified against the working tree: a cheap mtime check first,
+/// and where a file was touched, a re-hash of the claim's anchors.
+pub fn read_derived_status(
+    r: &ModelRef,
+) -> Result<(scryer_core::derived_tree::DerivedTree, scryer_core::derived_tree::DerivedStatus), String> {
+    use scryer_core::derived_tree::{compute_derived_status, read_mutations_at};
+    let project = r.project_path();
+    let tree = crate::infrastructure::derived_tree::derived_tree(project)?;
+    let cache = read_cache(r);
+    let mutations = read_mutations_at(r);
+    let mut files = FileCache::new();
+    let mut project_files: Option<BTreeSet<String>> = None;
+    let mut fresh = |id: &str, fp: &BTreeMap<String, String>, at: u64| {
+        scryer_core::derived_tree::anchors_untouched_since(&tree.planned, project, id, fp, at)
+            || claim_fingerprints(&tree.planned, id, project, &mut files, &mut project_files) == *fp
+    };
+    let status = compute_derived_status(&tree, &cache, &mutations, &mut fresh);
+    Ok((tree, status))
+}
+
+/// Ingest a cargo-mutants `outcomes.json` or Stryker `mutation.json`. Each
+/// file and test the report covers replaces what an earlier report said
+/// about it; the rest is kept, so reports from several tools add up.
+pub fn ingest_mutation_file(r: &ModelRef, report: &str) -> Result<MutationSummary, String> {
+    use scryer_core::derived_tree::{read_mutations_at, write_mutations_at};
+    let parsed = parse_mutation_report(report)?;
+    let project = r.project_path();
+    let known = crate::list_project_files(project);
+    let prefix = format!("{}/", project.display());
+    let resolve = |path: &str| -> String {
+        let rel = path.strip_prefix(&prefix).unwrap_or(path).trim_start_matches("./").replace('\\', "/");
+        if known.contains(&rel) {
+            return rel;
+        }
+        // Tools report package-relative paths in a workspace.
+        let tail = format!("/{rel}");
+        let mut hits = known.iter().filter(|f| f.ends_with(&tail));
+        match (hits.next(), hits.next()) {
+            (Some(only), None) => only.clone(),
+            _ => rel,
+        }
+    };
+    let mut cache = read_mutations_at(r);
+    for (file, tally) in &parsed.files {
+        cache.files.insert(resolve(file), tally.clone());
+    }
+    for (test, tally) in &parsed.tests {
+        cache.tests.insert(test.clone(), tally.clone());
+    }
+    cache.ingested_at = now_secs();
+    write_mutations_at(r, &cache)?;
+    Ok(parsed.summary())
 }
 
 #[cfg(test)]
@@ -1590,5 +1656,67 @@ mod tests {
         let block = session_probe_check(&r, &touched).block.expect("r2 still has code");
         assert!(block.contains("Probe r2") && !block.contains("r1"), "{block}");
         assert!(block.contains("1 of them"), "{block}");
+    }
+
+    /// End to end on the derived tree: a JUnit report keyed by test name
+    /// makes a green claim proven and a red one failing, a claim no report
+    /// covered reads stale and a todo stub planned; editing the exercised
+    /// file ages the green verdict; a cargo-mutants report marks the file's
+    /// component and counts its survivors.
+    #[test]
+    fn derived_claims_take_status_from_reports_and_fingerprints() {
+        use scryer_core::derived_tree::{ClaimState, ProbeMark};
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        let write = |rel: &str, text: &str| {
+            let path = d.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        write("Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n");
+        write("crates/core/Cargo.toml", "[package]\nname = \"core\"\nversion = \"0.1.0\"\n");
+        write(
+            "crates/core/src/draft.rs",
+            "pub fn save() -> bool { true }\n#[cfg(test)]\nmod tests {\n    /// Saves\n    #[test]\n    fn saves() {}\n    /// Loads\n    #[test]\n    fn loads() {}\n    /// Merges\n    #[test]\n    fn merges() { todo!() }\n    /// Splits\n    #[test]\n    fn splits() {}\n}\n",
+        );
+        let r = ModelRef::ProjectLocal(d.to_path_buf());
+        let tree = crate::infrastructure::derived_tree::derived_tree(d).unwrap();
+        let junit = r#"<testsuite name="core">
+  <testcase classname="core" name="draft::tests::saves"/>
+  <testcase classname="core" name="draft::tests::loads"><failure message="boom"/></testcase>
+</testsuite>"#;
+        // Verdicts must postdate the files they fingerprint.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let summary = ingest_report_on(&r, &tree.planned, junit).unwrap();
+        assert_eq!(summary.recorded, 2);
+
+        let state_of = |status: &scryer_core::derived_tree::DerivedStatus, ident: &str| {
+            let id = &tree.claims.iter().find(|c| c.identifier == ident).unwrap().id;
+            status.claims.iter().find(|c| &c.resp_id == id).unwrap().state
+        };
+        let (_, status) = read_derived_status(&r).unwrap();
+        assert_eq!(state_of(&status, "saves"), ClaimState::Proven);
+        assert_eq!(state_of(&status, "loads"), ClaimState::Failing);
+        assert_eq!(state_of(&status, "splits"), ClaimState::Stale);
+        assert_eq!(state_of(&status, "merges"), ClaimState::Planned);
+        assert_eq!((status.totals.proven, status.totals.failing, status.totals.stale, status.totals.planned), (1, 1, 1, 1));
+
+        let mutants = r#"{"outcomes":[
+          {"scenario":{"Mutant":{"package":"core","file":"src/draft.rs","function":{"function_name":"save"},"span":{"start":{"line":1,"column":1}},"replacement":"false"}},"summary":"MissedMutant"}
+        ]}"#;
+        let m = ingest_mutation_file(&r, mutants).unwrap();
+        assert_eq!((m.mutants, m.survived), (1, 1));
+        let (_, status) = read_derived_status(&r).unwrap();
+        let draft = &tree.file_nodes["crates/core/src/draft.rs"];
+        assert_eq!(status.nodes[draft].probe, Some(ProbeMark::Crosshair), "package-relative path resolved");
+        assert_eq!(status.totals.surviving_mutants, 1);
+
+        // Editing the exercised code (the inline tests' own file) ages it.
+        write(
+            "crates/core/src/draft.rs",
+            "pub fn save() -> bool { false }\n#[cfg(test)]\nmod tests {\n    /// Saves\n    #[test]\n    fn saves() {}\n    /// Loads\n    #[test]\n    fn loads() {}\n    /// Merges\n    #[test]\n    fn merges() { todo!() }\n    /// Splits\n    #[test]\n    fn splits() {}\n}\n",
+        );
+        let (_, status) = read_derived_status(&r).unwrap();
+        assert_eq!(state_of(&status, "saves"), ClaimState::Stale);
     }
 }

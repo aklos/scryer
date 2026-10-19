@@ -5,6 +5,7 @@
 
 use crate::domain::model::ScryModel;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Where a claim sits in the tree, decided by where its test lives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -56,4 +57,23 @@ pub struct DerivedTree {
     pub committed: ScryModel,
     pub planned: ScryModel,
     pub claims: Vec<DerivedClaim>,
+    /// Product file → the innermost component that holds it.
+    #[serde(default)]
+    pub file_nodes: BTreeMap<String, String>,
+    /// Product files no test reaches by import, directly or transitively.
+    #[serde(default)]
+    pub dark_files: Vec<String>,
+    /// What the declared styles (from `structure.toml`) say the code breaks.
+    #[serde(default)]
+    pub style_violations: Vec<DerivedViolation>,
+}
+
+/// One style violation, charged to the node whose code has to move.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DerivedViolation {
+    pub node_id: String,
+    pub file: String,
+    pub kind: String,
+    pub detail: String,
 }

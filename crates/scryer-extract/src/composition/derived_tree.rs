@@ -1,121 +1,16 @@
-//! The derived C4 tree's entry point: walk the project, lift every source
-//! file's claims, derive the tree, and cache it keyed on file mtimes so an
-//! unchanged project reads it back without parsing.
+//! The derived C4 tree's entry points: the project's tree, cached on file
+//! mtimes, or derived without touching the cache.
 
-use crate::domain::claims::{self, FileLift};
-use crate::domain::derive::{derive_tree, DeriveInput};
-use crate::domain::structure::Structure;
-use crate::infrastructure::walk;
-use rayon::prelude::*;
-use scryer_core::derived_tree::{read_derived_tree_at, write_derived_tree_at, DerivedTree};
-use scryer_core::{scan, ModelRef};
-use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
-use std::hash::{DefaultHasher, Hash, Hasher};
-use std::path::{Path, PathBuf};
-
-/// Bumped whenever derivation changes, so a cache from an older binary is
-/// never mistaken for current.
-const DERIVE_VERSION: u32 = 1;
-
-thread_local! {
-    static PARSER: RefCell<tree_sitter::Parser> = RefCell::new(tree_sitter::Parser::new());
-}
-
-fn structure_path(project: &Path) -> PathBuf {
-    project.join(".scryer").join("structure.toml")
-}
-
-/// The project's `structure.toml`, or defaults when there is none.
-pub fn read_structure(project: &Path) -> Result<Structure, String> {
-    match std::fs::read_to_string(structure_path(project)) {
-        Ok(text) => Structure::parse(&text),
-        Err(_) => Ok(Structure::default()),
-    }
-}
-
-/// Hash of every walked file's path, mtime and size, plus `structure.toml`.
-fn fingerprint(project: &Path, files: &[PathBuf]) -> u64 {
-    let mut stamps: Vec<(String, u128, u64)> = files
-        .iter()
-        .chain(std::iter::once(&structure_path(project)))
-        .filter_map(|path| {
-            let meta = std::fs::metadata(path).ok()?;
-            let mtime = meta
-                .modified()
-                .ok()?
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0);
-            Some((path.to_string_lossy().to_string(), mtime, meta.len()))
-        })
-        .collect();
-    stamps.sort();
-    let mut hasher = DefaultHasher::new();
-    DERIVE_VERSION.hash(&mut hasher);
-    stamps.hash(&mut hasher);
-    hasher.finish()
-}
-
-/// The project's derived tree: the cached one when no file changed since,
-/// otherwise derived afresh and cached.
-pub fn derived_tree(project: &Path) -> Result<DerivedTree, String> {
-    if !project.is_dir() {
-        return Err(format!("'{}' is not a directory", project.display()));
-    }
-    let r = ModelRef::ProjectLocal(project.to_path_buf());
-    let files = walk::walk_files(project);
-    let print = fingerprint(project, &files);
-    if let Some(cached) = read_derived_tree_at(&r).filter(|t| t.fingerprint == print) {
-        return Ok(cached);
-    }
-    let tree = derive_uncached(project, &files, print)?;
-    // A failed cache write only costs the next read a derivation.
-    let _ = write_derived_tree_at(&r, &tree);
-    Ok(tree)
-}
-
-/// Derive the tree without touching the cache — for reading a project that
-/// must not be written to.
-pub fn derived_tree_uncached(project: &Path) -> Result<DerivedTree, String> {
-    let files = walk::walk_files(project);
-    let print = fingerprint(project, &files);
-    derive_uncached(project, &files, print)
-}
-
-fn derive_uncached(project: &Path, files: &[PathBuf], print: u64) -> Result<DerivedTree, String> {
-    let structure = read_structure(project)?;
-    let ctx = crate::extract_context(project)?;
-    let all_files: BTreeSet<String> = files
-        .iter()
-        .filter_map(|p| p.strip_prefix(project).ok())
-        .map(|rel| rel.to_string_lossy().replace('\\', "/"))
-        .collect();
-    let lifts: BTreeMap<String, FileLift> = all_files
-        .par_iter()
-        .filter(|rel| scan::is_product_code(rel))
-        .filter_map(|rel| {
-            let source = std::fs::read_to_string(project.join(rel)).ok()?;
-            let lift = PARSER.with(|p| claims::lift_file(rel, &source, &mut p.borrow_mut()));
-            Some((rel.clone(), lift))
-        })
-        .collect();
-    Ok(derive_tree(&DeriveInput {
-        project_name: &ctx.project_name,
-        containers: &ctx.containers,
-        files: &ctx.files,
-        file_edges: &ctx.file_edges,
-        lifts: &lifts,
-        all_files: &all_files,
-        structure: &structure,
-        fingerprint: print,
-    }))
-}
+pub use crate::infrastructure::derived_tree::{derived_tree, derived_tree_uncached, read_structure};
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scryer_core::derived_tree::ClaimLevel;
+    use crate::domain::claims;
+    use scryer_core::derived_tree::{read_derived_tree_at, ClaimLevel};
+    use scryer_core::{scan, ModelRef};
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::path::{Path, PathBuf};
     use scryer_core::Kind;
 
     fn write(dir: &Path, rel: &str, text: &str) {
@@ -214,6 +109,59 @@ mod tests {
         // The import draft -> store becomes a component link.
         let store = by_name("store");
         assert!(m.links.iter().any(|l| l.src == draft.id && l.dst == store.id), "links: {:?}", m.links);
+
+        // A unit claim anchors the file it exercises; files no test reaches
+        // by import are dark.
+        let keeps = tree.claims.iter().find(|c| c.identifier == "keeps_draft").unwrap();
+        assert_eq!(m.source_map[&keeps.id][0].pattern, "crates/core/src/draft.rs");
+        assert_eq!(tree.file_nodes["crates/core/src/store/mod.rs"], store.id);
+        assert_eq!(tree.dark_files, vec!["crates/core/src/lib.rs".to_string()]);
+    }
+
+    /// When a file inside a directory component has a module doc and claims
+    /// of its own, it becomes a sub-component carrying both; a file with
+    /// claims but no doc leaves them on the directory; a test whose code under
+    /// test cannot be found gets a component named after its file.
+    #[test]
+    fn documented_tested_files_become_sub_components() {
+        let dir = cargo_workspace();
+        let d = dir.path();
+        write(
+            d,
+            "crates/core/src/store/disk.rs",
+            "//! Writes text to disk.\npub fn flush() {}\n#[cfg(test)]\nmod tests {\n    /// Flushes on close\n    #[test]\n    fn flushes() {}\n}\n",
+        );
+        write(
+            d,
+            "crates/core/src/store/cache.rs",
+            "pub fn warm() {}\n#[cfg(test)]\nmod tests {\n    /// Warms lazily\n    #[test]\n    fn warms() {}\n}\n",
+        );
+        write(d, "package.json", r#"{"name":"web"}"#);
+        write(d, "web/main.ts", "export function boot() { return 1; }\n");
+        write(d, "tests/smoke.test.ts", "it('boots without a backend', () => {});\n");
+        let tree = derived_tree_uncached(d).unwrap();
+        let m = &tree.planned;
+        let named = |name: &str| m.nodes.iter().find(|n| n.name == name).unwrap();
+        let home_of = |desc: &str| {
+            let c = tree.claims.iter().find(|c| c.description == desc).unwrap();
+            m.nodes.iter().find(|n| n.id == c.node_id).unwrap()
+        };
+
+        let store = named("store");
+        let disk = named("disk");
+        assert_eq!(disk.kind, Kind::Component);
+        assert_eq!(disk.parent_id.as_deref(), Some(store.id.as_str()));
+        assert_eq!(disk.description.as_deref(), Some("Writes text to disk."));
+        assert_eq!(home_of("Flushes on close").id, disk.id);
+        assert_eq!(named("flush").parent_id.as_deref(), Some(disk.id.as_str()));
+        assert!(m.nodes.iter().all(|n| n.name != "cache"), "an undocumented file is no sub-component");
+        assert_eq!(home_of("Warms lazily").id, store.id);
+        assert_eq!(named("warm").parent_id.as_deref(), Some(store.id.as_str()));
+
+        let smoke = home_of("boots without a backend");
+        assert_eq!((smoke.kind, smoke.name.as_str()), (Kind::Component, "smoke"));
+        let parent = m.nodes.iter().find(|n| Some(n.id.as_str()) == smoke.parent_id.as_deref()).unwrap();
+        assert_eq!((parent.kind, parent.name.as_str()), (Kind::Container, "web"));
     }
 
     /// When no file changed, the cached tree is returned; touching a file
@@ -278,10 +226,25 @@ mod tests {
             eprintln!("    {:?} {}: {}", n.kind, n.name, n.description.as_deref().unwrap_or_default());
         }
         for c in m.nodes.iter().filter(|n| n.kind == Kind::Container) {
-            let comps: Vec<&scryer_core::Node> =
-                m.nodes.iter().filter(|n| n.parent_id.as_deref() == Some(c.id.as_str())).collect();
+            let comps: Vec<&scryer_core::Node> = m
+                .nodes
+                .iter()
+                .filter(|n| n.kind == Kind::Component && n.parent_id.as_deref() == Some(c.id.as_str()))
+                .collect();
             let own = c.responsibilities.len();
-            let unit: usize = comps.iter().map(|n| n.responsibilities.len()).sum();
+            // Unit claims sit on components and their sub-components.
+            let mut below: BTreeSet<&str> = comps.iter().map(|n| n.id.as_str()).collect();
+            for n in m.nodes.iter().filter(|n| n.kind == Kind::Component) {
+                if n.parent_id.as_deref().is_some_and(|p| below.contains(p)) {
+                    below.insert(n.id.as_str());
+                }
+            }
+            let unit: usize = m
+                .nodes
+                .iter()
+                .filter(|n| below.contains(n.id.as_str()))
+                .map(|n| n.responsibilities.len())
+                .sum();
             eprintln!(
                 "  {} — {} components, {} container claims, {} unit claims{}",
                 c.name,

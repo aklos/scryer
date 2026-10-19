@@ -115,6 +115,14 @@ impl ModelRef {
         }
     }
 
+    /// The last ingested mutation report per file and per test (see
+    /// `scryer_extract::test_status::ingest_mutation_report`). Regenerable.
+    pub fn mutations_path(&self) -> PathBuf {
+        match self {
+            ModelRef::ProjectLocal(path) => path.join(".scryer").join(".mutations.json"),
+        }
+    }
+
     /// The fold-refusal ledger — claims `mark_implemented` last declined to
     /// fold and why (see `crate::refusals`). Regenerable, git-free.
     pub fn fold_refusals_path(&self) -> PathBuf {

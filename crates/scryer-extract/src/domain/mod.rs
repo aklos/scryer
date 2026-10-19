@@ -4,5 +4,6 @@ pub mod context;
 pub mod derive;
 pub mod facts;
 pub mod lang;
+pub mod mutations;
 pub mod structure;
 pub mod test_status;

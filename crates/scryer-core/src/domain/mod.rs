@@ -1,6 +1,7 @@
 pub mod build_edges;
 pub mod changes;
 pub mod concerns;
+pub mod derived_status;
 pub mod derived_tree;
 pub mod diff;
 pub mod ears;
@@ -15,6 +16,7 @@ pub mod style;
 pub mod style_health;
 pub mod test_results;
 pub mod validate;
+pub mod verdicts;
 pub mod agent_settings;
 pub mod drift_scope;
 pub mod history_events;
