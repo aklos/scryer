@@ -11,8 +11,6 @@
  * virtual modules on the always-running dev server.
  *
  * Also serves /__components.json — discovered components + synthesized props.
- *
- * Vite middleware serving an isolated live preview of one component via a synthesized virtual entry module
  */
 
 import fs from "node:fs";

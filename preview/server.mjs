@@ -15,8 +15,6 @@
  * know which package a server is rooted at.
  *
  * CLI: node preview/server.mjs [projectRoot] [--port N] [--no-wrapper]
- *
- * Boots one preview Vite server per vite-owning sub-package and a router in front of them
  */
 
 import { createRequire } from "node:module";

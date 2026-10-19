@@ -4,11 +4,7 @@
  * page. There is no tree, no wiki page, and no editing: the diagram owns the
  * whole window and drives its own focus (drill-down) and selection state, so a
  * recipient can pan, zoom, and double-click into containers exactly as in the
- * app, with nothing behind it but the baked-in model.
- *
- * Renders a baked-in model's diagrams with breadcrumb drill-down, no backend required
- *
- * Renders a baked-in model's diagrams with drill-down, entirely client-side and backend-free
+ * app, with nothing behind it but the baked-in model and no backend.
  */
 
 import { useState } from "react";

@@ -15,14 +15,6 @@
  *   -o, --out    Output HTML path (default: ./scryer-diagram.html).
  *   --planned    Export the editable plan (planned.scry) instead of the
  *                committed model (model.scry).
- *
- * Drives a headless browser through each demo scene to grab documentation screenshots
- *
- * Drives a headless browser through the demo to capture a size-capped MP4 via CDP screencast
- *
- * Exports a project's model as a single self-contained HTML diagram viewer
- *
- * CLI that builds a project's model export and packages its diagram HTML into one self-contained file
  */
 
 import { build } from "vite";
