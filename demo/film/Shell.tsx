@@ -41,11 +41,19 @@ function navigation(view: View, lens: string | undefined): Navigate {
 }
 
 /** Set the app up as the desktop would have it: dark, and opened before at a
- *  fixed time so "since you last looked" reads the same in every render tab. */
+ *  fixed time so "since you last looked" reads the same in every render tab.
+ *  The tabs share one localStorage, and the app records the wall clock as
+ *  last-opened when it opens the project — so the key is pinned: another
+ *  tab's write would otherwise land between this tab's set and its read. */
 function prepare() {
   applyTheme({ ...loadTheme(), colorMode: "dark" });
   try {
-    localStorage.setItem(`scryer:last-opened:${PROJECT}`, String(NOW - 3 * 3600));
+    const key = `scryer:last-opened:${PROJECT}`;
+    const set = Storage.prototype.setItem;
+    set.call(localStorage, key, String(NOW - 3 * 3600));
+    Storage.prototype.setItem = function (this: Storage, k: string, v: string) {
+      if (k !== key) set.call(this, k, v);
+    };
     localStorage.setItem("scryer:view", "wiki");
   } catch {
     /* no storage: the landing window just reads "first time here" */
