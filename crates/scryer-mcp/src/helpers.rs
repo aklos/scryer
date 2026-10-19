@@ -1,34 +1,10 @@
-//! Builds a node's breadcrumb path by name from a root down to it
-//!
-//! Re-mints an invented, repeated, or wrong-host responsibility id in a raw-write payload so no two claims ever share an id
-//!
-//! Enforces read-only invariants — user directives and canvas positions — against the AI's whole-node generation writes
-//!
-//! Computes the loop-state counts straight from disk, best-effort, with the model write lock released
-//!
-//! Re-mints caller-supplied node and responsibility ids that would otherwise collide with a claim living on another host or in another layer
-//!
-//! Re-mints payload node ids that name a node living outside the region a write is replacing, repointing every reference to the rename
-//!
-//! Routes a claim's implementation or test anchor entries to its single home layer, normalizing whole-symbol ranges
-//!
-//! Restores each surviving node's user-placed canvas position after a whole-node regeneration, leaving new nodes for auto-layout
-//!
-//! Writes the plan after tagging what this write changed to the session's current change, warning on collisions with another change's tag
-//!
-//! Assembles the one-line loop-state header for write responses: pending, untested, drift, structural violations, tests, and probe survivors
-//!
-//! Applies claim anchor entries to their single home layer and tags plan writes to the session's open change
-//!
-//! Builds a compact outline of the model tree with responsibility/property counts instead of full bodies
-//!
-//! Forces every directive back to the prior on-disk model's value before committing an AI write, keeping directives entirely under user control
-//!
-//! Computes and phrases the ambient loop-state counts (pending work, drift, tests, structural violations) shared by every write response and the CLI
+//! Shared helpers for the MCP tools: resolving the project and taking its
+//! lock, compacting JSON responses, node kinds by name, and the outline and
+//! breadcrumbs that place a node in the tree.
 
 use rmcp::model::{CallToolResult, Content};
 use rmcp::ErrorData as McpError;
-use scryer_core::infrastructure::verdict_store::ProjectLock;
+use scryer_core::derived_tree::ProjectLock;
 use scryer_core::{Kind, ModelRef, Node, ScryModel};
 
 use std::collections::HashMap;

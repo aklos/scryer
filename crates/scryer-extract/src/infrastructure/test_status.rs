@@ -1,10 +1,10 @@
-//! The test-verdict cache on disk and the model reads behind it: fingerprints
-//! computed from real files, freshness against mtimes, and every read/write of
-//! `.scryer/.test-results.json`.
-//!
-//! Persist each claim's test and probe verdicts, fingerprinted so a later edit shows as stale.
-//!
-//! Resolve whether a cached verdict still describes the code, from the anchored span and the file's mtime.
+//! The test-verdict cache on disk and the reads behind it. Verdicts ingested
+//! from JUnit reports and probe results are fingerprinted against the claim's
+//! anchored code and tests, so an edit since the run reads as stale; freshness
+//! is checked cheaply against file mtimes first and re-hashed only where a
+//! file was touched. Claims resolve against the derived tree. Verdicts live in
+//! `.scryer/.test-results.json`; mutation reports are merged into
+//! `.scryer/.mutations.json`.
 
 use crate::domain::anchors::{is_glob_pattern, resolve_span, span_hash};
 use crate::domain::mutations::{parse_mutation_report, MutationSummary};
@@ -127,7 +127,7 @@ fn claim_fingerprints(
                     continue;
                 };
                 let files =
-                    project_files.get_or_insert_with(|| crate::list_project_files(project));
+                    project_files.get_or_insert_with(|| crate::infrastructure::walk::project_files(project));
                 for file in files.iter().filter(|f| pattern.matches(f)) {
                     fingerprint(file, true);
                 }
@@ -228,7 +228,7 @@ fn provably_fresh(model: &ScryModel, rec: &ClaimRecord, project: &Path) -> Optio
 /// — content changed, an anchor now unresolvable, an attachment added or
 /// removed since — reads as stale. A record with no fingerprints at all is
 /// stale by construction. Claims whose anchor files are provably untouched
-/// since the record skip the re-hash entirely ([`provably_fresh`]), so this
+/// since the record skip the re-hash entirely (`provably_fresh`), so this
 /// is cheap enough to ride every response. Claims that have left the model
 /// are omitted, not reported as ghosts.
 pub fn read_test_statuses(r: &ModelRef) -> Result<Vec<ClaimTestStatus>, String> {
@@ -450,7 +450,7 @@ pub fn ingest_mutation_file(r: &ModelRef, report: &str) -> Result<MutationSummar
     use scryer_core::derived_tree::{read_mutations_at, write_mutations_at};
     let parsed = parse_mutation_report(report)?;
     let project = r.project_path();
-    let known = crate::list_project_files(project);
+    let known = crate::infrastructure::walk::project_files(project);
     let prefix = format!("{}/", project.display());
     let resolve = |path: &str| -> String {
         let rel = path.strip_prefix(&prefix).unwrap_or(path).trim_start_matches("./").replace('\\', "/");
@@ -654,9 +654,13 @@ mod tests {
     #[test]
     fn untouched_anchor_files_prove_freshness_by_stat_alone() {
         let (_dir, r) = project();
-        // Recording must land in a LATER second than the files' mtimes, or the
-        // fast path abstains (same-second edits are indistinguishable by stat).
-        std::thread::sleep(std::time::Duration::from_millis(1100));
+        // The fast path proves freshness only for files older than the
+        // record's second: date the fixture's files an hour back.
+        let hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        for f in ["src/m.ts", "src/m.spec.ts"] {
+            let file = std::fs::File::options().write(true).open(r.project_path().join(f)).unwrap();
+            file.set_modified(hour_ago).unwrap();
+        }
         ingest_report_file(&r, REPORT).unwrap();
         let model = working_model(&r).unwrap();
         let rec = read_cache(&r).results[0].clone();
@@ -860,8 +864,8 @@ mod tests {
   <testcase classname="core" name="draft::tests::saves"/>
   <testcase classname="core" name="draft::tests::loads"><failure message="boom"/></testcase>
 </testsuite>"#;
-        // Verdicts must postdate the files they fingerprint.
-        std::thread::sleep(std::time::Duration::from_millis(1100));
+        // The verdict lands in the same second the files were written: its
+        // freshness rests on the content hashes, not the clock.
         let summary = ingest_report_on(&r, &tree.planned, junit).unwrap();
         assert_eq!(summary.recorded, 2);
 

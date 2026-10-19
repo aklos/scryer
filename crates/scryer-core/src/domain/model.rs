@@ -1,6 +1,9 @@
-//! Walks a node's ancestry nearest-first to collect every inherited directive constraint above it.
-//!
-//! Derives whether a symbol carries no responsibilities, no properties, and isn't external — the empty-symbol flag mirrored in the frontend.
+//! The C4 model's shape: nodes (person, system, container, component, symbol),
+//! the links and groups between them, each node's claims and data-shape
+//! properties, the maps that tie claims and nodes to code (`source_map`,
+//! `test_map`, `boundaries`), and the concern registry. The derived tree is a
+//! [`ScryModel`]; the few facts read straight off one (an empty symbol, a
+//! node's inherited directives) live beside it.
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -398,14 +401,13 @@ pub struct ScryModel {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub concerns: Vec<ConcernDef>,
     /// The open-change registry — named partitions of the plan, each carrying
-    /// the dev's rationale. PLAN-LAYER ONLY: the committed model never carries
-    /// change state ([`write_committed_file`] strips it). See [`crate::changes`].
+    /// the dev's rationale. Plan-layer only: the committed model never carries
+    /// change state.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub changes: Vec<ChangeMeta>,
-    /// Maps **element key** ([`changes::element_key`]) → change id: which
-    /// change each pending plan entry belongs to. Untagged entries are the
-    /// unfiled bucket (the zero-friction serial workflow). Plan-layer only,
-    /// like `changes`; kept honest by [`changes::gc`].
+    /// Maps element key → change id: which change each pending plan entry
+    /// belongs to. Untagged entries are the unfiled bucket. Plan-layer only,
+    /// like `changes`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub change_map: BTreeMap<String, String>,
     /// Claim id → the agent's progress note on a planned claim it has not

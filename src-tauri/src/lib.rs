@@ -1,16 +1,7 @@
-//! The native process hosting the desktop app's window, filesystem access and
-//! agent orchestration. Laid out as an imperative `shell` over a small pure
-//! `core`.
-//!
-//! Host the desktop application window and native OS integration.
-//!
-//! Set up AI coding tool integration for a developer's project.
-//!
-//! Watch a project's model files and read and write the model on disk.
-//!
-//! Orchestrate AI agent sessions for building the model and checking drift.
-//!
-//! Resolve source spans and symbols for the code inspector.
+//! The native process behind the desktop app: its window, the project watch
+//! and test-report ingestion, agent integration setup, the preview server and
+//! the code inspector's source reads. Laid out as an imperative `shell` over a
+//! small pure `core` (syntax highlighting and symbol resolution).
 
 pub mod core;
 pub mod shell;

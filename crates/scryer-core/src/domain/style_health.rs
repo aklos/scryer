@@ -1,19 +1,15 @@
-//! Code-time enforcement of the model's styles.
+//! Code-time enforcement of the model's styles: the imports the code actually
+//! has, held against each container's governing style. The build's dependency
+//! graph arrives already resolved to node pairs by
+//! [`crate::domain::build_edges::derive_graph`]; one more pass maps each end to
+//! `(component, layer)` and applies the style's table — layer legality,
+//! same-layer isolation and public surfaces, banned packages, misplaced files,
+//! type roles, cycles, and declared links the style forbids. Each violation is
+//! charged to the component that must fix it, in the file the fix happens in.
 //!
-//! [`crate::validate`] checks the links the agent DECLARED; this module
-//! checks the imports the code ACTUALLY has. The build's dependency graph is
-//! already resolved to node pairs by [`crate::domain::build_edges::derive_graph`];
-//! one more pass maps each end to `(component, layer)` and applies the
-//! governing style's table. Everything here is deterministic and derived;
-//! nothing is stored. It is the language-agnostic twin of dependency-cruiser,
-//! import-linter and ArchUnit, driven by the model instead of a per-tool
-//! config.
-//!
-//! Attributes every violation to the component charged with fixing it, deduped and scoped to a subtree for per-view reporting.
-//!
-//! Runs every code-time style check against the build's derived dependency graph and external imports: layer legality, same-layer isolation with public-surface exceptions, banned-package imports, and path-convention misplacement — each violation charged to the component that must fix it.
-//!
-//! Checks the actual code-level dependency graph and external imports against a container's declared style, flagging layer violations, same-layer isolation violations, banned-import violations, and misplaced files.
+//! Everything here is deterministic and derived; nothing is stored. It is the
+//! language-agnostic twin of dependency-cruiser, import-linter and ArchUnit,
+//! driven by the model instead of a per-tool config.
 
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -476,7 +472,19 @@ pub fn check_code(
         if out.iter().any(|v| v.node == src && v.other.as_deref() == Some(dst.as_str())) {
             continue;
         }
-        let file = index.files_of(&src).and_then(|fs| fs.iter().next().cloned()).unwrap_or_default();
+        // Charged to a file that imports across the pair when the code does,
+        // else the source's first file; a link from a container itself (its
+        // crate root's imports) has none, so it names the container's dir.
+        let importing = derived.resolved_edges.iter().find(|e| {
+            !e.guessed
+                && style::layer_component(model, &e.src_node).is_some_and(|c| c.id == src)
+                && style::layer_component(model, &e.dst_node).is_some_and(|c| c.id == dst)
+        });
+        let file = importing
+            .map(|e| e.src_file.clone())
+            .or_else(|| index.files_of(&src).and_then(|fs| fs.iter().next().cloned()))
+            .or_else(|| style::container_prefix(model, &src))
+            .unwrap_or_default();
         out.push(StyleViolation {
             kind: ViolationKind::ForbiddenLink,
             node: src,

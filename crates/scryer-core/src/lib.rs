@@ -16,9 +16,9 @@ pub use domain::model_ref::*;
 pub use domain::{build_edges as build_edges_derive, ears, ids, rules, seed, style, style_health, test_results, verdicts};
 pub use domain::ids::*;
 
-/// The probe worktree.
+/// The project's git worktrees: the probe tree and the live checkouts.
 pub mod worktree {
-    pub use crate::infrastructure::worktree::*;
+    pub use crate::composition::worktree::*;
 }
 pub use domain::{concerns, health};
 

@@ -1,24 +1,25 @@
 /**
- * The C4 card node for the diagram's architecture tiers — a faithful port of
- * the pre-pivot canvas card (`C4Node`), adapted to the read-only v0.3 diagram.
+ * The C4 card node for the diagram's architecture tiers — a port of the
+ * pre-pivot canvas card (`C4Node`), adapted to the read-only diagram.
  *
- * Kept from main: the 180×160 shape-backed card, the person silhouette, status-
- * colored stroke, external dashed frame, the drill affordance on select, and
- * the has-children indicator. Dropped: contracts, advisor hints, member chips,
- * reference nodes, and all drag-to-edit — editing lives in the tree and page.
- *
- * Renders one C4 box node on the diagram — shape, drift/plan outline, completeness gauge, structural violation count, and drill-down
+ * It draws the 180×160 shape-backed card (or the person silhouette), the
+ * external dashed frame, a stroke tinted by the node's change mark, the
+ * completeness pie, the count of structural violations inside the node, and
+ * the drill affordance on select. Ghosts (nodes that live elsewhere) render
+ * dimmed with no drill. Dropped from the canvas: contracts, advisor hints,
+ * member chips, and all drag-to-edit.
  */
 
 import type { NodeProps, Node as RFNode } from "@xyflow/react";
-import type { DiagramNode } from "../../widgets/diagram-canvas/diagramLayout";
-import type { Mark } from "../../features/change-marks/changeMarks";
-import type { Completeness, StyleViolation } from "./health";
-import { StructuralCount } from "./StructuralCount";
-import { CompletenessPie } from "./CompletenessPie";
+import type { DiagramNode } from "./diagramLayout";
+import type { Mark } from "../../entities/model/changeKinds";
+import type { StyleViolation } from "../../entities/model/health";
+import type { Completeness } from "../../entities/model/completeness";
+import { StructuralCount } from "../../entities/model/StructuralCount";
+import { CompletenessPie } from "../../entities/model/CompletenessPie";
 import { NodeHandles } from "../../shared/diagram/NodeHandles";
-import { ShapeBackground, resolveShape, getContentInsets } from "./shapes";
-import { StyleGlyph } from "./styles/StyleGlyph";
+import { ShapeBackground, resolveShape, getContentInsets } from "../../entities/model/shapes";
+import { StyleGlyph } from "../../entities/model/styles/StyleGlyph";
 
 export interface CardData extends Record<string, unknown> {
   node: DiagramNode;

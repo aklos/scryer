@@ -1,5 +1,9 @@
 /**
- * Lists a node's claims grouped by concern, each rendered as a diff row with its verdict actions
+ * The node page's claims: a node's or group's claims grouped by concern, each
+ * a diff row against the committed tree — its marker, statement (word-diffed
+ * when reworded), inline source locations, and attached tests with their
+ * recorded verdict and probe result. Edit mode is a list form, committed on
+ * Done, with EARS lint and a live markup preview.
  */
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -33,7 +37,7 @@ import {
   DRIFT_HINT,
 } from "../../entities/model/diffkit";
 import { ClaimSource, ClaimTests, respElementId } from "../source-section/SourceSection";
-import { ANCHOR_CALM, earsTestable, hasMarkup, lintEars, MarkupMirror, serializeEars, StatementText, stripMarkup } from "../../features/markup/markup";
+import { ANCHOR_CALM, earsTestable, hasMarkup, lintEars, MarkupMirror, serializeEars, StatementText, stripMarkup } from "../../entities/model/markup";
 import { usePageMenu, useCopyId, copyIdItem } from "../../features/search/pageMenu";
 import {
   BTN,

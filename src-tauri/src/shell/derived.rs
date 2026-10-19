@@ -15,13 +15,12 @@ pub(crate) async fn get_derived_status(cwd: String) -> Result<scryer_core::deriv
     .map_err(|e| format!("derived-status task failed: {e}"))?
 }
 
-/// What each agent session changed since `since` (unix seconds).
+/// What each agent session changed since `since` (unix seconds), across the
+/// project's live git worktrees.
 #[tauri::command]
 pub(crate) async fn get_landing(cwd: String, since: u64) -> Result<scryer_core::derived_tree::Landing, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let r = model_ref(&cwd);
-        let (tree, status) = scryer_extract::test_status::derived_status(&r)?;
-        Ok(scryer_core::derived_tree::landing_at(&r, &tree, &status, since))
+        scryer_extract::landing::landing_across_worktrees(std::path::Path::new(&cwd), since)
     })
     .await
     .map_err(|e| format!("landing task failed: {e}"))?

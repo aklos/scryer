@@ -8,8 +8,6 @@
  * Segment shades come from the theme surface vars via an inline `--sb`, which the
  * CSS reuses for each chevron's triangle so the tiling stays seamless (see the
  * `.pl` block in index.css).
- *
- * Status bar readout of agent activity, build phase, pending plan work, and review counts
  */
 
 import type { CSSProperties } from "react";
@@ -17,9 +15,9 @@ import { Loader2, X } from "lucide-react";
 import { AgentMark } from "../../shared/ui/pagekit";
 import type { AgentSession } from "../../features/agent-launch/useAgentSession";
 import { darkBoundaries, type ModelHealthReport } from "../../entities/model/health";
-import { AGENT_LABEL, type ResolvedLaunch } from "../settings-panel/SettingsPanel";
+import { AGENT_LABEL, type ResolvedLaunch } from "../../features/agent-launch/launchSettings";
 import type { ScryModel } from "../../entities/model/viewmodel";
-import type { SpecialPage } from "../../pages/node/NodePage";
+import type { SpecialPage } from "../../entities/model/navigation";
 
 interface PowerlineProps {
   model: ScryModel;

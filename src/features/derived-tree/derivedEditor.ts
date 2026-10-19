@@ -10,7 +10,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Editor } from "../../entities/model/editor";
 import type { ScryModel } from "../../entities/model/viewmodel";
-import { stripMarkup } from "../markup/markup";
+import { stripMarkup } from "../../entities/model/markup";
 
 const noop = () => {};
 const none = () => "";

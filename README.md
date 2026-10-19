@@ -49,7 +49,7 @@ The same model is the plan. An agent plans a change by writing the claims it int
 
 **Status is derived.** After a test run, hand scryer the JUnit report. Each claim becomes proven, failing, or planned, and a later edit to the test or to the code it exercises makes the verdict stale until the next run. Health counts what needs attention: planned, stale, failing, components with no claims, files no test reaches, surviving mutants, architecture violations.
 
-**Styles are structural claims.** A container declares its architecture style in `.scryer/structure.toml`, hexagonal, layered, and the layers it has. The import graph is checked against it deterministically, and a violation is a red row like any other failing claim. It is fixed by moving code, never by loosening the rule.
+**Styles are structural claims.** A container declares its architecture style in `.scryer/structure.toml`, hexagonal, library, feature-sliced, and the layers it has. The import graph is checked against it deterministically, and a violation is a red row like any other failing claim. It is fixed by moving the code, or, when the declared style was a guess, by declaring the shape the code actually has; never by loosening a rule to let one violation through.
 
 **Probes ask whether a green test would notice.** `open_probe` lets an agent break the code a passing test exercises, in an isolated worktree, and run the test expecting red. A break that survives is a finding on the claim. Mutation reports from cargo-mutants or Stryker feed the same mark without an agent in the loop.
 
@@ -99,7 +99,7 @@ A trailing `[tag]` names a concern. A todo test (`it.todo`, `#[ignore]`, `@pytes
 
 ## MCP server
 
-The MCP server lets AI agents read and modify your architecture models. It ships bundled with the desktop app.
+The MCP server lets AI agents read the tree derived from your code and keep the test loop; it writes no model. It ships bundled with the desktop app.
 
 ### Setup
 

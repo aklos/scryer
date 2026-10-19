@@ -1,5 +1,6 @@
 /**
- * Lists code files no anchor in the model reaches — the model's blind spots
+ * The dark code page: files under a node's boundary that no test reaches,
+ * grouped by node — the model's blind spots.
  */
 
 import { Check } from "lucide-react";

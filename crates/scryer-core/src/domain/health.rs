@@ -5,37 +5,23 @@
 //! model never describes); this module turns both into numbers the UI and
 //! agents can act on:
 //!
-//! - **Discharge is computed, not declared.** A responsibility hosted on a
-//!   structural node (a node with children, or a group) is discharged through
-//!   its subtree — it is *never* expected to carry its own source anchor. Only
-//!   leaf-hosted claims (a childless node saying "this code exists") are
-//!   anchorable, and only those can be "unmapped". This kills the false
-//!   "unmapped" flag on System/Container responsibilities. Persons (actors) and
-//!   external systems are out-of-system — their claims are never code-backed, so
-//!   they are never anchorable either.
+//! - **Discharge is computed, not declared.** A claim hosted on a structural
+//!   node (a node with children, or a group) is discharged through its subtree
+//!   and never expected to carry its own source anchor. Only leaf-hosted claims
+//!   are anchorable, and only those can be "unmapped". Persons and external
+//!   systems are out-of-system, so their claims are never anchorable either.
 //! - **Coverage rolls up.** Every node reports its own counts and its subtree's
-//!   counts (vagrant flags, anchorable vs anchored claims, the most
-//!   recent truth-bearing edit), so any altitude can answer "how much of what I
-//!   claim reads through to code?".
+//!   (claims, testable/tested/untested, vagrant and stale flags, anchorable vs
+//!   anchored, the most recent truth-bearing edit), so any altitude can answer
+//!   "how much of what I claim reads through to code?".
 //! - **Darkness is per boundary.** Given the project's modelable source files,
 //!   each boundary-owning node reports which of its files no anchor in its
 //!   subtree reaches — the code the lens cannot see.
 //!
-//! Computes build completeness over the authored (committed + planned) model — how much of the claimed territory reads through to real, existing code.
-//!
-//! Computes the model's health counters per node and in rollup, widening the structural/leaf verdict to the authored tree so plan-only children discharge a committed parent's claims.
-//!
-//! Ships a diagnostic CLI (dump_health) that prints a project's full computed health for inspection outside the app.
-//!
-//! Computes per-node build completeness over the authored (committed + planned) model from resolved filesystem/anchor facts.
-//!
-//! Flags architecture nodes that no link references as source or target.
-//!
-//! Resolves the authored model against the real filesystem and computes completeness — the single shared path so the figure never diverges between callers.
-//!
-//! Whether a node discharges its claims through its children rather than needing its own code anchor.
-//!
-//! Computes per-node and whole-model health counters (responsibilities, properties, tested/testable/untested, vagrant, stale, anchored/unmapped) rolled up by subtree.
+//! Beside the counts, completeness measures how much of the planned layer reads
+//! through to code that exists (boxes whose glob owns real files, leaf claims
+//! whose anchor is live), and [`disconnected_nodes`] names the architecture
+//! nodes no link touches.
 
 use crate::{Kind, ScryModel};
 use serde::Serialize;

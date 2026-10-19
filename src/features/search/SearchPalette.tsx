@@ -1,12 +1,10 @@
 /**
  * Global search palette (Ctrl/Cmd+K). Unlike the left tree's name-only filter,
- * this searches every node's authored content — name, technology, description,
- * responsibilities and their directives, schema properties — plus group prose
- * and link labels, and surfaces WHERE each match landed with a highlighted
- * snippet. Name matches rank first, then content by field. Keyboard: arrows to
- * move, Enter to open, Esc to close.
- *
- * Fuzzy command-palette search across nodes, groups, and links, jumping straight to the best-matching field
+ * this searches every node's content — name, technology, description, claims
+ * and their directives, schema properties — plus group prose and link labels,
+ * and surfaces WHERE each match landed with a highlighted snippet. Name matches
+ * rank first, then content by field. Keyboard: arrows to move, Enter to open,
+ * Esc to close.
  */
 
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
@@ -14,7 +12,7 @@ import { createPortal } from "react-dom";
 import { FolderOpen, Link2, Search, type LucideProps } from "lucide-react";
 import type { ScryModel, Node, Group } from "../../entities/model/viewmodel";
 import { kindIcon, typeTag } from "../../entities/model/kindIcon";
-import { stripMarkup } from "../markup/markup";
+import { stripMarkup } from "../../entities/model/markup";
 import { lookupIcon } from "./IconPicker";
 
 const MAX_RESULTS = 50;

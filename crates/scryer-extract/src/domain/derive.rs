@@ -27,6 +27,9 @@ pub struct DeriveInput<'a> {
     /// Every file in the project, for manifest conventions.
     pub all_files: &'a BTreeSet<String>,
     pub structure: &'a Structure,
+    /// The style table: the built-ins plus the project's own styles, which
+    /// name the layers a styled container's components can take.
+    pub styles: &'a Styles,
     pub fingerprint: u64,
 }
 
@@ -140,7 +143,7 @@ struct Component {
 
 pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
     let s = input.structure;
-    let styles = Styles::builtin();
+    let styles = input.styles;
     let mut taken = HashSet::new();
     let mut model = ScryModel::new();
 
@@ -367,6 +370,9 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         let parent = &components[&file_component[f]].id;
         let mut n = node(&id, Kind::Component, file_stem(f), Some(parent));
         n.description = input.lifts[*f].module_description.clone();
+        // A file split out of its directory's component still sits on that
+        // directory's layer, so the style checks its imports like the rest.
+        n.layer = model.nodes.iter().find(|p| &p.id == parent).and_then(|p| p.layer.clone());
         model.boundaries.insert(id.clone(), vec![Source { pattern: f.to_string(), comment: None }]);
         model.nodes.push(n);
         sub_ids.insert(f, id);
@@ -504,21 +510,35 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         }
     }
 
-    // Links: the import graph between components and between containers.
+    // Links: the import graph between components and between containers. A
+    // crate root (lib.rs, main.rs) is its container, not a component, but
+    // what it imports is the container's dependency all the same: its edges
+    // link the container itself, to the other side's component.
+    let endpoint = |f: &str| -> Option<(&str, Option<&String>)> {
+        match file_component.get(f) {
+            Some(path) => Some((components[path].container_dir.as_str(), Some(&components[path].id))),
+            None if crate_root(f) => owner(f).map(|c| (c.dir.as_str(), None)),
+            None => None,
+        }
+    };
     let mut seen: HashSet<(String, String)> = HashSet::new();
     for e in input.file_edges.iter().filter(|e| !e.guessed) {
-        let (Some(a), Some(b)) = (file_component.get(e.src.as_str()), file_component.get(e.dst.as_str())) else {
+        let (Some((da, ca)), Some((db, cb))) = (endpoint(e.src.as_str()), endpoint(e.dst.as_str())) else {
             continue;
         };
-        if a == b {
+        if da == db {
+            // Inside one container only components link; its root wiring
+            // its own modules is no dependency.
+            if let (Some(ca), Some(cb)) = (ca, cb) {
+                if ca != cb {
+                    push_link(&mut model, &mut seen, &mut taken, ca, cb, Some(LinkKind::Depends));
+                }
+            }
             continue;
         }
-        let (ca, cb) = (&components[a], &components[b]);
-        if ca.container_dir != cb.container_dir {
-            let (sa, sb) = (&container_ids[ca.container_dir.as_str()], &container_ids[cb.container_dir.as_str()]);
-            push_link(&mut model, &mut seen, &mut taken, sa, sb, None);
-        }
-        push_link(&mut model, &mut seen, &mut taken, &ca.id, &cb.id, Some(LinkKind::Depends));
+        let (sa, sb) = (&container_ids[da], &container_ids[db]);
+        push_link(&mut model, &mut seen, &mut taken, sa, sb, None);
+        push_link(&mut model, &mut seen, &mut taken, ca.unwrap_or(sa), cb.unwrap_or(sb), Some(LinkKind::Depends));
     }
 
     scryer_core::concerns::register_concerns(&mut model);
@@ -574,6 +594,31 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
             }
         }
     }
+    // A barrel (mod.rs, lib.rs, index.ts, __init__.py) is reached when
+    // anything it re-exports is: tests import the module's items, which
+    // resolve past the barrel to the files defining them. What it re-exports
+    // is what it imports, and for a Rust module root also every file of the
+    // module it declares. Nested barrels settle over a few passes.
+    let barrels: Vec<&str> = file_nodes.keys().map(String::as_str).filter(|f| is_barrel(f)).collect();
+    loop {
+        let mut grew = false;
+        for &b in &barrels {
+            if reached.contains(b) {
+                continue;
+            }
+            let module_dir = b.rsplit_once('/').map(|(dir, _)| format!("{dir}/")).unwrap_or_default();
+            let rust_root = b.ends_with(".rs");
+            let reexported = edges_from.get(b).into_iter().flatten().any(|d| reached.contains(d))
+                || (rust_root && reached.iter().any(|r| *r != b && r.starts_with(&module_dir) && r.ends_with(".rs")));
+            if reexported {
+                reached.insert(b);
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
     let dark_files: Vec<String> =
         file_nodes.keys().filter(|f| !reached.contains(f.as_str())).cloned().collect();
     DerivedTree {
@@ -586,6 +631,15 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         style_violations: Vec::new(),
         layer_exempt,
     }
+}
+
+/// A file whose job is to gather and re-export a module: a Rust module or
+/// crate root, a TS/JS index, a Python package init.
+fn is_barrel(rel: &str) -> bool {
+    matches!(
+        file_name(rel),
+        "mod.rs" | "lib.rs" | "index.ts" | "index.tsx" | "index.js" | "index.jsx" | "index.mjs" | "__init__.py"
+    )
 }
 
 /// The product container a test project exercises: the one its name drops

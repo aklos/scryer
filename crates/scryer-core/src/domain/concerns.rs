@@ -1,28 +1,18 @@
 //! Cross-cutting concern vocabulary — the model's third axis.
 //!
-//! The containment tree answers "what's inside X?", links answer "what talks
-//! to what?"; a concern answers "where does auth (persistence, idempotency, …)
+//! The containment tree answers "what's inside X?", links answer "what talks to
+//! what?"; a concern answers "where does auth (persistence, idempotency, …)
 //! live?". Code answers that question with factoring plus convention
-//! (`middleware/`, decorators); a model can't relocate prose, so the concern is
-//! a LENS instead: each responsibility may carry at most one concern slug, and
-//! the registry on [`crate::ScryModel`] names every slug in use so the UI can
+//! (`middleware/`, decorators); the tree can't relocate a claim, so the concern
+//! is a LENS instead: each claim may carry at most one concern slug, and the
+//! registry on [`crate::ScryModel`] names every slug in use so the UI can
 //! group, badge, and dim by it.
 //!
-//! Registry entries are minted automatically on first use ([`register_concerns`]
-//! runs on every model write) and never pruned automatically — a registered
-//! concern with zero tagged responsibilities is itself signal ("this app has no
-//! auth story"), and explicit deletion is a user act. Slugs are normalized to
-//! kebab-case on write so the vocabulary can't fork on casing or spacing.
-//!
-//! Normalizes a raw concern value to a canonical kebab-case slug.
-//!
-//! Syncs concern tags and registry curation from the plan through to the committed layer without waiting for a fold.
-//!
-//! Writes concern tags and registry curation through from the plan to committed on every plan write, since a tag-only change never triggers a fold.
-//!
-//! Normalizes every responsibility's concern slug and mints a registry entry for each newly used slug, seeding standard descriptions/icons where they match.
-//!
-//! Maintains the model's concern registry (the vocabulary responsibilities tag themselves with) and keeps every used slug normalized and registered.
+//! [`register_concerns`] runs when the tree is derived: it normalizes every
+//! slug to kebab-case, so the vocabulary can't fork on casing or spacing, and
+//! mints a registry entry for each new one, seeding description and icon from
+//! [`STANDARD_CONCERNS`]. Entries are never pruned — a registered concern with
+//! nothing tagged is itself signal ("this app has no auth story").
 
 
 use crate::domain::model::ScryModel;
@@ -67,9 +57,8 @@ pub fn normalize_slug(raw: &str) -> String {
 
 /// Normalize every responsibility's concern slug and make sure each used slug
 /// has a registry entry — the single choke point that keeps tags and registry
-/// coherent. Runs on both model write paths ([`crate::write_committed_file`] /
-/// [`crate::write_planned_file`]), so agent writes can never leave a dangling or
-/// misspelled-case slug. New entries seed description/icon from
+/// coherent. Runs when the tree is derived, so no claim can leave a dangling
+/// or misspelled-case slug. New entries seed description/icon from
 /// [`STANDARD_CONCERNS`] when the slug matches; existing entries are never
 /// touched and unused entries are never pruned. The registry is kept sorted by
 /// slug for stable serialization. Mirrored in the frontend mutation helpers
@@ -121,9 +110,7 @@ pub fn register_concerns(model: &mut ScryModel) {
 /// Instead, every plan write syncs the tag onto the committed copy of any
 /// claim that exists there (matched by id), and copies the registry wholesale
 /// — the plan is the authoring surface for curation (renames, descriptions,
-/// icons). Returns whether `committed` changed and needs writing. Runs inside
-/// [`crate::write_planned_raw_file`], the choke point both the canvas and the
-/// MCP write path go through.
+/// icons). Returns whether `committed` changed and needs writing.
 pub fn sync_concern_metadata(committed: &mut ScryModel, planned: &ScryModel) -> bool {
     let mut changed = false;
     let planned_by_id: std::collections::HashMap<&str, Option<&str>> = planned

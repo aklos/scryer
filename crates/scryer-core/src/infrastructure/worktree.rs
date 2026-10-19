@@ -3,35 +3,21 @@
 //! A probe deliberately breaks code to ask whether the attached test notices.
 //! Doing that in the developer's own working tree is hostile: their editor is
 //! open on those files, their agent may be mid-edit, and a restore that races
-//! either one loses work. So the mutation happens in a git worktree instead,
-//! and the developer's tree is never touched at all.
+//! either one loses work. So the mutation happens in a detached git worktree
+//! under `~/.scryer/probes`, one per project, and the developer's tree is never
+//! touched at all; a project that is not a git repository is refused, never
+//! downgraded.
 //!
-//! The worktree is REUSED, not created per probe. A fresh checkout starts with
-//! a cold build — no `target/`, no `node_modules/`, no docker layers — and for
-//! most projects that cold build dwarfs the test run the probe actually cares
-//! about. Keeping one worktree per project means the first probe pays for the
-//! build and every probe after it pays for an incremental one. `git clean -fd`
-//! (deliberately without `-x`) drops stray files while leaving ignored build
-//! output exactly where it is, which is what keeps it warm.
+//! The worktree is REUSED, not created per probe: a fresh checkout starts with
+//! a cold build that dwarfs the test run, so the first probe pays for the build
+//! and every later one for an incremental one. `git clean -fd` (deliberately
+//! without `-x`) drops stray files while leaving ignored build output warm.
+//! Syncing copies the working tree — uncommitted and untracked edits included —
+//! not the last commit: mid-session the interesting code is uncommitted almost
+//! by definition.
 //!
-//! Syncing copies the working tree, not the last commit. Mid-session the
-//! interesting code is uncommitted almost by definition, and a probe against
-//! `HEAD` would be answering a question about code the developer already moved
-//! past.
-//!
-//! Feeds a patch to the worktree via git apply on stdin.
-//!
-//! Refuses rather than downgrades when the project isn't a git repository — mutating the developer's own files is exactly what the worktree exists to prevent.
-//!
-//! Hands back a worktree synced to the project's current commits plus uncommitted/untracked edits, creating it on first use and reusing it (build cache and all) after.
-//!
-//! The deterministic worktree path for a project, keyed by a hash of its absolute path.
-//!
-//! Syncs, applies patches to, and resets the worktree between probe rounds without ever touching the developer's real files.
-//!
-//! Maintains a persistent, isolated git worktree per project (outside the developer's own checkout) that mirrors its current committed + uncommitted state, so a probe can safely test hypothetical changes.
-//!
-//! Discards whatever the last probe did, preserving ignored build output so the next run stays incremental.
+//! It also lists the project's live git worktrees, the checkouts several
+//! agents may be working in at once.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -107,6 +93,31 @@ pub fn is_git_repo(project: &Path) -> bool {
 /// The worktree path for a project, whether or not it exists yet.
 pub fn worktree_path(project: &Path) -> PathBuf {
     probes_root().join(slug_for(project))
+}
+
+/// The project's live git worktrees as `(path, branch)`, its main checkout
+/// first: every one whose directory still exists, leaving out scryer's own
+/// probe trees. The branch is `None` for a detached HEAD. Empty when the
+/// project is not a git repository.
+pub fn list_worktrees(project: &Path) -> Vec<(PathBuf, Option<String>)> {
+    let Ok(out) = git(project, &["worktree", "list", "--porcelain"]) else { return Vec::new() };
+    let probes = probes_root();
+    let mut found = Vec::new();
+    for block in out.split("\n\n") {
+        let mut path = None;
+        let mut branch = None;
+        for line in block.lines() {
+            if let Some(p) = line.strip_prefix("worktree ") {
+                path = Some(PathBuf::from(p));
+            } else if let Some(b) = line.strip_prefix("branch ") {
+                branch = Some(b.strip_prefix("refs/heads/").unwrap_or(b).to_string());
+            }
+        }
+        if let Some(path) = path.filter(|p| p.is_dir() && !p.starts_with(&probes)) {
+            found.push((path, branch));
+        }
+    }
+    found
 }
 
 /// Hand back a worktree synced to the project's CURRENT state — commits plus
@@ -353,5 +364,29 @@ mod tests {
         let again = ensure_synced(p).unwrap();
         assert!(again.join("m.rs").exists(), "rebuilt after the directory vanished");
         fs::remove_dir_all(&again).ok();
+    }
+
+    /// When a repository has a second worktree, both are listed with their
+    /// branches, the main checkout first; a removed worktree's directory is
+    /// not live.
+    #[test]
+    fn lists_the_projects_live_worktrees() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let run = |args: &[&str]| git(&repo, args).unwrap();
+        run(&["init", "-q", "-b", "main"]);
+        run(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"]);
+        let side = dir.path().join("side");
+        run(&["worktree", "add", "-q", "-b", "feature", side.to_str().unwrap()]);
+        let listed = list_worktrees(&repo);
+        let names: Vec<(String, Option<String>)> = listed
+            .iter()
+            .map(|(path, branch)| (path.file_name().unwrap().to_string_lossy().to_string(), branch.clone()))
+            .collect();
+        assert_eq!(names, vec![("repo".into(), Some("main".into())), ("side".into(), Some("feature".into()))]);
+        std::fs::remove_dir_all(&side).unwrap();
+        assert_eq!(list_worktrees(&repo).len(), 1);
+        assert!(list_worktrees(dir.path()).is_empty(), "not a repository");
     }
 }

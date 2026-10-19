@@ -40,7 +40,7 @@ describe("layer descriptions", () => {
 describe("map content", () => {
   it("carries no hover tooltips", () => {
     for (const f of [
-      "src/entities/model/DiagramCard.tsx",
+      "src/widgets/diagram-canvas/DiagramCard.tsx",
       "src/widgets/diagram-canvas/DiagramView.tsx",
       "src/widgets/diagram-canvas/StyleRegions.tsx",
       "src/shared/diagram/RelationshipEdge.tsx",

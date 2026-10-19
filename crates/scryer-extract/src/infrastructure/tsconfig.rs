@@ -3,20 +3,15 @@
 //! TypeScript projects remap bare import specifiers through
 //! `compilerOptions.paths` (patterns with at most one `*`) resolved against
 //! `baseUrl` or the declaring config's directory, and configs inherit through
-//! `extends`. This module finds every governing config in the repo, follows
+//! `extends`. This module finds every governing config in the repo — sibling
+//! variants in one directory merge with a fixed precedence — follows
 //! relative `extends` chains (an npm-package base is unresolvable without
 //! `node_modules` and is skipped — guessing would mint false aliases), and
 //! flattens each into a project-relative alias table the edge resolver can
 //! apply without touching the filesystem.
-//!
-//! Finds every alias-bearing tsconfig/jsconfig, merging sibling config variants per directory with a deterministic precedence.
-//!
-//! Discovers and flattens tsconfig/jsconfig `paths`/`baseUrl` alias configuration, including `extends` chains, so bare import specs can resolve to real files.
-//!
-//! Flattens one config plus its `extends` ancestry into a project-relative alias table, respecting TS's override-not-merge semantics for baseUrl/paths.
 
 use std::collections::{BTreeMap, HashSet};
-use crate::domain::facts::TsAliases;
+use crate::domain::context::TsAliases;
 use std::path::{Path, PathBuf};
 
 /// Discover every alias-bearing tsconfig/jsconfig among `all_files`. Configs

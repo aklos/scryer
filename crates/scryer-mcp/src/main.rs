@@ -1,28 +1,6 @@
-//! Provide command-line entry points for project setup, session hooks, status, and CI checks.
-//!
-//! Ingest test verdicts to gate claims as tested.
-//!
-//! Enforce the plan, sign-off, build, and verify change loop.
-//!
-//! Tracks each session's currently open change so plan writes auto-tag to the right task, scoped per project
-//!
-//! Expose model reading, editing, and rule tools to AI coding agents.
-//!
-//! Exposes an opt-in CI gate (`check`) that fails loud on validator warnings, broken anchors, and — when asked — drift or pending work
-//!
-//! Writes or merges .mcp.json, the shared config format Claude Code and Copilot CLI both read
-//!
-//! Bootstraps per-project agent config so installed CLIs (Claude Code, Copilot, Codex) discover the scryer-mcp server and, optionally, its statusline
-//!
-//! Carries the connect-time instructions that steer the model-first workflow loop and point at rules by slug
-//!
-//! Reports the model's loop-state (pending work, drift, test verdicts) as a human status line and as JSON
-//!
-//! Writes project-scoped MCP config for every installed agent CLI so it discovers the scryer-mcp binary
-//!
-//! Writes or merges .codex/config.toml to register the server for OpenAI Codex
-//!
-//! Assembles every tool category's router into the one advertised tool list, with schemas slimmed for a model reading them
+//! scryer-mcp: the stdio MCP server through which an agent reads the derived
+//! C4 tree and runs the test loop, and — by subcommand — the CLI: `setup`,
+//! `hook`, `status`, `statusline`, `lint`, `migrate` and `check`.
 
 mod cli;
 mod derived;

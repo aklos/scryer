@@ -1,5 +1,7 @@
 /**
- * Live-renders a symbol's component in an iframe when the preview sidecar can mount it
+ * Live-renders a symbol's component in an iframe from the preview server,
+ * with its own theme, and offers an agent fill of fixture data when the
+ * render comes back empty, errors, or has no fixture behind it.
  */
 
 import { useEffect, useState } from "react";

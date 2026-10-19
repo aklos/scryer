@@ -1,9 +1,9 @@
 /**
- * Editor callbacks — the contract between the model tree / node pages and App.
- * Pure intents; App owns the model and applies them via the helpers in
- * viewmodel.ts.
- *
- * Full contract of model-mutating operations the UI can invoke — nodes, links, groups, claims, and properties
+ * Editor callbacks — the contract between the model tree / node pages and
+ * whatever applies edits. Pure intents over nodes, links, groups, claims and
+ * properties. App wires in the derived editor (`features/derived-tree`), which
+ * honours only the intents that land in code (claim text, todo stubs,
+ * container names) and ignores the rest.
  */
 
 import type { Kind, SchemaProperty, Responsibility } from "./viewmodel";

@@ -1,18 +1,29 @@
 /**
- * Shared scrollable content column every special (non-node) page renders inside
- *
- * Provides the shared header and scrollable body column every special page renders inside
+ * The shell every special (non-node) page renders inside: a header and a
+ * scrollable body column.
  */
 
 import { PAGE_COL } from "../../shared/ui/pagekit";
 
 // --- shared shell -------------------------------------------------------------
 
-export function SpecialHeader({ title, subtitle }: { title: string; subtitle: string }) {
+export function SpecialHeader({
+  title,
+  subtitle,
+  right,
+}: {
+  title: string;
+  subtitle: string;
+  /** Page-level controls, right-aligned on the title line. */
+  right?: React.ReactNode;
+}) {
   return (
     <header className="shrink-0 border-b border-[var(--border)] pb-3 pt-[18px]">
       <div className={PAGE_COL}>
-        <h1 className="text-xl font-semibold leading-tight text-[var(--text)]">{title}</h1>
+        <div className="flex items-baseline gap-3">
+          <h1 className="text-xl font-semibold leading-tight text-[var(--text)]">{title}</h1>
+          {right && <div className="ml-auto">{right}</div>}
+        </div>
         <div className="mt-1 text-sm text-[var(--text-tertiary)]">{subtitle}</div>
       </div>
     </header>

@@ -1,35 +1,64 @@
 //! Per-scope codebase CONTEXT: manifest facts + a per-file symbol index + a
-//! dependency graph, all parser-only. This is the MAP a modeling agent reads
-//! FROM to build a C4 model fast and correctly — it is never a model itself,
-//! and it is never persisted to disk. [`build_context`] assembles the full
-//! project context; [`slice_scope`] returns exactly the slice one subagent
-//! needs to model a directory subtree (its files, their symbols, the symbol
-//! edges internal to the scope, and the file edges crossing its boundary).
+//! dependency graph, all parser-only. [`build_context`] assembles the full
+//! project context, resolving imports through Go module paths, tsconfig
+//! aliases, Python package roots and manifest-declared names; [`slice_scope`]
+//! and [`slice_container`] return exactly the slice of one directory subtree
+//! or container (its files, their symbols, the symbol edges internal to it,
+//! and the file edges crossing its boundary); [`compact_scope`] turns a slice
+//! into a token-budgeted payload. The context is never persisted to disk.
 //!
-//! Where a `ScryModel` mints `node-N` ids and freezes a component/symbol tree,
-//! this layer deliberately does neither: symbols are addressed by a synthetic
-//! `rel_path#name@line` key that anchors them to source without implying any C4
-//! structure. Choosing components (clustering from cohesion + the dependency
-//! graph) and writing responsibilities is the agent's job — we precompute the
-//! map, not the model.
-//!
-//! Maps a Go import path to a repo directory via the longest-matching declared go.mod module path.
-//!
-//! Slices the context to exactly the files owned by one container, for per-container modeling.
-//!
-//! Resolves a bare TS/JS import spec through the governing tsconfig's `paths`/`baseUrl` table.
-//!
-//! Resolves a Python import spec (relative or absolute) to its module file and base path across container/src-layout roots.
-//!
-//! Converts a scope into the token-budgeted agent wire format, stepping down the per-symbol evidence cap until the scope's total evidence fits.
-//!
-//! Assembles the full ProjectContext — per-file symbol index plus the resolved dependency graph — from discovered containers and parsed files.
+//! This layer chooses no components: symbols are addressed by a synthetic
+//! `rel_path#name@line` key that anchors them to source without implying any
+//! C4 structure. It is the map the derived tree and the import graph are
+//! built from, not the tree itself.
 
 use crate::domain::lang::{CsScope, Def, FileParse, ImportRef};
-use crate::domain::facts::TsAliases;
-use crate::domain::facts::Container;
 use serde::Serialize;
 use std::collections::{BTreeSet, HashMap, HashSet};
+
+// --- manifest facts ---------------------------------------------------------
+// What a project's manifests and configs declare: the vocabulary the context
+// is built in. Reading them off disk is the infrastructure's job; these are
+// just the shapes it produces.
+
+/// A declared build/deploy unit.
+#[derive(Debug, Clone)]
+pub struct Container {
+    /// Directory relative to the project root, normalized with `/` separators.
+    /// Empty string for the project root.
+    pub dir: String,
+    /// Declared name (crate/package name) or the directory basename.
+    pub name: String,
+    /// Literal declared technology — currently a Dockerfile base image. `None`
+    /// when nothing is declared (Pass 2 names what the unit is).
+    pub technology: Option<String>,
+    /// Directories of other containers this one declares a path dependency on.
+    pub dep_dirs: Vec<String>,
+    /// The declared go.mod module path (`module github.com/acme/proj`) — the
+    /// prefix Go import specs spell to reach this container's packages.
+    pub go_module: Option<String>,
+    /// Source roots this unit declares for Clojure namespace resolution —
+    /// deps.edn / bb.edn `:paths`, shadow-cljs.edn / project.clj
+    /// `:source-paths`. Relative to `dir`. A Clojure namespace maps to a file
+    /// path under one of these, so without them `app.db` is unresolvable.
+    pub clj_paths: Vec<String>,
+}
+
+/// The flattened alias table governing one directory subtree.
+#[derive(Debug, Clone, Default)]
+pub struct TsAliases {
+    /// Directory holding the config (project-relative, `""` for the root).
+    /// Files under it resolve bare specs through this table; the NEAREST
+    /// (longest-dir) table wins when configs nest.
+    pub dir: String,
+    /// `baseUrl` resolved project-relative: a bare spec may denote a file
+    /// under it.
+    pub base_url: Option<String>,
+    /// `paths` pattern -> substitution targets, targets already resolved
+    /// project-relative with their `*` retained (`@/*` -> `["src/*"]`).
+    pub paths: Vec<(String, Vec<String>)>,
+}
+
 
 /// A parsed source file, project-relative path with `/` separators.
 pub struct ParsedFile {
@@ -112,7 +141,7 @@ struct ContextIndex {
     file_edges_by_container: HashMap<String, Vec<usize>>,
 }
 
-/// A declared build/deploy unit — a 1:1 projection of [`manifest::Container`]
+/// A declared build/deploy unit — a 1:1 projection of [`Container`]
 /// onto the wire, carrying only the literal declared facts.
 #[derive(Debug, Clone, Serialize)]
 pub struct ContainerFacts {
@@ -150,7 +179,7 @@ pub struct FileContext {
     pub symbols: Vec<SymbolContext>,
 }
 
-/// One addressable symbol: a [`lang::Def`] plus a synthetic, source-anchored key.
+/// One addressable symbol: a [`crate::domain::lang::Def`] plus a synthetic, source-anchored key.
 #[derive(Debug, Clone, Serialize)]
 pub struct SymbolContext {
     /// Stable in-payload identity: `rel_path#name@start_line`. NOT a `node-N`
@@ -962,8 +991,15 @@ fn build_edges(
                         // path head for the call sites that follow.
                         None => {
                             if let Some(cands) = mod_files.get(cd).and_then(|m| m.get(leaf)) {
-                                if cands.len() == 1 && cands[0] != file {
-                                    file_edges.insert((file.to_string(), cands[0].to_string()));
+                                // `crate::a::b` names the file at that path;
+                                // other heads keep the unique-name match.
+                                let target = if head == "crate" {
+                                    module_file_at(cands, cd, &pref.segments[1..])
+                                } else {
+                                    (cands.len() == 1).then(|| cands[0])
+                                };
+                                if let Some(df) = target.filter(|df| *df != file) {
+                                    file_edges.insert((file.to_string(), df.to_string()));
                                 }
                             }
                         }
@@ -1186,10 +1222,14 @@ fn build_edges(
                 Some(_) => {} // ambiguous leaf — skip (under-report, never guess)
                 None => {
                     // The leaf names a module, not a def (`use scryer_core::drift;`).
-                    // Resolve to that module's file so the coupling still shows up.
+                    // Resolve to the file at that module path so the coupling
+                    // still shows up; a module declared inline has no file,
+                    // and a same-named file elsewhere in the crate is not it.
                     if let Some(cands) = mod_files.get(dst_dir).and_then(|m| m.get(sym)) {
-                        if cands.len() == 1 && cands[0] != file {
-                            file_edges.insert((file.to_string(), cands[0].to_string()));
+                        if let Some(df) = module_file_at(cands, dst_dir, &pref.segments[1..]) {
+                            if df != file {
+                                file_edges.insert((file.to_string(), df.to_string()));
+                            }
                         }
                     }
                 }
@@ -1207,6 +1247,17 @@ fn build_edges(
     symbol_edges.extend(guessed_edges.into_iter().map(|(src, dst)| Edge { src, dst, guessed: true }));
     symbol_edges.sort();
     (symbol_edges, sorted_edges(file_edges), externals)
+}
+
+/// The file of the Rust module at `segments` (the path below the crate root)
+/// among the candidates sharing its name: `src/a/b.rs` or `src/a/b/mod.rs`
+/// in the crate at `dir`. `None` when the module is declared inline or the
+/// path names no file.
+fn module_file_at<'a>(cands: &[&'a str], dir: &str, segments: &[String]) -> Option<&'a str> {
+    let base = if dir.is_empty() { "src/".to_string() } else { format!("{dir}/src/") };
+    let path = segments.join("/");
+    let (flat, nested) = (format!("{base}{path}.rs"), format!("{base}{path}/mod.rs"));
+    cands.iter().copied().find(|c| *c == flat || *c == nested)
 }
 
 /// The module name a Rust file contributes: its stem, except `mod.rs`/`lib.rs`/
@@ -3784,5 +3835,56 @@ fn add_one(x: u32) -> u32 {
             "packages/ui/src/button.ts"
         ));
         assert!(has_sym_edge(&ctx, "App", "Button"));
+    }
+
+    fn parsed(rel: &str, src: &str) -> ParsedFile {
+        ParsedFile {
+            rel_path: rel.to_string(),
+            source: src.to_string(),
+            parse: crate::domain::lang::parse_file(std::path::Path::new(rel), src).unwrap(),
+        }
+    }
+
+    /// When a type is named by a full path (`&crate::domain::status::Status`),
+    /// the path's module segments are not references: a fn elsewhere that
+    /// shares a module's name gets no edge.
+    #[test]
+    fn a_type_paths_module_segments_name_no_def() {
+        let files = vec![
+            parsed("src/lib.rs", "pub mod domain;\npub mod store;\n"),
+            parsed("src/domain/mod.rs", "pub mod status;\npub mod landing;\n"),
+            parsed("src/domain/status.rs", "pub struct Status;\n"),
+            parsed("src/store.rs", "pub fn status() {}\n"),
+            parsed(
+                "src/domain/landing.rs",
+                "pub fn landing(s: &crate::domain::status::Status) -> usize {\n    let _ = s;\n    1\n}\n",
+            ),
+        ];
+        let ctx = build_context("proj", &[container("", "core")], &files, &[]);
+        assert!(has_file_edge(&ctx, "src/domain/landing.rs", "src/domain/status.rs"));
+        assert!(!has_file_edge(&ctx, "src/domain/landing.rs", "src/store.rs"), "{:?}", ctx.file_edges);
+    }
+
+    /// When another crate's module is used by path (`use engine::scan;`), the
+    /// edge goes to the file at that path; a module declared inline in the
+    /// crate root has no file, so a same-named file deeper in the crate gets
+    /// no edge.
+    #[test]
+    fn a_module_path_resolves_only_to_the_file_at_that_path() {
+        let files = vec![
+            parsed("crates/engine/src/lib.rs", "pub mod adapters;\npub mod drift;\npub mod scan {\n    pub fn walk() {}\n}\n"),
+            parsed("crates/engine/src/adapters/mod.rs", "pub mod scan;\n"),
+            parsed("crates/engine/src/adapters/scan.rs", "pub fn read_dir() {}\n"),
+            parsed("crates/engine/src/drift.rs", "pub fn check() {}\n"),
+            parsed("crates/app/src/main.rs", "use engine::scan;\nuse engine::drift;\nfn main() {}\n"),
+        ];
+        let containers = vec![container("crates/engine", "engine"), container("crates/app", "app")];
+        let ctx = build_context("proj", &containers, &files, &[]);
+        assert!(has_file_edge(&ctx, "crates/app/src/main.rs", "crates/engine/src/drift.rs"));
+        assert!(
+            !has_file_edge(&ctx, "crates/app/src/main.rs", "crates/engine/src/adapters/scan.rs"),
+            "{:?}",
+            ctx.file_edges
+        );
     }
 }

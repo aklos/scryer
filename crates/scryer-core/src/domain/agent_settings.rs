@@ -1,7 +1,7 @@
-//! The developer's agent preferences as a shape. Where they are stored is
-//! `infrastructure::settings`.
-//!
-//! Persists global, per-agent (Claude/Codex/Copilot) model and reasoning-effort preferences for spawned fill sessions, independent of any single project.
+//! The developer's agent preferences as a shape: which agent to launch (Claude
+//! Code, Codex or Copilot), each one's model and reasoning effort, and whether
+//! to confirm before a launch. Global, not per project; where they are stored
+//! is `infrastructure::settings`.
 
 use serde::{Deserialize, Serialize};
 

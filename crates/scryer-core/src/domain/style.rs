@@ -1,45 +1,21 @@
 //! Architectural styles — the model's horizontal axis.
 //!
-//! C4 gives the model a vertical axis (system → container → component →
-//! symbol) but no rule for what a component *is* inside its container or which
+//! C4 gives the model a vertical axis (system → container → component → symbol)
+//! but no rule for what a component *is* inside its container or which
 //! components may depend on which. A **style** supplies that: a fixed list of
 //! layer names, a legality matrix over them, an isolation rule for siblings on
-//! the same layer, and the path convention that puts each layer in one
-//! predictable place. Every container declares a style; every component under
-//! it carries one layer from that style's list. Symbols inherit their
-//! component's layer.
-//!
-//! Style and layer are the node-level twins of EARS and concerns: fixed
-//! vocabularies that let a reader scan without parsing. Unlike a concern, a
-//! layer is required and must come from the style's list, because the map and
-//! the checks depend on it.
+//! the same layer, the layers a link may enter and leave by, banned outside
+//! packages, type roles, and the path convention that puts each layer in one
+//! predictable place. Under a styled container every component carries one
+//! layer from that list and symbols inherit their component's; a component may
+//! override its container's style. This module resolves which style and layer
+//! govern a node, where its files belong, and whether a link between two nodes
+//! is one its style allows.
 //!
 //! The seven built-ins (`hexagonal`, `library`, `feature-sliced`, `core-shell`,
-//! `pipeline`, `ecs`, `mvvm`) are ordinary [`StyleDef`] values; a project may add its own as
-//! `.scryer/styles/<name>.json` with the same shape. The engine never
-//! special-cases a built-in.
-//!
-//! Validates whether a layer tag is legal for a component under a given parent, naming exactly what's wrong: unstyled container, unknown style, or layer outside the style's list.
-//!
-//! Builds a component's language-neutral scaffold manifest — file location, allowed imports, and symbols to define — for the agent to materialize in the project's own idiom.
-//!
-//! The layer tag a node carries, inherited from its component when the node is a symbol.
-//!
-//! Defines the language-neutral vocabulary of an architectural style: its layers, legality matrix, isolation rule, inbound layers, external-package bans, and path convention.
-//!
-//! Resolves which style and layer govern a given node, and renders the one-line placement fact (layer, allowed imports, directory) an agent needs before writing a file.
-//!
-//! Where files of a node's layer belong, from its container's boundary prefix and the style's path convention.
-//!
-//! Assembles the one-line placement fact — layer, allowed imports, directory — an agent needs before writing a file.
-//!
-//! Generates a language-neutral scaffold manifest — where a component's file(s) go and what symbols to define — for the agent to materialize in the project's own idiom.
-//!
-//! Hold the set of styles a project can use: the built-ins plus any project-authored override under .scryer/styles/.
-//!
-//! Ship the five built-in styles (hexagonal, library, feature-sliced, core-shell, pipeline) and load project-authored custom styles that override them by name.
-//!
-//! The nearest ancestor-or-self style declaration governing a node, so a component may override its container.
+//! `pipeline`, `ecs`, `mvvm`) are ordinary [`StyleDef`] values; a project may
+//! add its own as `.scryer/styles/<name>.json` with the same shape, replacing a
+//! built-in of the same name. The engine never special-cases a built-in.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -318,17 +294,33 @@ pub fn governing_style<'a>(model: &'a ScryModel, node_id: &str) -> Option<&'a st
 }
 
 /// The component that carries `node_id`'s layer: the node itself when it is a
-/// component, its parent when it is a symbol. `None` for anything else.
+/// component, its parent when it is a symbol, lifted out of any component it
+/// is nested in. `None` for anything else.
 pub fn layer_component<'a>(model: &'a ScryModel, node_id: &str) -> Option<&'a Node> {
     let n = model.nodes.iter().find(|n| n.id == node_id)?;
-    match n.kind {
-        Kind::Component => Some(n),
+    let mut comp = match n.kind {
+        Kind::Component => n,
         Kind::Symbol => {
             let p = n.parent_id.as_deref()?;
-            model.nodes.iter().find(|m| m.id == p && m.kind == Kind::Component)
+            model.nodes.iter().find(|m| m.id == p && m.kind == Kind::Component)?
         }
-        _ => None,
+        _ => return None,
+    };
+    // A component nested in another (a file split out of its directory's
+    // component) is part of it: one slice of the layer, not a second one.
+    let mut hops = 0;
+    while let Some(parent) = comp
+        .parent_id
+        .as_deref()
+        .and_then(|p| model.nodes.iter().find(|m| m.id == p && m.kind == Kind::Component))
+    {
+        comp = parent;
+        hops += 1;
+        if hops > 16 {
+            break;
+        }
     }
+    Some(comp)
 }
 
 /// The layer tag on `node_id`: a component's own, a symbol's inherited from its
@@ -1066,27 +1058,6 @@ mod tests {
             let back: StyleDef = serde_json::from_str(&json).unwrap();
             assert_eq!(&back, s);
         }
-    }
-
-    #[test]
-    fn project_styles_override_builtins_by_name() {
-        let dir = tempfile::tempdir().unwrap();
-        let styles_dir = dir.path().join(".scryer").join("styles");
-        std::fs::create_dir_all(&styles_dir).unwrap();
-        let mut custom = core_shell();
-        custom.name = "two-tier".into();
-        std::fs::write(
-            styles_dir.join("two-tier.json"),
-            serde_json::to_string(&custom).unwrap(),
-        )
-        .unwrap();
-        std::fs::write(styles_dir.join("broken.json"), "{ not json").unwrap();
-        let styles = crate::composition::styles::load_styles(dir.path());
-        assert!(styles.get("two-tier").is_some());
-        assert!(styles.get("hexagonal").is_some());
-        assert_eq!(styles.names().len(), 8);
-        assert_eq!(styles.errors().len(), 1);
-        assert!(styles.errors()[0].contains("broken.json"), "{:?}", styles.errors());
     }
 
     fn node(id: &str, kind: Kind, parent: Option<&str>) -> Node {

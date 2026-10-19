@@ -82,7 +82,7 @@ pub fn lift_file(rel_path: &str, source: &str, parser: &mut Parser) -> FileLift 
 pub const MANUAL_TAG: &str = "manual";
 
 /// Split trailing `[tag]`s off a description: `keeps the draft [persistence]`
-/// → (`keeps the draft`, [`persistence`]).
+/// → (`keeps the draft`, `["persistence"]`).
 pub fn split_concerns(text: &str) -> (String, Vec<String>) {
     let mut rest = text.trim_end();
     let mut tags = Vec::new();

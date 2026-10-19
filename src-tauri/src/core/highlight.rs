@@ -1,13 +1,9 @@
 //! In-process syntax highlighting for the code inspector, using the same
-//! tree-sitter grammars bundled for symbol resolution. Produces, per source
-//! line, an ordered list of `{text, kind}` segments that concatenate back to
-//! the line — so the frontend just colours each segment, no column math.
-//!
-//! Highlights a whole source string and returns one segment list per line, falling back to None (plain text) for unsupported languages.
-//!
-//! Builds the tree-sitter highlight configuration for a file extension, covering Rust, TypeScript/TSX, JavaScript, Python, Go, Java, Ruby, C/C++, C#, and PHP.
-//!
-//! Highlights whole source files into per-line, themeable token segments using bundled tree-sitter grammars, one per supported language.
+//! tree-sitter grammars bundled for symbol resolution (Rust, TypeScript/TSX,
+//! JavaScript, Python, Go, Java, Ruby, C/C++, C# and PHP). Produces, per
+//! source line, an ordered list of `{text, kind}` segments that concatenate
+//! back to the line — so the frontend just colours each segment, no column
+//! math. Other languages get `None` and render as plain text.
 
 use std::cell::RefCell;
 use std::collections::HashMap;

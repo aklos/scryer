@@ -19,13 +19,17 @@ pub struct LandingClaim {
     pub file: String,
     pub line: u32,
     pub state: ClaimState,
+    /// The claim's concern tags, shown at the end of its row.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub concerns: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LandingSession {
     pub session: String,
-    /// The task the session oriented on, else its id.
+    /// The task the session oriented on, else the display name of the first
+    /// component it touched; empty when it has neither.
     pub title: String,
     pub started_at: u64,
     pub ended_at: u64,
@@ -37,6 +41,10 @@ pub struct LandingSession {
     pub new_dark_files: Vec<String>,
     /// Components whose files the session touched.
     pub components: Vec<String>,
+    /// The checkout the session worked in (its path), when the landing
+    /// spans several worktrees.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -50,10 +58,114 @@ pub struct SharedComponent {
 #[serde(rename_all = "camelCase")]
 pub struct Landing {
     pub since: u64,
+    /// The open checkout's branch (`None` when detached or not a git
+    /// repository): the landing titles a session that has neither a task
+    /// nor a touched component by it and the session's time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// The project's live git worktrees, each with its branch and how many
+    /// sessions it had in the window; empty for a single checkout.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub worktrees: Vec<LandingWorktree>,
     /// Newest first.
     pub sessions: Vec<LandingSession>,
     /// Components touched by more than one session in the window.
     pub shared: Vec<SharedComponent>,
+}
+
+/// One live worktree of the project, as the landing lists it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LandingWorktree {
+    pub path: String,
+    /// `None` for a detached HEAD.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// The checkout the app has open.
+    pub current: bool,
+    pub sessions: usize,
+}
+
+/// One landing over several worktrees: each part's sessions labelled with
+/// its worktree, newest first, and the components more than one session
+/// touched counted across all of them (a component's id is the same in
+/// every checkout of the repo).
+pub fn merge_worktrees(since: u64, parts: Vec<(LandingWorktree, Landing)>) -> Landing {
+    let mut out = Landing { since, ..Default::default() };
+    for (mut wt, landing) in parts {
+        wt.sessions = landing.sessions.len();
+        for mut s in landing.sessions {
+            s.worktree = Some(wt.path.clone());
+            out.sessions.push(s);
+        }
+        out.worktrees.push(wt);
+    }
+    out.sessions.sort_by(|a, b| b.ended_at.cmp(&a.ended_at).then(a.session.cmp(&b.session)));
+    let mut touched_by: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for s in &out.sessions {
+        for n in &s.components {
+            touched_by.entry(n.clone()).or_default().insert(s.session.clone());
+        }
+    }
+    out.shared = touched_by
+        .into_iter()
+        .filter(|(_, ss)| ss.len() > 1)
+        .map(|(node_id, ss)| SharedComponent { node_id, sessions: ss.into_iter().collect() })
+        .collect();
+    out
+}
+
+/// Take out of `sessions` the ones that worked in a nested worktree: every
+/// file they read, edited or stubbed sits under `prefix` (that worktree's
+/// path relative to this checkout, with a trailing `/`). Those paths are
+/// rewritten relative to the worktree, so its own tree can read them.
+pub fn take_prefixed(
+    sessions: &mut Vec<(String, Vec<SessionEntry>)>,
+    prefix: &str,
+) -> Vec<(String, Vec<SessionEntry>)> {
+    use crate::domain::session::SessionEvent;
+    fn file_of(event: &mut SessionEvent) -> Option<&mut String> {
+        match event {
+            SessionEvent::Touch { file } | SessionEvent::Overlay { file, .. } | SessionEvent::Stub { file, .. } => {
+                Some(file)
+            }
+            _ => None,
+        }
+    }
+    let inside = |entries: &[SessionEntry]| {
+        let mut files = entries.iter().filter_map(|e| match &e.event {
+            SessionEvent::Touch { file } | SessionEvent::Overlay { file, .. } | SessionEvent::Stub { file, .. } => {
+                Some(file)
+            }
+            _ => None,
+        });
+        let first = files.next();
+        first.is_some_and(|f| f.starts_with(prefix)) && files.all(|f| f.starts_with(prefix))
+    };
+    let (taken, kept): (Vec<_>, Vec<_>) = std::mem::take(sessions).into_iter().partition(|(_, e)| inside(e));
+    *sessions = kept;
+    taken
+        .into_iter()
+        .map(|(id, entries)| {
+            let entries = entries
+                .into_iter()
+                .map(|mut e| {
+                    if let Some(file) = file_of(&mut e.event) {
+                        *file = file[prefix.len()..].to_string();
+                    }
+                    e
+                })
+                .collect();
+            (id, entries)
+        })
+        .collect()
+}
+
+/// The display name of the first component a session touched, in touch
+/// order: its title when the agent never oriented on a task.
+fn first_component_name(touched: &[String], tree: &DerivedTree) -> Option<String> {
+    let id = touched.iter().find_map(|f| tree.file_nodes.get(f))?;
+    tree.planned.nodes.iter().find(|n| &n.id == id).map(|n| n.name.clone())
 }
 
 /// The landing view for sessions active since `since`. A planned claim is a
@@ -89,7 +201,7 @@ pub fn landing(
         };
         let mut s = LandingSession {
             session: id.clone(),
-            title: log.title().map(str::to_string).unwrap_or_else(|| format!("Session {}", &id[..id.len().min(8)])),
+            title: log.task.clone().or_else(|| first_component_name(&log.touched, tree)).unwrap_or_default(),
             started_at: start,
             ended_at: end,
             newly_proven: Vec::new(),
@@ -99,6 +211,7 @@ pub fn landing(
             surviving_mutants: 0,
             new_dark_files: touched.iter().filter(|f| dark.contains(*f)).map(|f| f.to_string()).collect(),
             components: Vec::new(),
+            worktree: None,
         };
         let stubbed = |c: &crate::domain::derived_tree::DerivedClaim| {
             log.stubs.iter().any(|(f, t)| *f == c.file && *t == c.junit_name)
@@ -112,6 +225,7 @@ pub fn landing(
                 file: c.file.clone(),
                 line: c.line,
                 state: st.state,
+                concerns: c.concerns.clone(),
             };
             let verdict_in_window = st.recorded_at.is_some_and(|at| at >= start);
             match st.state {
@@ -187,6 +301,9 @@ mod tests {
     #[test]
     fn sessions_since_last_look_sort_their_claims() {
         let mut planned = ScryModel::new();
+        planned.nodes.push(
+            serde_json::from_value(serde_json::json!({"id": "comp", "kind": "component", "name": "drafts"})).unwrap(),
+        );
         planned.source_map.insert(
             "exercised".into(),
             vec![SourceLocation { pattern: "src/a.rs".into(), symbol: None, line: None, end_line: None }],
@@ -248,8 +365,86 @@ mod tests {
         assert_eq!(ids(&a.newly_stale_or_failing), vec!["exercised"]);
         assert_eq!(a.surviving_mutants, 2);
         assert_eq!(a.new_dark_files, vec!["src/a.rs"]);
-        assert_eq!(l.sessions[0].title, "Session bbbbbbbb");
+        assert_eq!(l.sessions[0].title, "drafts", "no task: the first component it touched");
         assert!(l.sessions[0].newly_proven.is_empty(), "verdicts before its window are not its doing");
         assert_eq!(l.shared, vec![SharedComponent { node_id: "comp".into(), sessions: vec!["aaaaaaaa-1".into(), "bbbbbbbb-2".into()] }]);
+    }
+
+    /// When a session neither oriented on a task nor touched a file of any
+    /// component, its title is left empty, for the page to name it by branch
+    /// and time.
+    #[test]
+    fn a_session_without_task_or_component_has_no_title() {
+        let sessions = vec![("dddddddd-4".to_string(), vec![touch(10, "README.md")])];
+        let tree = DerivedTree {
+            fingerprint: 0,
+            committed: ScryModel::new(),
+            planned: ScryModel::new(),
+            claims: Vec::new(),
+            file_nodes: BTreeMap::new(),
+            dark_files: Vec::new(),
+            style_violations: Vec::new(),
+            layer_exempt: Vec::new(),
+        };
+        let l = landing(&sessions, &tree, &DerivedStatus::default(), 0);
+        assert_eq!(l.sessions[0].title, "");
+    }
+
+    /// When sessions come from several worktrees, each is labelled with its
+    /// worktree, a worktree without sessions is still listed, and a
+    /// component touched in two worktrees counts as shared.
+    #[test]
+    fn worktrees_merge_into_one_landing() {
+        let session = |id: &str, at: u64, comp: &str| LandingSession {
+            session: id.into(),
+            title: id.into(),
+            started_at: at,
+            ended_at: at,
+            newly_proven: Vec::new(),
+            newly_planned: Vec::new(),
+            still_planned: Vec::new(),
+            newly_stale_or_failing: Vec::new(),
+            surviving_mutants: 0,
+            new_dark_files: Vec::new(),
+            components: vec![comp.into()],
+            worktree: None,
+        };
+        let wt = |path: &str, branch: &str| LandingWorktree {
+            path: path.into(),
+            branch: Some(branch.into()),
+            current: path == "/main",
+            sessions: 0,
+        };
+        let part = |sessions: Vec<LandingSession>| Landing { sessions, ..Default::default() };
+        let l = merge_worktrees(
+            0,
+            vec![
+                (wt("/main", "main"), part(vec![session("a", 10, "comp-x")])),
+                (wt("/wt/feature", "feature"), part(vec![session("b", 20, "comp-x"), session("c", 5, "comp-y")])),
+                (wt("/wt/idle", "idle"), part(Vec::new())),
+            ],
+        );
+        assert_eq!(l.sessions.iter().map(|s| s.session.as_str()).collect::<Vec<_>>(), vec!["b", "a", "c"]);
+        assert_eq!(l.sessions[0].worktree.as_deref(), Some("/wt/feature"));
+        assert_eq!(l.worktrees.iter().map(|w| w.sessions).collect::<Vec<_>>(), vec![1, 2, 0]);
+        assert_eq!(l.shared, vec![SharedComponent { node_id: "comp-x".into(), sessions: vec!["a".into(), "b".into()] }]);
+    }
+
+    /// When a session read or touched only files under a nested worktree's
+    /// prefix, it moves to that worktree with those paths made relative to
+    /// it; a session that touched anything else stays.
+    #[test]
+    fn sessions_in_a_nested_worktree_move_to_it() {
+        let mut sessions = vec![
+            ("in".to_string(), vec![touch(1, ".claude/worktrees/x/src/a.rs"), touch(2, ".claude/worktrees/x/src/b.rs")]),
+            ("mixed".to_string(), vec![touch(1, ".claude/worktrees/x/src/a.rs"), touch(2, "src/c.rs")]),
+            ("read".to_string(), vec![SessionEntry { at: 1, event: SessionEvent::Overlay { file: ".claude/worktrees/x/src/a.rs".into(), hash: 7 } }]),
+            ("none".to_string(), vec![SessionEntry { at: 1, event: SessionEvent::Task { text: "t".into() } }]),
+        ];
+        let taken = take_prefixed(&mut sessions, ".claude/worktrees/x/");
+        assert_eq!(taken.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec!["in", "read"]);
+        assert_eq!(taken[0].1[0], touch(1, "src/a.rs"));
+        assert_eq!(taken[1].1[0].event, SessionEvent::Overlay { file: "src/a.rs".into(), hash: 7 });
+        assert_eq!(sessions.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec!["mixed", "none"]);
     }
 }

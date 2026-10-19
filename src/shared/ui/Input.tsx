@@ -1,5 +1,5 @@
 /**
- * Shared text field styling for titles, inline rows, and forms
+ * The shared text field, in title, inline, bordered and ghost variants.
  */
 
 import type { InputHTMLAttributes } from "react";

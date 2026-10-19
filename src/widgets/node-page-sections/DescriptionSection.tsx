@@ -1,5 +1,6 @@
 /**
- * Editable lede paragraph directly under the page header
+ * The page's lede: the description paragraph under the header, shown
+ * word-diffed against the committed text when reworded, and edited in place.
  */
 
 import type { Editor } from "../../entities/model/editor";

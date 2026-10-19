@@ -1,27 +1,14 @@
 //! The command-line side of scryer-mcp: the status line, the CI gate, the
-//! claim lint, the derived-data export, and agent-integration setup.
+//! claim lint, the derived-data export, agent-integration setup, and the
+//! one-shot migration of an authored model into the code.
 //!
-//! Everything reads the C4 tree derived from the code and each claim's
-//! derived status — never the authored model. The project is found by walking
-//! up from the cwd (or an explicit path argument) to the first directory
-//! holding `.scryer/`; the first hit ends the walk, so a nested project never
-//! reports its parent's. `status` and `statusline` exit 0 on every legal
-//! invocation, so they are safe to call from prompts; `check` and `lint` are
-//! gates and exit non-zero on findings.
-//!
-//! Prints the single-line statusline segment Claude Code shows under the prompt, staying silent when no model is found
-//!
-//! Walks up from a start directory to the nearest .scryer/, stopping at the first hit so a nested project never reports its parent's model
-//!
-//! Runs the CI gate: exit 0 clean, 1 on findings, 2 when no model exists or the repo is unusable
-//!
-//! Registers scryer-mcp's statusline command in Claude Code's project settings without ever clobbering a foreign statusline entry
-//!
-//! Renders the human-facing status line from loop-state counts: changes in flight, pending work, drift, and test verdicts
-//!
-//! Phrases outstanding plan work as "N pending across M nodes", suppressing the breakdown when the plan is empty
-//!
-//! Computes gate failures and notes across validator warnings, broken/missing anchors, drift, and test verdicts, naming any dimension it cannot verify
+//! Everything but `migrate` reads the C4 tree derived from the code and each
+//! claim's derived status. The project is found by walking up from the cwd (or
+//! an explicit path argument) to the first directory holding `.scryer/`; the
+//! first hit ends the walk, so a nested project never reports its parent's.
+//! `status` and `statusline` exit 0 on every legal invocation, so they are
+//! safe to call from prompts; `check` and `lint` are gates and exit non-zero
+//! on findings.
 
 use scryer_core::derived_tree::{DerivedCounts, DerivedStatus, DerivedTree};
 use scryer_core::ModelRef;
@@ -229,8 +216,7 @@ pub(crate) struct Gates {
 /// `structure` (structure.toml with its defaults), `sessions` (each session
 /// log, newest first) and `layout` (the diagram placements the tree's nodes
 /// carry, by node id). Exit 2 when there is no project or it cannot be
-/// derived. A session's prompt is never exported: a log may hold the
-/// developer's first prompt, and it is theirs, not data about the code.
+/// derived.
 pub(crate) fn run_export(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     const USAGE: &str = "scryer-mcp export [--project dir]";
     let mut start: Option<PathBuf> = None;
@@ -263,7 +249,6 @@ pub(crate) fn run_export(args: &[String]) -> Result<(), Box<dyn std::error::Erro
 }
 
 pub(crate) fn export(project: &Path) -> Result<serde_json::Value, String> {
-    use scryer_core::domain::session::SessionEvent;
     use scryer_core::infrastructure::session_store;
     let (tree, status) = derived_status(project)?;
     let s = scryer_extract::infrastructure::derived_tree::read_structure(project)?;
@@ -278,11 +263,7 @@ pub(crate) fn export(project: &Path) -> Result<serde_json::Value, String> {
     let sessions: Vec<serde_json::Value> = session_store::list(&r)
         .into_iter()
         .map(|(id, _)| {
-            let entries: Vec<_> = session_store::read(&r, &id)
-                .into_iter()
-                .filter(|e| !matches!(e.event, SessionEvent::Prompt { .. }))
-                .collect();
-            serde_json::json!({ "id": id, "entries": entries })
+            serde_json::json!({ "id": id, "entries": session_store::read(&r, &id) })
         })
         .collect();
     let layout: serde_json::Map<_, _> = tree

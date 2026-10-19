@@ -57,7 +57,7 @@ fn exports_the_derived_data() {
     assert!(doc["layout"].is_object());
 }
 
-/// When a session log holds the developer's prompt, the export leaves it out
+/// When an older session log holds the developer's prompt, the export leaves it out
 #[test]
 fn never_exports_a_prompt() {
     let dir = project();

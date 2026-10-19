@@ -1,0 +1,31 @@
+{
+  "name": "astro",
+  "description": "Astro sites laid out the way Astro documents src/: routes, layouts, components and content collections",
+  "layers": [
+    { "name": "pages", "description": "file-based routes under src/pages" },
+    { "name": "layouts", "description": "page shells the routes render into" },
+    { "name": "content", "description": "content collections and their schema (content.config.ts): the pages' text" },
+    { "name": "components", "description": "UI the routes, layouts and content embed" }
+  ],
+  "matrix": {
+    "pages": ["layouts", "content", "components"],
+    "layouts": ["components"],
+    "content": ["components"],
+    "components": ["components"]
+  },
+  "isolation": "inclusive",
+  "inbound": [],
+  "outbound": ["components"],
+  "publicSurface": [],
+  "externalBans": {},
+  "path": {
+    "dirs": {
+      "pages": ["pages"],
+      "layouts": ["layouts"],
+      "content": ["content"],
+      "components": ["components"]
+    },
+    "markers": {}
+  },
+  "drawing": "rows"
+}

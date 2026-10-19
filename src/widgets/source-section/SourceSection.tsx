@@ -1,20 +1,10 @@
 /**
- * Inline source — the page's read-through-to-code, attached to each claim it
- * discharges rather than pooled in a footnote section. A claim's diff row lists
- * its `↳ file:range` location(s); clicking one expands a code peek in place,
- * with the mapped range inked amber. The node's own definition file rides the
- * type line instead. (Backed by the `read_source_span` Tauri command, which
- * returns the enclosing span tokenized + a focus range to highlight.)
- *
- * Shows a claim's attached tests and their live verdict/regression state
- *
- * Marks whether a source anchor currently resolves to real code
- *
- * Expands a claim's anchored code location into an inline tokenized source peek
- *
- * Expands a claim's anchored code location into an inline tokenized source peek
- *
- * Shows a claim's attached tests and their live verdict/regression state
+ * Inline source — the page's read-through-to-code, attached to each claim
+ * rather than pooled in a footnote section. `ClaimSource` lists a claim's
+ * `↳ file:range` locations and `ClaimTests` its attached tests; clicking one
+ * expands a tokenized code peek in place (`read_source_span`), with the mapped
+ * range inked amber. Each anchor is checked live (`verify_anchor`), and a test
+ * whose content changed or no longer resolves is tinted.
  */
 
 import { useEffect, useRef, useState } from "react";

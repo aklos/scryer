@@ -50,6 +50,14 @@ Recipes that worked:
 
 ## Watch out
 
+- **Never on the developer's display.** start.sh unsets `WAYLAND_DISPLAY`
+  and exports `DISPLAY=:99` and `GDK_BACKEND=x11` for everything it starts,
+  and refuses to run if the environment still reaches the desktop session,
+  if Xvfb `:99` is not up, or if a running tauri-driver can see the session.
+  With `WAYLAND_DISPLAY` inherited, GTK picks Wayland over `DISPLAY` and the
+  window opens on the real desktop. Never launch the app, `tauri dev`,
+  tauri-driver or a browser any other way.
+
 - The webview uses the developer's real app profile: `localStorage`
   (recent projects, per-project settings) is shared with their app. Remove
   whatever you add when done — `wd.py open` records what it added and

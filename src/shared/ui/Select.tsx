@@ -1,5 +1,5 @@
 /**
- * Shared dropdown control used across forms and settings
+ * The shared dropdown control, optionally searchable, styled to match Input.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";

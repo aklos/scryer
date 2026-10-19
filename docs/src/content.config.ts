@@ -1,5 +1,6 @@
 /**
- * Declares the docs site's content collection schema and loader for Astro's content layer
+ * Declares the docs site's content collection for Astro, using Starlight's
+ * docs loader and schema.
  */
 
 import { defineCollection } from "astro:content";

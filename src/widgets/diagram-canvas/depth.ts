@@ -7,8 +7,6 @@
  * calls, and the bottom is the helpers everything rests on. Callers from
  * outside sit in a band above; dependencies outside sit in a band below.
  * Size (fan-in) and fill (has claims) are the renderer's; position is ours.
- *
- * Lays out a styled component's members in BFS-depth rows from their call entry points
  */
 
 import { orderBands, type LayerRegion, type StyledEdge } from "./styled";

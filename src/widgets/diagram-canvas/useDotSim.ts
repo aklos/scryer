@@ -4,16 +4,13 @@
  * resident d3-force simulation so the graph can be *tugged*: grab a dot and its
  * neighbours chase it, stretching a tangle apart far enough to read what is
  * actually wired to what. Exploration only — dot positions are never written
- * anywhere (unlike the arch tiers' pinned placements), so the sim works even
- * while an agent owns the model file.
+ * anywhere. Above `LIVE_DOT_MAX` dots the level stays static.
  *
  * At rest the sim is indistinguishable from the static layout: it is created
  * cold (alpha 0, stopped) at the scene's positions and only heats up when a
  * drag starts. Release lets it cool back to a standstill. Each tick hands the
  * full position set to `onTick` — the caller owns the node state and applies
  * them there.
- *
- * Force-directed physics for draggable code-tier dots on the diagram, capped by dot count
  */
 
 import { useEffect, useMemo, useRef } from "react";
@@ -28,7 +25,7 @@ import {
   type SimulationLinkDatum,
   type SimulationNodeDatum,
 } from "d3-force";
-import { dotCollideRadius, type DiagramScene } from "../../widgets/diagram-canvas/diagramLayout";
+import { dotCollideRadius, type DiagramScene } from "./diagramLayout";
 
 /** Above this many dots a per-tick relayout of every node janks — the level
  *  falls back to the static constellation (no dragging). */

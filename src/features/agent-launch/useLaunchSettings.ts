@@ -6,7 +6,7 @@ import {
   type Detected,
   type ResolvedLaunch,
   type SubagentSettings,
-} from "../../widgets/settings-panel/SettingsPanel";
+} from "./launchSettings";
 
 export interface LaunchSettings {
   /** Which agent + model + effort a fill will actually run with. */

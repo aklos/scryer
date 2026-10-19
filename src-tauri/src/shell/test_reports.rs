@@ -1,11 +1,12 @@
 //! Passive JUnit report ingestion — the no-agent feeder of claim test
 //! verdicts. Test runs (a terminal, CI, an IDE) drop JUnit XML into the
-//! project's report directories; the project watcher routes those file
-//! events here and the report is ingested into the claim status cache, so
-//! the verdict badges light without anyone calling a tool. The cache write
-//! then trips the `.scryer/` watcher's `test-results-changed` event, which
-//! is what actually refreshes the UI — this module never talks to the
-//! frontend directly.
+//! project's report directories (`testReportDirs` in `.scryer/config.json`,
+//! or conventional defaults); the project watcher routes those file events
+//! here and, once a burst of events settles, the report is ingested into the
+//! claim status cache, so the verdict badges light without anyone calling a
+//! tool. The cache write then trips the `.scryer/` watcher's
+//! `test-results-changed` event, which is what actually refreshes the UI —
+//! this module never talks to the frontend directly.
 //!
 //! Two deliberate refusals: an unparseable file is skipped quietly (report
 //! directories hold screenshots, traces, HTML alongside the XML), and
@@ -13,16 +14,6 @@
 //! before we were looking describes OLDER code, and recording it against
 //! the current tree would stamp fresh fingerprints on stale evidence. Only
 //! files that change under watch are believed.
-//!
-//! Arms one delayed ingest per file on its first event; later events in the same burst join the already-armed ingest instead of scheduling another.
-//!
-//! Ingests one report file into the claim status cache under the model lock, treating anything that isn't valid JUnit as a quiet skip rather than an error.
-//!
-//! Watches conventional or project-configured report directories for test runner output and ingests JUnit reports into the per-claim test-verdict cache.
-//!
-//! Debounces bursty file-watcher events so a report written across several events, or re-touched multiple times, is ingested exactly once after it settles.
-//!
-//! Resolves the directories to watch for test reports: the project's configured list when it names any, conventional defaults otherwise, keeping only directories that currently exist.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

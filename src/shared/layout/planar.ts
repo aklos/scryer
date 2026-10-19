@@ -9,9 +9,8 @@
  *   3. Tutte barycentric embedding (hubs pulled to neighbour centroids)
  *   4. Kamada-Kawai: stress-minimize (used for the non-planar fallback)
  *
- * All algorithms are O(n²) or better, which is instant for n ≤ 50.
- *
- * Full crossing-free layout pipeline: planarize, biconnect, triangulate, place, then relax to final pixel positions
+ * A disconnected graph is laid out per component and packed in a row. All
+ * algorithms are O(n²) or better, which is instant for n ≤ 50.
  */
 
 import { lrPlanarity } from "./lrPlanarity";
