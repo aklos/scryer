@@ -11,6 +11,8 @@
  *
  * Mirrors the ToastProvider shape: a provider holds the one pending failure and
  * the `useAgentFailure()` consumer hook hands callers a `report` function.
+ *
+ * Surfaces a failed agent run (drift check, build, fill) as a blocking modal with its recovery outcome
  */
 
 import { createContext, useCallback, useContext, useEffect, useState } from "react";

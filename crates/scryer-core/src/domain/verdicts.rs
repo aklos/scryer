@@ -109,6 +109,11 @@ pub struct ClaimProbeStatus {
     /// probes ran — the result describes code that has since moved on.
     pub stale: bool,
     pub recorded_at: u64,
+    /// Where the breaks came from when not an agent's probe round:
+    /// `"mutation"` for an ingested mutation report, which carries no
+    /// fingerprints and so reads as of its ingest time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 /// Breaks a mutation tool tried against some code, and how they fared.

@@ -5,6 +5,16 @@
  * with the mapped range inked amber. The node's own definition file rides the
  * type line instead. (Backed by the `read_source_span` Tauri command, which
  * returns the enclosing span tokenized + a focus range to highlight.)
+ *
+ * Shows a claim's attached tests and their live verdict/regression state
+ *
+ * Marks whether a source anchor currently resolves to real code
+ *
+ * Expands a claim's anchored code location into an inline tokenized source peek
+ *
+ * Expands a claim's anchored code location into an inline tokenized source peek
+ *
+ * Shows a claim's attached tests and their live verdict/regression state
  */
 
 import { useEffect, useRef, useState } from "react";

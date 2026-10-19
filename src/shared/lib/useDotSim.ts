@@ -12,6 +12,8 @@
  * drag starts. Release lets it cool back to a standstill. Each tick hands the
  * full position set to `onTick` — the caller owns the node state and applies
  * them there.
+ *
+ * Force-directed physics for draggable code-tier dots on the diagram, capped by dot count
  */
 
 import { useEffect, useMemo, useRef } from "react";

@@ -1,12 +1,6 @@
-*.baseline.scry
-.sync
-.tmp.*
-.lock
-.anchors.json
-.build_edges.json
-hook.json
-preview/
-build-logs/
-.derived_tree.json
-.mutations.json
-.import_edges.json
+# Written by `scryer-mcp setup on`. Only what a teammate needs is committed.
+*
+!.gitignore
+!structure.toml
+!layout
+!layout/**

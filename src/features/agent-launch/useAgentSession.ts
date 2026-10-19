@@ -1,3 +1,7 @@
+/**
+ * Subscribes to the live agent event stream and derives running/label/activity/outcome state for the UI
+ */
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -28,7 +32,7 @@ export interface AgentSession {
   /** B5 repair path: write realistic fixture props for a component whose
    *  deterministic preview rendered empty or crashed. */
   startFixture: (
-    cwd: string, modelRef: string, nodeId: string, nodeName: string,
+    cwd: string, nodeId: string, nodeName: string,
     renderStatus: string, renderError: string | null,
   ) => void;
   cancel: () => void;
@@ -129,11 +133,11 @@ export function useAgentSession(): AgentSession {
   );
 
   const startFixture = useCallback(
-    (cwd: string, modelRef: string, nodeId: string, nodeName: string, renderStatus: string, renderError: string | null) => {
+    (cwd: string, nodeId: string, nodeName: string, renderStatus: string, renderError: string | null) => {
       startSession(
         "start_preview_fixture_session",
         `Preview data for ${nodeName || "component"}`,
-        { cwd, modelRef, nodeId, renderStatus, renderError },
+        { cwd, nodeId, renderStatus, renderError },
       );
     },
     [startSession],

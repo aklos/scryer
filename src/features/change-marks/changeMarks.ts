@@ -14,6 +14,20 @@
  * A/M/D/R are PLAN marks (the model→code work queue, `diff(committed,planned)`);
  * Q/X are DRIFT marks (model↔code mismatch, carried as flags on claims). A row
  * can have both; the plan mark wins for the single glanceable letter.
+ *
+ * Resolves the kind silhouette icon shown for every node
+ *
+ * Bubbles descendant plan and drift marks up the tree so a collapsed branch still shows what it hides
+ *
+ * Builds the single authoritative list of pending plan work that the tree gutter, lens counts, and Changes page all read from
+ *
+ * Derives the single glanceable plan or drift mark for any element from its own and its children's changes
+ *
+ * Derives a drift mark (post-sign-off proposal, vagrant, or stale) for a set of claims
+ *
+ * Derives a single glanceable plan mark (added/modified/deleted/relocated) for an element
+ *
+ * Bubbles descendant marks up the tree so a collapsed branch still shows what it hides
  */
 
 import type { Change, ElementChange, ModelDiff } from "../../entities/model/planDiff";

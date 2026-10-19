@@ -1,3 +1,11 @@
+//! Auto-approves every tool call an ACP agent requests except get_task, which is rejected to prevent an implementation loop from starting
+//!
+//! Forwards an agent's session notifications (messages, thoughts, tool calls, plans) as AgentEvents
+//!
+//! Rejects get_task permission requests and auto-approves all others, preferring allow-always over allow-once
+//!
+//! Forwards agent message/thought/tool-call/plan session notifications onward as AgentEvents
+
 use agent_client_protocol::{
     self as acp, Client, ContentBlock, RequestPermissionRequest, RequestPermissionResponse,
     SelectedPermissionOutcome, SessionNotification, SessionUpdate,
@@ -162,8 +170,7 @@ mod tests {
         }
     }
 
-    /// Every other tool is auto-approved — allow-always preferred, allow-once
-    /// when that's all the agent offers.
+    /// When any other tool asks permission, approves it with allow-always, or allow-once where that is all the agent offers.
     #[tokio::test]
     async fn any_other_tool_is_auto_approved() {
         let (client, _rx) = client();

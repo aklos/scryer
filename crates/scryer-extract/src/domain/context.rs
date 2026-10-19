@@ -12,6 +12,18 @@
 //! structure. Choosing components (clustering from cohesion + the dependency
 //! graph) and writing responsibilities is the agent's job — we precompute the
 //! map, not the model.
+//!
+//! Maps a Go import path to a repo directory via the longest-matching declared go.mod module path.
+//!
+//! Slices the context to exactly the files owned by one container, for per-container modeling.
+//!
+//! Resolves a bare TS/JS import spec through the governing tsconfig's `paths`/`baseUrl` table.
+//!
+//! Resolves a Python import spec (relative or absolute) to its module file and base path across container/src-layout roots.
+//!
+//! Converts a scope into the token-budgeted agent wire format, stepping down the per-symbol evidence cap until the scope's total evidence fits.
+//!
+//! Assembles the full ProjectContext — per-file symbol index plus the resolved dependency graph — from discovered containers and parsed files.
 
 use crate::domain::lang::{CsScope, Def, FileParse, ImportRef};
 use crate::domain::facts::TsAliases;
@@ -2157,9 +2169,7 @@ mod tests {
         }));
     }
 
-    /// A reference to a universal method/constructor name (`new`, `clone`, …)
-    /// is noise — the name-only resolver can't tell `Thing::new` from `Vec::new`
-    /// — so it yields NO edge even when a single same-named def exists.
+    /// When a reference names a universal method or constructor (`new`, `clone`, …), yields no edge, even with a single same-named def.
     #[test]
     fn universal_method_names_yield_no_edge() {
         // model.rs defines `new` (the lone `new` in the container). caller.rs's
@@ -2698,9 +2708,7 @@ fn add_one(x: u32) -> u32 {
         assert!(ctx.symbol_edges[0].guessed);
     }
 
-    /// A named import through a re-export barrel (`export { Btn } from "./Btn"`)
-    /// resolves to the DEFINING module, not to the barrel — otherwise a
-    /// codebase with public-surface `index.ts` files reads as edgeless.
+    /// When a named import goes through a re-export barrel (`export { Btn } from "./Btn"`), resolves it to the defining module, not the barrel.
     #[test]
     fn a_named_import_follows_a_re_export_barrel() {
         let files = vec![
@@ -3116,10 +3124,7 @@ fn add_one(x: u32) -> u32 {
         assert!(has_sym_edge(&ctx, "App", "Button"));
     }
 
-    /// Relative imports resolve exactly — extension candidates, directory
-    /// index files, `as`-renamed usage sites — even when the bare name is
-    /// ambiguous container-wide (two `helper` defs), which the name-only
-    /// scopes must skip.
+    /// When an import is relative, resolves it exactly (extension candidates, directory index files, `as`-renamed usage sites), even for a name ambiguous across the container.
     #[test]
     fn ts_relative_import_resolves_file_and_symbols() {
         let files = vec![
@@ -3323,9 +3328,7 @@ fn add_one(x: u32) -> u32 {
         assert!(has_sym_edge(&ctx, "run", "fmt_date"));
     }
 
-    /// Relative imports: `.sibling` resolves within the package, `..config`
-    /// climbs a level, and `from . import other` falls back to the SUBMODULE
-    /// file when the name isn't a symbol of the package module.
+    /// When a Python import is relative, resolves `.sibling` within the package, climbs a level for `..config`, and falls back to the submodule file for `from . import other`.
     #[test]
     fn py_relative_imports_resolve() {
         let files = vec![

@@ -1,3 +1,9 @@
+//! Strips JSON-schema generator noise (dialect URLs, null defaults, titles) from advertised tool schemas so a client model isn't taxed reading them
+//!
+//! Reads and sets the session's current change id, scoped so a change opened in one project never tags writes into another
+//!
+//! Builds the server by combining every tool category's router and slimming each tool's advertised schema
+
 use crate::instructions::INSTRUCTIONS;
 use rmcp::{
     handler::server::{router::tool::ToolRouter, tool::ToolCallContext},

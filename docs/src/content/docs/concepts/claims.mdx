@@ -1,0 +1,45 @@
+---
+title: Claims
+description: A behaviour test's description is a claim about the code it tests.
+---
+
+Scryer has no model file to write. Every claim in the tree is a behaviour test's description, lifted from the code:
+
+| Language | The claim is |
+|----------|--------------|
+| Rust | the `///` doc comment on a `#[test]` fn (its first paragraph) |
+| Vitest / Jest | the `it("…")` / `test("…")` string, inside its `describe`s |
+| pytest | the test function's docstring |
+| .NET | the `DisplayName`, else the method's XML `<summary>` |
+
+A test with none of these falls back to its name, de-snaked: `keeps_draft_when_save_fails` reads *keeps draft when save fails*. One test is one claim; a parametrised test is one claim with cases.
+
+## EARS
+
+Subject dropped, condition first, one response per claim:
+
+| Pattern | Shape | Example |
+|---|---|---|
+| Ubiquitous | `<verb> <object>` | Persists the ledger on every post |
+| Event | `When <trigger>, <response>` | When a refund exceeds the captured amount, rejects it |
+| State | `While <state>, <response>` | While settlement is unconfirmed, holds funds in escrow |
+| Unwanted | `If <condition>, then <response>` | If the bank times out, then retries once |
+
+`scryer-mcp lint` checks every claim against these shapes; `scryer-mcp check` fails CI on a finding.
+
+## Levels
+
+Where a test lives decides where its claim sits. An end-to-end test claims for the system, an integration test at a deployable's boundary for its container, and a unit test for the component whose code it exercises. Which directories hold e2e and integration tests is set in [`structure.toml`](/scryer/concepts/structure/); everything else is a unit test.
+
+## Tags
+
+- A trailing `[persistence]` or `[auth]` tags the claim with a concern. The concern lens dims everything else.
+- A trailing `[manual]` keeps a test out of the model: a tool you run by hand, not a claim.
+
+## Planned claims
+
+A todo test is a planned claim: `it.todo`, `test.todo` or `it.skip`, `#[ignore]` or a body that is only `todo!()`, `@pytest.mark.skip`, `[Fact(Skip = …)]`. Writing the claims you intend to satisfy as todo tests is how a change is planned; adding a claim in the app writes one for you.
+
+## Module descriptions
+
+What a node *is* (not what it does) comes from its module doc: a Rust `//!` block, a file-head JSDoc, a Python module docstring. These carry no status.

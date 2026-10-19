@@ -3,6 +3,8 @@
  * that tell a first-time reader what kind of thing they are looking at
  * before they read a card. Rendered inside React Flow's viewport (so it pans
  * and zooms with the cards) and painted underneath them.
+ *
+ * Draws a styled container's layer regions (hexagon sides, bands, rings) behind its cards
  */
 
 import { useEffect, useState } from "react";

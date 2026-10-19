@@ -1,66 +1,21 @@
 /**
- * Empty-state screen: choose a project to open, or generate a model from a
- * codebase via the configured AI agent. Generation itself is driven by
- * `useModelBuild` (lifted to the app shell) so it streams onto the canvas — the
- * picker just triggers it and gets out of the way.
+ * Empty-state screen: open a project folder, or a recent one. Any folder
+ * opens: its tree is derived from its packaging and tests.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { FolderOpen, X, AlertTriangle } from "lucide-react";
-import { AgentMark, EYEBROW_BASE } from "../../shared/ui/pagekit";
+import { FolderOpen, X } from "lucide-react";
+import { EYEBROW_BASE } from "../../shared/ui/pagekit";
 import type { ModelStorage } from "../../features/model-storage/useModelStorage";
-import type { ModelBuild } from "../../features/model-build/useModelBuild";
-import { useLaunchSettings } from "../../features/agent-launch/useLaunchSettings";
-import { AgentIntegrationSwitch } from "../../features/agent-integration/AgentIntegrationSwitch";
-import { useAgentLaunchGate } from "../../features/agent-launch/AgentLaunchConfirm";
-import { AGENT_LABEL, SettingsPanel } from "../../widgets/settings-panel/SettingsPanel";
 import { WindowControls } from "../../widgets/top-bar/TopBar";
 
-type Phase = "picker" | "needs-model";
-
-export function ProjectPicker({
-  storage,
-  build,
-}: {
-  storage: ModelStorage;
-  build: ModelBuild;
-}) {
-  const [phase, setPhase] = useState<Phase>("picker");
-  const launchSettings = useLaunchSettings();
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const launchGate = useAgentLaunchGate(launchSettings, () => setSettingsOpen(true));
-
-  useEffect(() => {
-    if (storage.status === "needs-model") {
-      setPhase("needs-model");
-    }
-  }, [storage.status]);
-
+export function ProjectPicker({ storage }: { storage: ModelStorage }) {
   const pickFolder = useCallback(async () => {
     const dir = await openDialog({ directory: true, multiple: false });
     if (typeof dir !== "string") return;
-    setPhase("picker");
     await storage.openProject(dir);
   }, [storage]);
-
-  const onCreateBlank = useCallback(async () => {
-    if (!storage.projectPath) return;
-    await storage.createBlankModel(storage.projectPath);
-  }, [storage]);
-
-  const onGenerate = useCallback(() => {
-    if (!storage.projectPath) return;
-    // Kick off the orchestrated build; it creates the model, opens the canvas,
-    // and streams nodes in. The picker unmounts as soon as the model loads.
-    launchGate.request(
-      {
-        action: "Build the architecture model from your whole codebase.",
-        detail: "An in-depth pass over every file — the longest, most token-heavy run.",
-      },
-      () => void build.start(storage.projectPath!),
-    );
-  }, [storage.projectPath, build, launchGate]);
 
   const onOpenRecent = useCallback(
     async (path: string) => {
@@ -68,127 +23,6 @@ export function ProjectPicker({
     },
     [storage],
   );
-
-  if (storage.status === "legacy") {
-    return (
-      <Centered>
-        <div className="flex flex-col items-center gap-4 max-w-md text-center">
-          <AlertTriangle className="h-8 w-8 text-orange-500 dark:text-orange-400" />
-          <h2 className="text-base font-semibold text-[var(--text)]">
-            Legacy model
-          </h2>
-          <p className="text-sm text-[var(--text-muted)]">{storage.error}</p>
-          <button
-            type="button"
-            className="mt-1 rounded-md border border-[var(--border)] bg-[var(--surface-raised)] px-4 py-2.5 text-sm text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-colors"
-            onClick={storage.closeProject}
-          >
-            Pick another project
-          </button>
-        </div>
-      </Centered>
-    );
-  }
-
-  if (phase === "needs-model" && storage.projectPath) {
-    const folder = storage.projectPath.split(/[/\\]/).filter(Boolean).pop();
-    const launch = launchSettings.launch;
-    return (
-      <>
-      {launchGate.modal}
-      {settingsOpen && (
-        <SettingsPanel
-          projectPath={storage.projectPath}
-          onClose={() => {
-            setSettingsOpen(false);
-            launchSettings.reload();
-          }}
-        />
-      )}
-      <Centered>
-        <div className="flex flex-col items-center gap-6 max-w-md w-full text-center">
-          <div className="flex flex-col items-center gap-1.5">
-            <h2 className="text-base font-semibold text-[var(--text)]">
-              No model in this project yet
-            </h2>
-            <p className="text-sm font-medium text-[var(--text-secondary)]">{folder}</p>
-            <p className="max-w-md truncate font-mono text-xs text-[var(--text-muted)]" title={storage.projectPath}>
-              {storage.projectPath}
-            </p>
-          </div>
-          <div className="flex flex-col gap-3 w-full">
-            <div className="flex flex-col gap-2">
-              <button
-                type="button"
-                data-cam="generate"
-                className="flex items-center justify-center gap-2 rounded-md border border-violet-400/50 bg-violet-500/5 px-4 py-2.5 text-sm font-medium text-[var(--text)] hover:bg-violet-500/10 transition-colors"
-                onClick={onGenerate}
-              >
-                <AgentMark />
-                Generate from codebase
-              </button>
-              <p className="px-1 text-xs leading-relaxed text-[var(--text-muted)]">
-                Runs an in-depth agent pass over your whole codebase &mdash; this can take a
-                while and use significant tokens. You can cancel it any time mid-run.
-              </p>
-              {/* The launch this button will make, and the way to change it —
-                  the one place a fresh project can be configured before the
-                  costliest run there is. */}
-              <button
-                type="button"
-                className="flex items-center justify-center gap-1.5 px-1 text-2xs text-[var(--text-tertiary)] hover:text-[var(--text)]"
-                onClick={() => setSettingsOpen(true)}
-                title="Agent settings"
-              >
-                {launch.agent ? (
-                  <span>
-                    <span className="text-[var(--text-secondary)]">{AGENT_LABEL[launch.agent]}</span>
-                    {" · "}
-                    {launch.model || "default model"}
-                    {" · "}
-                    {launch.effort} effort
-                  </span>
-                ) : (
-                  <span>No agent detected</span>
-                )}
-                <span className="underline decoration-dotted underline-offset-2">change</span>
-              </button>
-            </div>
-            <button
-              type="button"
-              className="flex items-center justify-center gap-2 rounded-md border border-[var(--border)] bg-[var(--surface-raised)] px-4 py-2.5 text-sm text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-colors"
-              onClick={onCreateBlank}
-            >
-              Start blank
-            </button>
-            <p className="px-1 text-xs leading-relaxed text-[var(--text-muted)]">
-              Either option creates a <code className="font-mono">.scryer/</code> folder &mdash; your
-              model store &mdash; in this project.
-            </p>
-            {/* The project's one integration switch, off until the user
-                flips it — written independently of `.scryer/`, so it works
-                before or after the model store exists. */}
-            {storage.projectPath && (
-              <div className="mt-1 text-left">
-                <AgentIntegrationSwitch
-                  projectPath={storage.projectPath}
-                  onChange={launchSettings.reload}
-                />
-              </div>
-            )}
-            <button
-              type="button"
-              className="text-xs text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] mt-1"
-              onClick={storage.closeProject}
-            >
-              Pick a different project
-            </button>
-          </div>
-        </div>
-      </Centered>
-      </>
-    );
-  }
 
   // The landing reads as a tool, not a splash page: identity row and a single
   // grounded sentence, then straight to work — open a folder, or reopen a
@@ -205,18 +39,19 @@ export function ProjectPicker({
             </h1>
           </div>
           <p className="text-sm leading-relaxed text-[var(--text-secondary)]">
-            A living model of what your software is accountable for, kept beside
-            the code. Plan changes in the model; your agent reads and edits it
-            over MCP and builds the code to match.
+            What your software is accountable for, read from its tests: every
+            claim, whether it holds right now, and what changed since you last
+            looked.
           </p>
         </div>
         <button
           type="button"
           className="flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-500"
           onClick={pickFolder}
+          disabled={storage.status === "loading"}
         >
           <FolderOpen className="h-4 w-4" />
-          Open project folder
+          {storage.status === "loading" ? "Reading the project…" : "Open project folder"}
         </button>
         {storage.recentProjects.length > 0 && (
           <div>

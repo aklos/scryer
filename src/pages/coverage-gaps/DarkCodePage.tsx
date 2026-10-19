@@ -1,3 +1,7 @@
+/**
+ * Lists code files no anchor in the model reaches — the model's blind spots
+ */
+
 import { Check } from "lucide-react";
 import type { ScryModel } from "../../entities/model/viewmodel";
 import type { ModelHealthReport } from "../../entities/model/health";

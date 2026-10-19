@@ -72,9 +72,14 @@ pub fn lift_file(rel_path: &str, source: &str, parser: &mut Parser) -> FileLift 
         "cs" => cs_tests(root, bytes, &mut lift.tests),
         _ => {}
     }
+    // A `[manual]` test is a tool run by hand, not a claim.
+    lift.tests.retain(|t| !t.concerns.iter().any(|c| c == MANUAL_TAG));
     lift.tests.sort_by_key(|t| t.line);
     lift
 }
+
+/// The tag that keeps a test out of the claims: an ad-hoc tool, run by hand.
+pub const MANUAL_TAG: &str = "manual";
 
 /// Split trailing `[tag]`s off a description: `keeps the draft [persistence]`
 /// → (`keeps the draft`, [`persistence`]).
@@ -302,10 +307,26 @@ fn js_string(node: Node, bytes: &[u8]) -> Option<String> {
     match node.kind() {
         "string" | "template_string" => {
             let t = text(node, bytes);
-            Some(t[1..t.len().saturating_sub(1)].to_string())
+            Some(js_unescape(&t[1..t.len().saturating_sub(1)]))
         }
         _ => None,
     }
+}
+
+/// A literal's text as the runner sees it: `\'` → `'`, `\\` → `\`.
+fn js_unescape(raw: &str) -> String {
+    let mut out = String::new();
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        match (c, chars.clone().next()) {
+            ('\\', Some(n @ ('\\' | '\'' | '"' | '`' | '$'))) => {
+                out.push(n);
+                chars.next();
+            }
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 fn js_tests(
@@ -322,9 +343,8 @@ fn js_tests(
                 .child_by_field_name("function")
                 .and_then(|f| js_call_shape(f, bytes));
             let args = child.child_by_field_name("arguments");
-            let name = args
-                .and_then(|a| a.named_child(0))
-                .and_then(|n| js_string(n, bytes));
+            let name_node = args.and_then(|a| a.named_child(0));
+            let name = name_node.and_then(|n| js_string(n, bytes));
             if let (Some(shape), Some(name)) = (shape, name) {
                 let skip_here = shape.modifiers.iter().any(|m| matches!(*m, "skip" | "todo"))
                     || shape.base.starts_with('x');
@@ -346,7 +366,14 @@ fn js_tests(
                             .collect::<Vec<_>>()
                             .join(" > ");
                         let planned = skipped || skip_here;
-                        out.push(make_test(child, name.clone(), Some(name), junit, planned));
+                        // The identifier is the literal as written: anchors
+                        // find the test block by it.
+                        let raw = name_node.map(|n| {
+                            let t = text(n, bytes);
+                            t[1..t.len().saturating_sub(1)].to_string()
+                        });
+                        let identifier = raw.unwrap_or_else(|| name.clone());
+                        out.push(make_test(child, identifier, Some(name), junit, planned));
                         continue;
                     }
                     _ => {}
@@ -377,9 +404,18 @@ fn jsdoc_lines(comment: &str) -> Vec<String> {
         .collect()
 }
 
+/// The byte span of the file-head JSDoc [`js_module_doc`] reads, if any.
+pub(crate) fn js_head_doc_span(root: Node, source: &str) -> Option<(usize, usize)> {
+    js_head_doc(root, source.as_bytes()).map(|n| (n.start_byte(), n.end_byte()))
+}
+
 /// A JSDoc at the head of the file that documents the file, not the first
 /// declaration under it.
 fn js_module_doc(root: Node, bytes: &[u8]) -> Option<String> {
+    js_head_doc(root, bytes).and_then(|n| first_paragraph(&jsdoc_lines(text(n, bytes))))
+}
+
+fn js_head_doc<'t>(root: Node<'t>, bytes: &[u8]) -> Option<Node<'t>> {
     let mut cursor = root.walk();
     let children: Vec<Node> = root.named_children(&mut cursor).collect();
     for (i, child) in children.iter().enumerate() {
@@ -402,7 +438,7 @@ fn js_module_doc(root: Node, bytes: &[u8]) -> Option<String> {
         if attached && !tagged {
             return None;
         }
-        return first_paragraph(&jsdoc_lines(t));
+        return Some(*child);
     }
     None
 }
@@ -652,8 +688,7 @@ mod tests {
         assert_eq!(l.test_spans.len(), 1, "the cfg(test) module is test code");
     }
 
-    /// If a Rust test is `#[ignore]`d or its body is only `todo!()` or
-    /// `unimplemented!()`, it is planned.
+    /// If a Rust test is `#[ignore]`d or its body is only `todo!()` or `unimplemented!()`, then it is planned.
     #[test]
     fn rust_stubs_are_planned() {
         let src = r#"
@@ -768,9 +803,7 @@ def helper():
         assert_eq!(l.tests[1].junit_name, "test_scales_linearly");
     }
 
-    /// When a .NET test has a DisplayName it is the claim, else its XML doc
-    /// summary, else its de-snaked name; Skip and NotImplementedException
-    /// bodies are planned.
+    /// When a .NET test is lifted, takes its DisplayName, its XML summary or its de-snaked name as the claim, the first present, and reads a Skip or NotImplementedException body as planned.
     #[test]
     fn dotnet_display_name_or_xml_doc_is_the_claim() {
         let src = r#"
@@ -816,6 +849,20 @@ public class DockTests
             ]
         );
         assert_eq!(l.tests[1].concerns, vec!["docking"]);
+    }
+
+    /// When a test's description carries `[manual]`, it is no claim in any
+    /// language, while a bare skip stays planned.
+    #[test]
+    fn manual_tests_are_not_claims() {
+        let rust = "/// Dumps a repo [manual]\n#[test]\n#[ignore]\nfn dump() {}\n#[test]\n#[ignore]\nfn later() {}\n";
+        let l = lift("src/a.rs", rust);
+        assert_eq!(l.tests.iter().map(|t| t.identifier.as_str()).collect::<Vec<_>>(), vec!["later"]);
+        assert!(l.tests[0].planned);
+        assert!(lift("a.test.ts", "it.skip('dumps [manual]', () => {});\n").tests.is_empty());
+        assert!(lift("test_a.py", "def test_dump():\n    \"\"\"Dumps [manual]\"\"\"\n    pass\n").tests.is_empty());
+        let cs = "class T {\n    [Fact(DisplayName = \"Dumps [manual]\")]\n    public void Dump() { }\n}\n";
+        assert!(lift("ATests.cs", cs).tests.is_empty());
     }
 
     /// Identifiers read as lowercase words with acronyms kept.

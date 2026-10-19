@@ -1,6 +1,16 @@
 //! Which files count as product code, and the annotated tree a reader sees.
 //! Deciding it is a question about a path, not about the disk — walking the
 //! project is `infrastructure::scan`.
+//!
+//! Classifies a file by name into manifest, infrastructure, or environment category for the annotated tree.
+//!
+//! Whether a project-relative path is architecturally relevant product source — excludes declaration mirrors, test stubs, and generated code, shared by extraction and drift.
+//!
+//! Determines whether a directory is a codebase and enumerates the manifest-bearing units within it.
+//!
+//! Classifies which files are architecturally relevant product source code, versus assets, manifests, infra, and generated/vendored churn.
+//!
+//! Renders an annotated, capped directory tree for the design-first flow to start from.
 
 use std::collections::BTreeMap;
 use std::path::Path;

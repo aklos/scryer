@@ -3600,7 +3600,6 @@ dependencies = [
  "async-trait",
  "libc",
  "scryer-core",
- "scryer-extract",
  "serde",
  "serde_json",
  "tempfile",
@@ -6212,10 +6211,6 @@ dependencies = [
 [[package]]
 name = "xtask"
 version = "0.4.21"
-dependencies = [
- "scryer-core",
- "tempfile",
-]
 
 [[package]]
 name = "yoke"

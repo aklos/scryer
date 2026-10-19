@@ -3,6 +3,10 @@
 //! This is the structure the build previously created in a blocking agent
 //! session; minting it mechanically at t=0 puts the skeleton on the canvas
 //! instantly and lets every semantic session start concurrently.
+//!
+//! Mints the structural skeleton from discovered deployable units — the system node, one container per unit with its boundary glob, and dependency links — idempotently against an existing model.
+//!
+//! Mints the initial structural skeleton of a model from discovered deployable units: the system node, one container per unit, its boundary glob, and dependency links — idempotently against an existing model.
 
 use crate::{next_link_id, next_node_id, Kind, Link, Node, ScryModel};
 

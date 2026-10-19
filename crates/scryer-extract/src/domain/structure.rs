@@ -19,7 +19,7 @@ pub struct Structure {
     pub system: SystemConfig,
     #[serde(default)]
     pub levels: LevelsConfig,
-    /// Keyed by container name (crate/package name) or its directory.
+    /// Keyed by container directory or name (crate/package name).
     #[serde(default)]
     pub containers: BTreeMap<String, ContainerConfig>,
 }
@@ -95,10 +95,45 @@ impl Structure {
         self.radius.as_deref() == Some("all")
     }
 
-    /// The config for a container, looked up by name, then by directory.
+    /// The config for a container, looked up by directory, then by name
+    /// (two packages may share a name; a directory is unambiguous).
     pub fn container(&self, name: &str, dir: &str) -> Option<&ContainerConfig> {
-        self.containers.get(name).or_else(|| self.containers.get(dir))
+        self.containers.get(dir).or_else(|| self.containers.get(name))
     }
+}
+
+/// `structure.toml` text with one container's display name set, comments and
+/// everything else left as written. The section is keyed by directory and
+/// added when missing.
+pub fn set_container_name(text: &str, dir: &str, name: &str) -> String {
+    set_container_field(text, dir, "name", name)
+}
+
+/// `structure.toml` text with one string field of one container set, the
+/// way [`set_container_name`] sets the name.
+pub fn set_container_field(text: &str, dir: &str, key: &str, value: &str) -> String {
+    let quoted_name = format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""));
+    let headers = [format!("[containers.\"{dir}\"]"), format!("[containers.{dir}]")];
+    let lines: Vec<&str> = text.lines().collect();
+    let Some(start) = lines.iter().position(|l| headers.iter().any(|h| l.trim() == h)) else {
+        let sep = if text.is_empty() || text.ends_with("\n\n") { "" } else if text.ends_with('\n') { "\n" } else { "\n\n" };
+        return format!("{text}{sep}[containers.\"{dir}\"]\n{key} = {quoted_name}\n");
+    };
+    let end = lines[start + 1..]
+        .iter()
+        .position(|l| l.trim_start().starts_with('['))
+        .map_or(lines.len(), |i| start + 1 + i);
+    let mut out: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+    let is_key = |l: &str| l.split('=').next().is_some_and(|k| k.trim() == key) && l.contains('=');
+    match (start + 1..end).find(|&i| is_key(lines[i])) {
+        Some(i) => out[i] = format!("{key} = {quoted_name}"),
+        None => out.insert(start + 1, format!("{key} = {quoted_name}")),
+    }
+    let mut joined = out.join("\n");
+    if text.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
 }
 
 fn glob_match(glob: &str, path: &str) -> bool {
@@ -155,6 +190,23 @@ layers = ["domain", "application", "composition", "infrastructure"]
         assert_eq!(s.configured_level("tests/Server.Tests/ChatTests.cs"), None);
         assert!(!s.integration_configured());
         assert!(!s.radius_includes_e2e());
+    }
+
+    /// When a container is renamed, its section's name changes in place, a
+    /// missing name or section is added, and comments survive.
+    #[test]
+    fn renames_a_container_in_place() {
+        let text = "# shape\n[containers.\"crates/core\"]\nname = \"Core\"\nstyle = \"library\"\n\n[containers.web]\nstyle = \"feature-sliced\"\n";
+        let out = set_container_name(text, "crates/core", "Model \"Core\"");
+        assert!(out.starts_with("# shape\n[containers.\"crates/core\"]\nname = \"Model \\\"Core\\\"\"\nstyle"), "{out}");
+        let out = set_container_name(&out, "web", "Web UI");
+        assert!(out.contains("[containers.web]\nname = \"Web UI\"\nstyle = \"feature-sliced\""), "{out}");
+        let out = set_container_name(&out, "docs", "Docs");
+        let s = Structure::parse(&out).unwrap();
+        assert_eq!(s.container("x", "crates/core").unwrap().name.as_deref(), Some("Model \"Core\""));
+        assert_eq!(s.container("x", "web").unwrap().name.as_deref(), Some("Web UI"));
+        assert_eq!(s.container("x", "docs").unwrap().name.as_deref(), Some("Docs"));
+        assert_eq!(s.container("x", "web").unwrap().style.as_deref(), Some("feature-sliced"));
     }
 
     /// A misspelt key is an error, not a silent default.

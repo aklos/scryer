@@ -1,3 +1,7 @@
+/**
+ * Catches rendering errors anywhere below it and shows a fallback instead of a blank window
+ */
+
 import { Component } from "react";
 import type { ReactNode, ErrorInfo } from "react";
 import { WindowControls } from "../widgets/top-bar/TopBar";

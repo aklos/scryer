@@ -165,8 +165,8 @@ pub const COPILOT_HOOK_EVENTS: &[HookEvent] = &[
 pub const GITIGNORE_MARKER: &str = "# Written by `scryer-mcp setup on`.";
 
 /// `.scryer/.gitignore` as `setup on` writes it: commit only what a teammate
-/// needs. The authored model stays committed until the derived tree replaces
-/// it.
+/// needs — `structure.toml` and the diagram layout. Everything else there
+/// (session logs, verdict and derivation caches) is regenerable or personal.
 pub fn gitignore_text() -> String {
     format!(
         "{GITIGNORE_MARKER} Only what a teammate needs is committed.\n\
@@ -174,12 +174,7 @@ pub fn gitignore_text() -> String {
          !.gitignore\n\
          !structure.toml\n\
          !layout\n\
-         !layout/**\n\
-         # The authored model, until the derived tree replaces it.\n\
-         !model.scry\n\
-         !planned.scry\n\
-         !history.jsonl\n\
-         !.test-results.json\n"
+         !layout/**\n"
     )
 }
 
@@ -546,8 +541,7 @@ mod tests {
         assert_eq!(root["mcpServers"]["scryer"]["command"], "docker");
     }
 
-    /// The gitignore is scryer's when it carries the marker or is the model
-    /// store's old default; any other file is the user's.
+    /// When the gitignore carries the marker or is the model store's old default, treats it as scryer's, and any other file as the user's.
     #[test]
     fn the_gitignore_is_scryers_by_its_marker() {
         assert_eq!(gitignore_state(None), EntryState::Missing);

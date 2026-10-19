@@ -20,6 +20,22 @@
 //! - **Darkness is per boundary.** Given the project's modelable source files,
 //!   each boundary-owning node reports which of its files no anchor in its
 //!   subtree reaches — the code the lens cannot see.
+//!
+//! Computes build completeness over the authored (committed + planned) model — how much of the claimed territory reads through to real, existing code.
+//!
+//! Computes the model's health counters per node and in rollup, widening the structural/leaf verdict to the authored tree so plan-only children discharge a committed parent's claims.
+//!
+//! Ships a diagnostic CLI (dump_health) that prints a project's full computed health for inspection outside the app.
+//!
+//! Computes per-node build completeness over the authored (committed + planned) model from resolved filesystem/anchor facts.
+//!
+//! Flags architecture nodes that no link references as source or target.
+//!
+//! Resolves the authored model against the real filesystem and computes completeness — the single shared path so the figure never diverges between callers.
+//!
+//! Whether a node discharges its claims through its children rather than needing its own code anchor.
+//!
+//! Computes per-node and whole-model health counters (responsibilities, properties, tested/testable/untested, vagrant, stale, anchored/unmapped) rolled up by subtree.
 
 use crate::{Kind, ScryModel};
 use serde::Serialize;
@@ -357,7 +373,7 @@ pub fn compute_health(
     // Resolve file ownership by the most-specific matching boundary, so a broad
     // glob (e.g. a root container's `**/*`) only counts the files no nested
     // boundary claims — matching how the extractor slices containers.
-    let ownership = crate::domain::ownership::BoundaryOwnership::new(model);
+    let ownership = crate::domain::build_edges::BoundaryOwnership::new(model);
 
     let mut nodes: BTreeMap<String, NodeHealth> = BTreeMap::new();
     for node in &model.nodes {
@@ -479,7 +495,7 @@ fn anchored_files_per_subtree<'a>(
 
 fn boundary_coverage(
     model: &ScryModel,
-    ownership: &crate::domain::ownership::BoundaryOwnership,
+    ownership: &crate::domain::build_edges::BoundaryOwnership,
     node_id: &str,
     files: &BTreeSet<String>,
     anchored: Option<&BTreeSet<&str>>,
@@ -659,31 +675,21 @@ pub fn compute_completeness(
     out
 }
 
-/// Resolve the authored model against the real filesystem, then compute
-/// completeness — the shared path for every caller (the MCP `get_health` tool and
-/// the app's health command), so the figure never diverges between them. Pass the
-/// committed `model` and the `planned` superset, the project's file inventory
-/// (e.g. `scryer_extract::list_project_files`), and the `source_map` keys whose
-/// code is broken/missing (from an anchor check). A boundary box counts only when
-/// its glob owns a real file; a leaf claim only when its anchor is present and
-/// not dead.
+/// Resolve completeness against the real project: the derived tree's
+/// `planned` layer (a superset of committed), the project's file inventory
+/// (e.g. `scryer_extract::list_project_files`), and the `source_map` keys
+/// whose code is broken or missing. A boundary box counts only when its glob
+/// owns a real file; a leaf claim only when its anchor is present and not
+/// dead.
 pub fn resolve_completeness(
-    model: &ScryModel,
     planned: &ScryModel,
     files: &BTreeSet<String>,
     dead_anchors: &HashSet<&str>,
 ) -> BTreeMap<String, Completeness> {
-    // Boundaries and source anchors have a single home: `ensure_planned_file` clears
-    // the draft's, so a committed container's box and a committed claim's anchor
-    // live only in `model`, while plan-added ones live only in `planned`. Compute
-    // over the UNION (the working view, planned overlaying committed) or every
-    // committed container's box primitive silently vanishes — from both the
-    // denominator (compute_completeness reads `boundaries` to decide a node HAS a
-    // box) and the numerator (real_boxes / live_anchors).
-    let authored = crate::working_view(model, planned);
+    let authored = planned.clone();
     let live: HashSet<&str> = authored.nodes.iter().map(|n| n.id.as_str()).collect();
     let ownership =
-        crate::domain::ownership::BoundaryOwnership::from_boundaries(&authored.boundaries, &live);
+        crate::domain::build_edges::BoundaryOwnership::from_boundaries(&authored.boundaries, &live);
     let mut real_boxes: HashSet<String> = HashSet::new();
     for n in &authored.nodes {
         if authored.boundaries.get(&n.id).is_some_and(|b| !b.is_empty())
@@ -773,38 +779,6 @@ mod tests {
         }
     }
 
-    /// `resolve_completeness` reads boundaries off the model (the compute_
-    /// completeness tests hand-build `real_boxes`, so they never exercise this).
-    /// A committed container's boundary lives only in committed — the draft is
-    /// seeded with boundaries cleared — so completeness must union both layers or
-    /// the container's box vanishes from the one figure the tool owns, dropping a
-    /// scaffolded container from "low but non-zero" to 0%.
-    #[test]
-    fn resolve_completeness_counts_a_committed_containers_box() {
-        // Committed: a leaf container owning a real region, plus one unbuilt claim.
-        let mut model = ScryModel::new();
-        let mut api = node("api", Kind::Container, None);
-        api.responsibilities.push(resp("r1"));
-        model.nodes.push(api);
-        model
-            .boundaries
-            .insert("api".into(), vec![crate::Source { pattern: "api/**".into(), comment: None }]);
-
-        // The draft as `ensure_planned_file` seeds it: same nodes, boundaries CLEARED.
-        let mut planned = model.clone();
-        planned.boundaries.clear();
-
-        let files: BTreeSet<String> = ["api/handler.rs".to_string()].into_iter().collect();
-        let comp = resolve_completeness(&model, &planned, &files, &HashSet::new());
-
-        // The box counts (its glob owns a real file) alongside the one unbuilt leaf
-        // claim: total = box + claim = 2, anchored = box = 1 → the scaffolded
-        // container reads low but non-zero, instead of 0% with the box dropped.
-        let c = &comp["api"];
-        assert_eq!(c.total, 2, "box + leaf claim both counted");
-        assert_eq!(c.anchored, 1, "the box owns a file; the claim is unbuilt");
-        assert_eq!(c.pct, Some(50));
-    }
 
     /// A plan-layer anchor never passes through the fingerprint check (it only
     /// walks the committed baseline), so `dead_anchors` can't kill it — the file
@@ -812,8 +786,6 @@ mod tests {
     /// fake anchor on unbuilt planned work reads as 100% complete.
     #[test]
     fn resolve_completeness_kills_plan_anchors_into_missing_files() {
-        let model = ScryModel::new();
-
         // The plan: a leaf with two anchored claims — one into a real file, one
         // into a file that was never written.
         let mut planned = ScryModel::new();
@@ -825,7 +797,7 @@ mod tests {
         planned.source_map.insert("r-fake".into(), vec![loc("agent/openers.py")]);
 
         let files: BTreeSet<String> = ["agent/agent.py".to_string()].into_iter().collect();
-        let comp = resolve_completeness(&model, &planned, &files, &HashSet::new());
+        let comp = resolve_completeness(&planned, &files, &HashSet::new());
 
         let c = &comp["agent"];
         assert_eq!(c.total, 2);
@@ -1242,6 +1214,7 @@ mod tests {
         assert_eq!(compute_health(&m, None, None).disconnected, vec!["worker".to_string()]);
     }
 
+    /// When there is nothing to connect to, reports no disconnected nodes.
     #[test]
     fn disconnected_is_empty_when_nothing_to_connect_to() {
         let mut m = ScryModel::new();

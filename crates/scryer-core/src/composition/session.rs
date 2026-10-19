@@ -1,13 +1,8 @@
-//! The session hooks' entry points: read the session's log and the model,
-//! answer, and append what the answer implies. The hook client calls these
-//! in-process — no app, no server.
+//! The session hooks' entry points: read the session's log, answer, and
+//! append what the answer implies. The hook client calls these in-process —
+//! no app, no server.
 
-use crate::application::hooks::{AnchorFlag, Unfolded};
-use crate::application::locate::LocateReport;
-use crate::composition::locate::locate_at;
-use crate::composition::model_store::{read_model_at, read_planned_at};
 use crate::domain::session::{fnv1a64, relativize, test_key, SessionLog};
-use serde::Serialize;
 use std::collections::HashSet;
 use crate::infrastructure::session_store;
 use crate::ModelRef;
@@ -72,7 +67,7 @@ pub fn record_shell_edits(r: &ModelRef, session: &str, tool: Option<&str>) -> Re
         })
         .collect();
     let mut added = Vec::new();
-    for file in crate::infrastructure::drift::files_modified_since_ns(r.project_path(), since) {
+    for file in session_store::files_modified_since_ns(r.project_path(), since) {
         if file.starts_with(".scryer/") || log.touched.contains(&file) || others.contains(&file) {
             continue;
         }
@@ -82,51 +77,26 @@ pub fn record_shell_edits(r: &ModelRef, session: &str, tool: Option<&str>) -> Re
     Ok(added)
 }
 
-/// The intent overlay for `file`, or `None` when the session was already shown
-/// this exact payload for it — re-reads must not re-inject an identical block.
-/// Without a session there is nothing to dedupe against: always answer.
-/// The returned report is serialized with the relative `file` added.
+/// Serve the read overlay `payload` for `file`, or `None` when the session
+/// was already shown this exact payload for it — re-reads must not re-inject
+/// an identical block. Without a session there is nothing to dedupe
+/// against: always answer. The payload is built by the caller from the
+/// derived tree.
 pub fn overlay(
     r: &ModelRef,
     session: Option<&str>,
     file: &str,
+    payload: serde_json::Value,
 ) -> Result<Option<serde_json::Value>, String> {
     let file = relativize(r.project_path(), file);
-    let report: LocateReport = locate_at(r, &file, None)?;
-    let mut v = serde_json::to_value(&report).map_err(|e| e.to_string())?;
-    if let serde_json::Value::Object(map) = &mut v {
-        map.insert("file".into(), serde_json::json!(file));
-    }
     if let Some(session) = session.filter(|s| !s.is_empty()) {
-        let hash = fnv1a64(&serde_json::to_vec(&v).unwrap_or_default());
+        let hash = fnv1a64(&serde_json::to_vec(&payload).unwrap_or_default());
         if session_log(r, session).overlay_is_repeat(&file, hash) {
             return Ok(None);
         }
         session_store::append(r, session, SessionEvent::Overlay { file, hash })?;
     }
-    Ok(Some(v))
-}
-
-/// The session is reading `file`: the first time, record which of its anchors
-/// are already out of sync (`flags` runs the anchor check on that one file),
-/// so drift the session found can be told from drift it made.
-/// Later reads cost nothing.
-pub fn record_first_sight(
-    r: &ModelRef,
-    session: &str,
-    file: &str,
-    flags: impl FnOnce(&str) -> Vec<AnchorFlag>,
-) -> Result<(), String> {
-    let file = relativize(r.project_path(), file);
-    if std::path::Path::new(&file).is_absolute() || session_log(r, session).has_seen(&file) {
-        return Ok(());
-    }
-    let stale = flags(&file)
-        .into_iter()
-        .filter(|f| f.file == file)
-        .map(|f| (f.key, f.state))
-        .collect();
-    session_store::append(r, session, SessionEvent::FirstSight { file, stale })
+    Ok(Some(payload))
 }
 
 /// Record the task the agent oriented on — the first one titles the session's
@@ -139,74 +109,26 @@ pub fn record_task(r: &ModelRef, session: &str, task: &str) -> Result<(), String
     session_store::append(r, session, SessionEvent::Task { text: task.to_string() })
 }
 
+/// The longest first prompt kept as a title.
+const PROMPT_TITLE_CHARS: usize = 120;
+
+/// Record the developer's first prompt, clipped, as the session's fallback
+/// title. Later prompts are not kept.
+pub fn record_prompt(r: &ModelRef, session: &str, prompt: &str) -> Result<(), String> {
+    let line = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.is_empty() || session_log(r, session).prompt.is_some() {
+        return Ok(());
+    }
+    let mut text: String = line.chars().take(PROMPT_TITLE_CHARS).collect();
+    if line.chars().count() > PROMPT_TITLE_CHARS {
+        text.push('…');
+    }
+    session_store::append(r, session, SessionEvent::Prompt { text })
+}
+
 /// The task the session first oriented on, if any.
 pub fn session_task(r: &ModelRef, session: &str) -> Option<String> {
     session_log(r, session).task
-}
-
-/// Record that the agent wrote these plan elements.
-pub fn record_model_edit(r: &ModelRef, session: &str, keys: Vec<String>) -> Result<(), String> {
-    if keys.is_empty() {
-        return Ok(());
-    }
-    session_store::append(r, session, SessionEvent::ModelEdit { keys })
-}
-
-fn working(r: &ModelRef) -> Option<crate::ScryModel> {
-    let committed = read_model_at(r).ok()?;
-    Some(match read_planned_at(r) {
-        Ok(p) => crate::working_view(&committed, &p),
-        Err(_) => committed,
-    })
-}
-
-/// A session as the user reviews it: what was edited and which claims that
-/// reached, and what it planned and left unbuilt.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionView {
-    pub session: String,
-    pub touched: Vec<TouchedFile>,
-    /// Plan entries the session planned and has not folded.
-    pub unfolded: Vec<Unfolded>,
-    pub model_edits: Vec<String>,
-    /// Unix seconds of the first and last event.
-    pub started_at: u64,
-    pub updated_at: u64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct TouchedFile {
-    pub file: String,
-    /// Claims anchored in the file: `(id, statement)`.
-    pub claims: Vec<(String, String)>,
-}
-
-pub fn session_view(r: &ModelRef, session: &str) -> SessionView {
-    let entries = session_store::read(r, session);
-    let log = SessionLog::from_events(&entries);
-    let working = working(r).unwrap_or_default();
-    let touched = log
-        .touched
-        .iter()
-        .map(|f| TouchedFile {
-            file: f.clone(),
-            claims: crate::application::locate::locate(&working, f, None)
-                .claims
-                .into_iter()
-                .filter(|c| !c.via_test)
-                .map(|c| (c.id, c.statement.unwrap_or_default()))
-                .collect(),
-        })
-        .collect();
-    SessionView {
-        session: session.to_string(),
-        touched,
-        unfolded: unfolded(r, session),
-        model_edits: log.model_edits.clone(),
-        started_at: entries.first().map_or(0, |e| e.at),
-        updated_at: entries.last().map_or(0, |e| e.at),
-    }
 }
 
 /// The session is starting: the first time, record the todo tests already in
@@ -255,29 +177,6 @@ pub fn stop(
     session_store::append(r, session, SessionEvent::Stop)
 }
 
-/// Plan entries tagged to `session`'s change that are still pending — the
-/// work it planned and neither folded nor reverted — with any progress note.
-pub fn unfolded(r: &ModelRef, session: &str) -> Vec<Unfolded> {
-    let (Ok(committed), Ok(planned)) = (read_model_at(r), read_planned_at(r)) else {
-        return Vec::new();
-    };
-    let Some(cid) = crate::domain::changes::session_change(&planned, session).map(|c| c.id.clone()) else {
-        return Vec::new();
-    };
-    crate::domain::diff::diff(&committed, &planned)
-        .changes
-        .iter()
-        .map(|ch| Unfolded {
-            key: crate::domain::changes::key_for(ch),
-            label: ch.label.clone(),
-            note: (ch.kind == crate::domain::diff::ElementKind::Responsibility)
-                .then(|| planned.notes.get(&ch.id).cloned())
-                .flatten(),
-        })
-        .filter(|u| planned.change_map.get(&u.key) == Some(&cid))
-        .collect()
-}
-
 /// Point harness process `pid` at `session`, so an MCP server spawned by that
 /// process finds the session it serves now — the harness's session id can
 /// change under a running server (`/clear`). A pointer, not history: one small
@@ -297,7 +196,7 @@ pub fn bind_pid(r: &ModelRef, session: &str, pid: u32) -> Result<(), String> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LiveSession {
     pub id: String,
-    /// The task it oriented on, if any.
+    /// Its title: the task it oriented on, else its first prompt.
     pub task: Option<String>,
     pub touched: Vec<String>,
     /// The todo tests it owns, `(file, junit_name)`.
@@ -334,7 +233,8 @@ pub fn live_sessions(r: &ModelRef, except: Option<&str>) -> Vec<LiveSession> {
                 return None;
             }
             let log = SessionLog::from_events(&entries);
-            Some(LiveSession { id, task: log.task, touched: log.touched, stubs: log.stubs })
+            let task = log.title().map(str::to_string);
+            Some(LiveSession { id, task, touched: log.touched, stubs: log.stubs })
         })
         .collect()
 }
@@ -359,69 +259,53 @@ mod tests {
     fn project() -> (tempfile::TempDir, ModelRef) {
         let dir = tempfile::tempdir().unwrap();
         let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
-        let m: crate::ScryModel = serde_json::from_value(serde_json::json!({
-            "version": "0.3", "links": [],
-            "nodes": [
-                { "id": "sys", "kind": "system", "name": "Acme" },
-                { "id": "api", "kind": "container", "name": "API", "parentId": "sys",
-                  "responsibilities": [
-                      { "id": "r-1", "statement": "**When** a request arrives, **serves** it" },
-                      { "id": "r-2", "statement": "**Log** every request" }
-                  ] }
-            ],
-            "sourceMap": {
-                "r-1": [{ "pattern": "src/auth.rs", "symbol": "verify" }],
-                "r-2": [{ "pattern": "src/log.rs", "symbol": "log" }]
-            }
-        }))
-        .unwrap();
-        crate::write_model_at(&r, &m).unwrap();
+        std::fs::create_dir_all(dir.path().join(".scryer")).unwrap();
         (dir, r)
     }
 
+    /// The overlay is served once per session until its payload changes.
     #[test]
     fn overlay_is_served_once_per_session_until_it_changes() {
         let (dir, r) = project();
         let abs = format!("{}/src/auth.rs", dir.path().display());
+        let payload = |claim: &str| serde_json::json!({ "file": "src/auth.rs", "claims": [claim] });
 
-        let first = overlay(&r, Some("s1"), &abs).unwrap().expect("first read injects");
-        assert_eq!(first["file"], "src/auth.rs");
-        assert_eq!(first["claims"][0]["id"], "r-1");
-        assert!(overlay(&r, Some("s1"), &abs).unwrap().is_none(), "identical repeat is silent");
-        assert!(overlay(&r, Some("s2"), &abs).unwrap().is_some(), "per session");
-        assert!(overlay(&r, None, &abs).unwrap().is_some(), "no session: always");
-        assert!(overlay(&r, None, &abs).unwrap().is_some());
-
-        let mut m = crate::read_model_at(&r).unwrap();
-        m.nodes[1].responsibilities[0].statement = "serves authenticated requests".into();
-        crate::write_model_at(&r, &m).unwrap();
-        let changed = overlay(&r, Some("s1"), &abs).unwrap().expect("changed payload re-fires");
-        assert_eq!(changed["claims"][0]["statement"], "serves authenticated requests");
-        assert!(overlay(&r, Some("s1"), &abs).unwrap().is_none());
+        let first = overlay(&r, Some("s1"), &abs, payload("serves")).unwrap().expect("first read injects");
+        assert_eq!(first["claims"][0], "serves");
+        assert!(overlay(&r, Some("s1"), &abs, payload("serves")).unwrap().is_none(), "identical repeat is silent");
+        assert!(overlay(&r, Some("s2"), &abs, payload("serves")).unwrap().is_some(), "per session");
+        assert!(overlay(&r, None, &abs, payload("serves")).unwrap().is_some(), "no session: always");
+        let changed = overlay(&r, Some("s1"), &abs, payload("serves authenticated")).unwrap();
+        assert!(changed.is_some(), "a changed payload re-fires");
+        assert!(overlay(&r, Some("s1"), &abs, payload("serves authenticated")).unwrap().is_none());
     }
 
-    /// A stop closes the record and asks nothing: planned work left unbuilt
-    /// after code was edited — what the old Stop gate blocked on — stays
-    /// visible on the session, and every stop is only recorded.
+    /// A stop is only recorded: it never blocks, whatever the session left.
     #[test]
     fn a_stop_is_recorded_and_never_blocks() {
         let (_dir, r) = project();
-        let mut plan = crate::read_model_at(&r).unwrap();
-        plan.nodes[1].responsibilities.push(serde_json::from_value(
-            serde_json::json!({ "id": "r-3", "statement": "rate-limits callers" }),
-        )
-        .unwrap());
-        let cid = crate::domain::changes::open_change_for(&mut plan, "limit", Some("s"), 1);
-        crate::domain::changes::tag(&mut plan, &["resp:r-3".to_string()], &cid);
-        crate::write_planned_at(&r, &plan).unwrap();
-        record_model_edit(&r, "s", vec!["resp:r-3".to_string()]).unwrap();
         record_touch(&r, "s", "src/auth.rs").unwrap();
-
         stop(&r, "s", Some(&[]), Vec::new()).unwrap();
         stop(&r, "s", None, Vec::new()).unwrap();
         let stops = session_store::read(&r, "s").into_iter().filter(|e| e.event == SessionEvent::Stop).count();
         assert_eq!(stops, 2);
-        assert_eq!(session_view(&r, "s").unfolded.len(), 1, "the unbuilt plan stays on the record");
+    }
+
+    /// When a session's first prompt arrives it becomes the session's title,
+    /// clipped to 120 characters, unless the agent orients on a task; later
+    /// prompts are not kept.
+    #[test]
+    fn the_first_prompt_titles_a_session_without_a_task() {
+        let (_dir, r) = project();
+        let long = "fix the landing page ".repeat(10);
+        record_prompt(&r, "s", &long).unwrap();
+        record_prompt(&r, "s", "something else").unwrap();
+        let log = session_log(&r, "s");
+        let title = log.title().unwrap();
+        assert_eq!(title.chars().count(), 121, "{title}");
+        assert!(title.starts_with("fix the landing page fix") && title.ends_with('…'));
+        record_task(&r, "s", "Queue offline saves").unwrap();
+        assert_eq!(session_log(&r, "s").title(), Some("Queue offline saves"));
     }
 
     /// At a stop, the todo tests the session wrote since its start in files
@@ -455,24 +339,6 @@ mod tests {
         let log = session_log(&r, "s");
         assert_eq!(log.stubs, vec![t("src/a.rs", "mine"), t("src/a.rs", "later")]);
         assert_eq!(log.reached.len(), 2);
-    }
-
-    /// The first read of a file records which of its anchors were already out
-    /// of sync; later reads run no check.
-    #[test]
-    fn first_sight_records_found_drift_once_per_file() {
-        let (_dir, r) = project();
-        let flag = AnchorFlag {
-            key: "r-1".into(),
-            host_name: "API".into(),
-            file: "src/auth.rs".into(),
-            symbol: None,
-            state: "changed".into(),
-        };
-        record_first_sight(&r, "s", "src/auth.rs", |_| vec![flag.clone()]).unwrap();
-        record_first_sight(&r, "s", "src/auth.rs", |_| panic!("only the first read checks")).unwrap();
-        let log = session_log(&r, "s");
-        assert_eq!(log.first_sight, vec![("src/auth.rs".to_string(), vec![("r-1".to_string(), "changed".to_string())])]);
     }
 
     /// Edits outside the project — a probe worktree, a scratch file — are
@@ -516,8 +382,7 @@ mod tests {
         assert!(record_shell_edits(&r, "other", None).unwrap().is_empty(), "no start, no touches");
     }
 
-    /// Sessions sharing a checkout: a file another session logged editing
-    /// while this one's command ran is left to that session.
+    /// When another session logged editing a file while this one's command ran, leaves the file to that session.
     #[test]
     fn a_file_another_session_edited_meanwhile_is_not_this_sessions() {
         let (dir, r) = project();
@@ -532,8 +397,7 @@ mod tests {
         assert!(!session_log(&r, "a").touched.contains(&"src/theirs.rs".to_string()));
     }
 
-    /// A session is live while a process bound to it runs or it touched a
-    /// file in the last hour; the caller is never its own peer.
+    /// While a process bound to a session runs or it touched a file in the last hour, counts the session as live, never the caller itself.
     #[test]
     fn live_sessions_are_running_or_recently_touching() {
         let (_dir, r) = project();

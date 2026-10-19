@@ -1,3 +1,15 @@
+//! Same union guard as next_node_id_union, for group ids.
+//!
+//! Recognizes both the current random id shape and the legacy sequential shape, so an echoed real id is never mistaken for an invented placeholder.
+//!
+//! Mints a node id unknown to both the plan and committed layers, so a plan-deleted node's id can never be reissued and misread as a reword.
+//!
+//! Mints a collision-checked random id, redrawing against a taken set until it is unique.
+//!
+//! Mints collision-checked, human-readable random ids for every model element kind, safe for concurrent minters over the same model snapshot.
+//!
+//! Distinguishes a legitimately minted id from an agent-invented placeholder.
+
 use crate::domain::model::{Responsibility, ScryModel};
 use std::collections::HashSet;
 use std::hash::{BuildHasher, Hasher};

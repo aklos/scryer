@@ -1,3 +1,7 @@
+/**
+ * ContentEditable-based inline field that swaps pixel-identically between read and edit modes
+ */
+
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { BTN } from "./tokens";
 

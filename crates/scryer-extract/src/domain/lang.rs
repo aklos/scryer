@@ -7,6 +7,34 @@
 //! every identifier occurrence, which the model builder resolves into a
 //! reference graph. Everything here is grammar-derived: no name tables, no
 //! regex heuristics on contents.
+//!
+//! Collects C/C++ function, struct/union/class, and enum definitions from their grammar-specific declarator shapes.
+//!
+//! Extends parsing to Vue single-file components (script-in-place) and to string-named test blocks (`it("...")`) for test-anchor resolution.
+//!
+//! Collects Rust top-level definitions (functions, structs, enums, traits, impl/mod-nested items) with struct/enum field shapes.
+//!
+//! Collects Go functions, methods, structs, and interfaces, including grouped type declarations.
+//!
+//! Treats a `.vue` file as one component definition spanning the whole file, parsing its script block in place so line numbers stay file-accurate.
+//!
+//! Classifies each supported extension's import-following strength as `full` (real declared imports) or `nameHeuristic` (bare-identifier coincidence only).
+//!
+//! Collects Python function and class definitions, descending into class bodies for methods.
+//!
+//! Captures TS/JS import forms — ESM imports/re-exports, `require`, and dynamic `import()` — with their bound local names.
+//!
+//! Reports which languages get real declared-import resolution versus name-heuristic fallback.
+//!
+//! Collects TS/JS module-level definitions (functions, classes, interfaces, type aliases, enums) with their declared member shapes.
+//!
+//! Captures Go import declarations and their qualifier bindings (alias, dot, or blank import).
+//!
+//! Captures Python `import`/`from...import` statements anywhere in a file, including function-local imports.
+//!
+//! Parses source files with per-language tree-sitter grammars into addressable definitions (functions, types, data shapes) and identifier/import/path reference occurrences.
+//!
+//! Dispatches a source file to its language family's definition/identifier/import collectors, or to the Vue SFC path.
 
 use std::path::Path;
 use tree_sitter::{Language, Node, Parser};
@@ -2117,10 +2145,7 @@ mod tests {
         parse.defs.iter().map(|d| d.name.as_str()).collect()
     }
 
-    /// A `.vue` SFC is one definition named after its file, spanning the whole
-    /// file — its template and style blocks never mint symbols — while the
-    /// script block's imports and identifiers are read in place, so the lines
-    /// they report are lines of the `.vue` file.
+    /// When a `.vue` single-file component is parsed, makes it one definition named after its file, reading its script block's imports and identifiers at their lines in the `.vue` file.
     #[test]
     fn vue_sfc_is_one_component_named_after_its_file() {
         let src = "<template>\n  <div>{{ title }}<Avatar :user=\"user\" /></div>\n</template>\n\n<script setup lang=\"ts\">\nimport Avatar from \"./Avatar.vue\";\nimport { formatName } from \"../lib/names\";\ndefineProps<{ title: string }>();\n</script>\n\n<style scoped>\n.x { color: red; }\n</style>\n";
@@ -2722,6 +2747,7 @@ async function f(p: string) { return import(p); }
         parse_file(Path::new("app/core.clj"), CLJ_SRC).expect("clojure parses")
     }
 
+    /// When a list's head names a defining form, record the following symbol as a definition, ignoring quoted, discarded and commented code
     #[test]
     fn clojure_def_forms_collected() {
         let p = clj_parse();
@@ -2793,6 +2819,7 @@ async function f(p: string) { return import(p); }
         assert!(!f.is_data_shape && f.fields.is_empty());
     }
 
+    /// When a namespace declaration lists requires, record each required namespace with its alias and referred names
     #[test]
     fn clojure_ns_requires_become_imports() {
         let p = clj_parse();

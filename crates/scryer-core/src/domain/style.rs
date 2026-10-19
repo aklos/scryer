@@ -18,6 +18,28 @@
 //! `pipeline`, `ecs`, `mvvm`) are ordinary [`StyleDef`] values; a project may add its own as
 //! `.scryer/styles/<name>.json` with the same shape. The engine never
 //! special-cases a built-in.
+//!
+//! Validates whether a layer tag is legal for a component under a given parent, naming exactly what's wrong: unstyled container, unknown style, or layer outside the style's list.
+//!
+//! Builds a component's language-neutral scaffold manifest — file location, allowed imports, and symbols to define — for the agent to materialize in the project's own idiom.
+//!
+//! The layer tag a node carries, inherited from its component when the node is a symbol.
+//!
+//! Defines the language-neutral vocabulary of an architectural style: its layers, legality matrix, isolation rule, inbound layers, external-package bans, and path convention.
+//!
+//! Resolves which style and layer govern a given node, and renders the one-line placement fact (layer, allowed imports, directory) an agent needs before writing a file.
+//!
+//! Where files of a node's layer belong, from its container's boundary prefix and the style's path convention.
+//!
+//! Assembles the one-line placement fact — layer, allowed imports, directory — an agent needs before writing a file.
+//!
+//! Generates a language-neutral scaffold manifest — where a component's file(s) go and what symbols to define — for the agent to materialize in the project's own idiom.
+//!
+//! Hold the set of styles a project can use: the built-ins plus any project-authored override under .scryer/styles/.
+//!
+//! Ship the five built-in styles (hexagonal, library, feature-sliced, core-shell, pipeline) and load project-authored custom styles that override them by name.
+//!
+//! The nearest ancestor-or-self style declaration governing a node, so a component may override its container.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -956,6 +978,7 @@ mod tests {
         assert!(!h.may_depend("presentation", "domain"));
     }
 
+    /// Give hexagonal and library a composition layer — the wiring — that may import every other layer and that no other layer may import.
     #[test]
     fn composition_may_import_every_layer_and_none_imports_it() {
         let h = hexagonal();
@@ -969,6 +992,7 @@ mod tests {
         assert!(h.outbound.iter().any(|l| l == "composition"));
     }
 
+    /// When another container depends on a `library` container, admit the dependency only on its composition, application, or domain layer, keeping its infrastructure private.
     #[test]
     fn library_is_hexagonal_entered_at_its_model_and_use_cases() {
         let (h, l) = (hexagonal(), library());
@@ -1098,4 +1122,153 @@ mod tests {
         assert_eq!(layer_of(&m, "c"), None);
         assert_eq!(container_of(&m, "y").map(|n| n.id.as_str()), Some("c"));
     }
+}
+
+// --- Link legality: a declared link held against its style -------------------
+
+/// Check a (prospective or existing) link against its style's legality
+/// matrix. `None` when legal or when the style says nothing about the pair.
+///
+/// Inside one container the `(layer(src), layer(dst))` pair must be in the
+/// matrix, and a same-layer link between two different components must be
+/// `kind: uses` (a sibling reached through its public surface). A link that
+/// enters a styled container from outside must land on one of its inbound
+/// layers (hex: presentation or application; library: application or domain;
+/// FSD: app or pages; core-shell: shell), never deeper; one that leaves a
+/// styled container must leave from one of its outbound layers (hex and
+/// library: infrastructure; FSD: shared or app; core-shell: shell). Symbols
+/// carry their component's layer.
+pub fn style_link_violation(
+    model: &ScryModel,
+    styles: &Styles,
+    src: &str,
+    dst: &str,
+    kind: Option<crate::LinkKind>,
+) -> Option<String> {
+    style_link_breach(model, styles, src, dst, kind).map(|b| b.detail)
+}
+
+/// A link its style forbids: why, and the container whose style it breaks.
+pub struct StyleLinkBreach<'a> {
+    pub container: &'a Node,
+    pub detail: String,
+}
+
+/// [`style_link_violation`] with the container it charges.
+pub fn style_link_breach<'a>(
+    model: &'a ScryModel,
+    styles: &Styles,
+    src: &str,
+    dst: &str,
+    kind: Option<crate::LinkKind>,
+) -> Option<StyleLinkBreach<'a>> {
+    let src_c = container_of(model, src)?;
+    let dst_c = container_of(model, dst)?;
+    let src_name = name_of(model, src);
+    let dst_name = name_of(model, dst);
+
+    if src_c.id != dst_c.id {
+        let dst_style = governing_style(model, dst).and_then(|s| styles.get(s));
+        // Entering from outside: land on an inbound layer.
+        if let (Some(dst_layer), Some(def)) = (
+            layer_of(model, dst),
+            governing_style(model, dst).and_then(|s| styles.get(s)),
+        ) {
+            if !def.inbound.is_empty() && !def.is_inbound(dst_layer) {
+                return Some(StyleLinkBreach {
+                    container: dst_c,
+                    detail: format!(
+                        "'{src_name}' enters container '{}' ({}) at '{dst_name}', which is on layer \
+                         '{dst_layer}' — links from outside land on {}; link to a node on that layer \
+                         (or to the container itself) instead",
+                        dst_c.name,
+                        def.name,
+                        def.inbound.join(" or ")
+                    ),
+                });
+            }
+        }
+        let src_layer = layer_of(model, src)?;
+        let def = styles.get(governing_style(model, src)?)?;
+        // A library is imported as a module: the source's own matrix decides,
+        // the way it would for a module of its own container. See StyleDef.
+        if let (Some(dst_def), Some(dst_layer)) = (dst_style, layer_of(model, dst)) {
+            if dst_def.imported_as_module && def.has_layer(dst_layer) {
+                // Matrix first; a library's facade is reached from the driven
+                // side, like anything else outside the container.
+                if def.may_depend(src_layer, dst_layer)
+                    || def.outbound.iter().any(|l| l == src_layer)
+                {
+                    return None;
+                }
+                let allowed = def.allowed(src_layer);
+                return Some(StyleLinkBreach {
+                    container: src_c,
+                    detail: format!(
+                        "'{src_name}' ({src_layer}) → '{dst_name}' ({dst_layer}), a module of \
+                         container '{}' — in style '{}' {src_layer} may depend on {}",
+                        dst_c.name,
+                        def.name,
+                        if allowed.is_empty() { "nothing".to_string() } else { allowed.join(", ") }
+                    ),
+                });
+            }
+        }
+        // Leaving for another container: go out from an outbound layer.
+        if def.outbound.is_empty() || def.outbound.iter().any(|l| l == src_layer) {
+            return None;
+        }
+        return Some(StyleLinkBreach {
+            container: src_c,
+            detail: format!(
+                "'{src_name}' ({src_layer}) leaves container '{}' ({}) for '{dst_name}' — links \
+                 out of it leave from {}; route it through a node on that layer",
+                src_c.name,
+                def.name,
+                def.outbound.join(" or ")
+            ),
+        });
+    }
+
+    let dst_layer = layer_of(model, dst)?;
+    let src_layer = layer_of(model, src)?;
+    // Two elements of ONE component are one unit: the matrix governs what a
+    // component may reach outside itself, never its own internals.
+    if layer_component(model, src)?.id == layer_component(model, dst)?.id {
+        return None;
+    }
+    // The importer's style governs; a component overriding its container's
+    // style is checked by its own table.
+    let def = styles.get(governing_style(model, src)?)?;
+    if !def.may_depend(src_layer, dst_layer) {
+        let allowed = def.allowed(src_layer);
+        return Some(StyleLinkBreach {
+            container: src_c,
+            detail: format!(
+                "'{src_name}' ({src_layer}) → '{dst_name}' ({dst_layer}) is illegal in style '{}': \
+                 {src_layer} may depend on {}",
+                def.name,
+                if allowed.is_empty() { "nothing".to_string() } else { allowed.join(", ") }
+            ),
+        });
+    }
+    if src_layer == dst_layer && kind != Some(crate::LinkKind::Uses) {
+        return Some(StyleLinkBreach {
+            container: src_c,
+            detail: format!(
+                "'{src_name}' → '{dst_name}' joins two {src_layer} components — a same-layer link \
+                 reaches a sibling through its public surface and is `kind: uses`",
+            ),
+        });
+    }
+    None
+}
+
+fn name_of<'a>(model: &'a ScryModel, id: &'a str) -> &'a str {
+    model
+        .nodes
+        .iter()
+        .find(|n| n.id == id)
+        .map(|n| n.name.as_str())
+        .unwrap_or(id)
 }

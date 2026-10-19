@@ -56,45 +56,22 @@ export default defineConfig({
           items: [
             { label: "Installation", slug: "getting-started/installation" },
             {
-              label: "Your First Model",
-              slug: "getting-started/first-model",
-            },
-            {
               label: "Connecting AI Tools",
               slug: "getting-started/connecting-ai",
             },
           ],
         },
         {
-          label: "The Editor",
+          label: "Concepts",
           items: [
-            { label: "Canvas & Navigation", slug: "editor/canvas" },
-            { label: "Nodes", slug: "editor/nodes" },
-            { label: "Edges & Relationships", slug: "editor/edges" },
-            { label: "Properties Panel", slug: "editor/properties" },
-          ],
-        },
-        {
-          label: "Modeling",
-          items: [
-            { label: "Flows", slug: "modeling/flows" },
-            { label: "Contracts", slug: "modeling/contracts" },
-            { label: "Status Tracking", slug: "modeling/status" },
-            { label: "Groups", slug: "modeling/groups" },
-            { label: "Source Mapping", slug: "modeling/source-mapping" },
+            { label: "Claims", slug: "concepts/claims" },
+            { label: "Status", slug: "concepts/status" },
+            { label: "Structure", slug: "concepts/structure" },
           ],
         },
         {
           label: "AI Integration",
-          items: [
-            { label: "MCP Server", slug: "ai/mcp-server" },
-            {
-              label: "Implementation Workflow",
-              slug: "ai/implementation-workflow",
-            },
-            { label: "Drift & Sync", slug: "ai/drift-sync" },
-            { label: "AI Advisor", slug: "ai/advisor" },
-          ],
+          items: [{ label: "MCP Server", slug: "ai/mcp-server" }],
         },
         {
           label: "Customization",

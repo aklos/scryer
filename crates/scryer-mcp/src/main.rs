@@ -1,3 +1,29 @@
+//! Provide command-line entry points for project setup, session hooks, status, and CI checks.
+//!
+//! Ingest test verdicts to gate claims as tested.
+//!
+//! Enforce the plan, sign-off, build, and verify change loop.
+//!
+//! Tracks each session's currently open change so plan writes auto-tag to the right task, scoped per project
+//!
+//! Expose model reading, editing, and rule tools to AI coding agents.
+//!
+//! Exposes an opt-in CI gate (`check`) that fails loud on validator warnings, broken anchors, and — when asked — drift or pending work
+//!
+//! Writes or merges .mcp.json, the shared config format Claude Code and Copilot CLI both read
+//!
+//! Bootstraps per-project agent config so installed CLIs (Claude Code, Copilot, Codex) discover the scryer-mcp server and, optionally, its statusline
+//!
+//! Carries the connect-time instructions that steer the model-first workflow loop and point at rules by slug
+//!
+//! Reports the model's loop-state (pending work, drift, test verdicts) as a human status line and as JSON
+//!
+//! Writes project-scoped MCP config for every installed agent CLI so it discovers the scryer-mcp binary
+//!
+//! Writes or merges .codex/config.toml to register the server for OpenAI Codex
+//!
+//! Assembles every tool category's router into the one advertised tool list, with schemas slimmed for a model reading them
+
 mod cli;
 mod derived;
 mod helpers;
@@ -41,6 +67,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let args: Vec<String> = std::env::args().skip(2).collect();
             return cli::run_lint(&args);
         }
+        // One-shot move of an authored model into the code.
+        Some("migrate") => {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            return cli::run_migrate(&args);
+        }
         // Opt-in CI gate: exit 0 clean, 1 findings, 2 unusable.
         Some("check") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
@@ -49,11 +80,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => {}
     }
 
-    // The server reads the derived tree, never the authored model, and the
-    // verdict and probe store resolves claim ids against it only under this
-    // flag. SEAM: step 6 deletes the authored model and the flag with it;
-    // until then the server switches it on for its own process.
-    std::env::set_var(scryer_core::derived_tree::DERIVED_TREE_ENV, "1");
     let service = ScryerServer::new()
         .serve(rmcp::transport::io::stdio())
         .await

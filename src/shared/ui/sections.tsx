@@ -1,3 +1,9 @@
+/**
+ * Shared editing shell for a page section: drafts changes locally and commits only on Done
+ *
+ * Standard wiki-style section chrome (eyebrow heading, hover-revealed edit toggle) shared by every page section
+ */
+
 import {
   createContext,
   useContext,

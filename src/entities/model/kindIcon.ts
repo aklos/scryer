@@ -6,6 +6,8 @@
  * unrelated icons). Type is now SEEN: a distinct silhouette per C4 kind, with the
  * bracketed type tag as the quiet textual fallback underneath. A user-set
  * `node.icon` override still wins (resolved by the caller via `lookupIcon`).
+ *
+ * Picks the kind silhouette icon for a node — person, external, previewable, data shape, code, or C4 box by altitude
  */
 
 import type { ComponentType } from "react";

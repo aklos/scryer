@@ -1,3 +1,7 @@
+//! Dev tasks for the workspace: `build-sidecar` builds the scryer-mcp binary
+//! and stages it under `src-tauri/binaries` with the target-triple name Tauri
+//! expects for a sidecar.
+
 use std::env;
 use std::path::PathBuf;
 use std::process::Command;
@@ -9,44 +13,11 @@ fn main() {
 
     match task {
         "build-sidecar" => build_sidecar(!debug),
-        "validate-model" => validate_model(args.get(2).map(PathBuf::from)),
         _ => {
-            eprintln!(
-                "Usage:\n  cargo run -p xtask -- build-sidecar [--debug]\n  \
-                 cargo run -p xtask -- validate-model [project-path]"
-            );
+            eprintln!("Usage:\n  cargo run -p xtask -- build-sidecar [--debug]");
             std::process::exit(1);
         }
     }
-}
-
-fn validate_model(project: Option<PathBuf>) {
-    let project = project.unwrap_or_else(workspace_root);
-    let model_ref = scryer_core::ModelRef::ProjectLocal(project.clone());
-    let model = scryer_core::read_model_at(&model_ref).unwrap_or_else(|e| {
-        eprintln!("Failed to read {}: {e}", model_ref.model_path().display());
-        std::process::exit(1);
-    });
-    let mut warnings = scryer_core::validate::validate(&model);
-    warnings.extend(scryer_core::validate::validate_coverage(&model, &project));
-
-    println!(
-        "{} nodes, {} links, {} groups, {} source mappings, {} boundaries",
-        model.nodes.len(),
-        model.links.len(),
-        model.groups.len(),
-        model.source_map.len(),
-        model.boundaries.len(),
-    );
-    if warnings.is_empty() {
-        println!("Model is structurally and source-coverage clean.");
-        return;
-    }
-    eprintln!("{} validation warning(s):", warnings.len());
-    for warning in warnings {
-        eprintln!("- {warning}");
-    }
-    std::process::exit(2);
 }
 
 fn build_sidecar(release: bool) {
@@ -142,9 +113,7 @@ fn workspace_root() -> PathBuf {
 mod tests {
     use super::*;
 
-    /// The resolved triple must agree with rustc's own authoritative `host:`
-    /// line — the fallback source the function parses when `--print
-    /// host-tuple` is unavailable.
+    /// When `--print host-tuple` is unavailable, resolves the same triple as rustc's own `host:` line.
     #[test]
     fn target_triple_matches_the_rustc_host() {
         let out = Command::new("rustc").arg("-vV").output().expect("rustc runs");

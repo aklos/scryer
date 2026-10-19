@@ -5,6 +5,8 @@
  * and link labels, and surfaces WHERE each match landed with a highlighted
  * snippet. Name matches rank first, then content by field. Keyboard: arrows to
  * move, Enter to open, Esc to close.
+ *
+ * Fuzzy command-palette search across nodes, groups, and links, jumping straight to the best-matching field
  */
 
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";

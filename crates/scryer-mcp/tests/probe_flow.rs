@@ -29,8 +29,7 @@ impl Server {
     fn start(project: &Path, probes: &Path) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_scryer-mcp"))
             .current_dir(project)
-            .env_remove("SCRYER_DERIVED_TREE")
-            .env("SCRYER_PROBES_DIR", probes)
+                .env("SCRYER_PROBES_DIR", probes)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())

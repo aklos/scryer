@@ -341,12 +341,11 @@ mod tests {
             file_nodes: Default::default(),
             dark_files: Vec::new(),
             style_violations: Vec::new(),
+            layer_exempt: Vec::new(),
         }
     }
 
-    /// A test is reached by import, transitively; an integration test that
-    /// resolves no import, by any change inside its container; e2e only when
-    /// asked; stubs never.
+    /// When a radius is computed, reaches tests by import transitively, an integration test with no resolved import by any change in its container, e2e only on request, and stubs never.
     #[test]
     fn the_radius_follows_imports_and_levels() {
         let mut t = tree(vec![
@@ -378,8 +377,7 @@ mod tests {
         assert!(radius(&t, &edges, &["docs/x.md".to_string()], true).is_empty(), "nothing in a container changed");
     }
 
-    /// A new stub goes in the component's test file named after the file,
-    /// else its nearest one, else the language's convention.
+    /// When a stub is placed, puts it in the test file named after the component's file, its nearest test file, or the language's convention, the first that exists.
     #[test]
     fn stubs_go_to_the_components_test_file_or_the_convention() {
         let mut model = ScryModel::new();
@@ -400,8 +398,7 @@ mod tests {
         assert_eq!(stub_file(&empty, node, "README.md"), None);
     }
 
-    /// A test is found by its JUnit name, or by its identifier when that is
-    /// unique.
+    /// When a test is looked up, finds it by its JUnit name, or by its identifier if that is unique.
     #[test]
     fn a_test_is_found_by_junit_name_or_identifier() {
         let t = tree(vec![

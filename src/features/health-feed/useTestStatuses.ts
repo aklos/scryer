@@ -6,6 +6,8 @@
  * (an in-app agent run ended), and whenever the `.test-results.json` cache
  * changes on disk — an agent over MCP ingesting a report or ending a probe
  * mid-session lights the badges live.
+ *
+ * Fetches recorded test verdicts and probe results for the open project's claims
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";

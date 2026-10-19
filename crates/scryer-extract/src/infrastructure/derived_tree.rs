@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 /// Bumped whenever derivation changes, so a cache from an older binary is
 /// never mistaken for current.
-const DERIVE_VERSION: u32 = 2;
+const DERIVE_VERSION: u32 = 4;
 
 thread_local! {
     static PARSER: RefCell<tree_sitter::Parser> = RefCell::new(tree_sitter::Parser::new());
@@ -131,8 +131,18 @@ fn derive_uncached(project: &Path, files: &[PathBuf], print: u64) -> Result<Deri
         &edges,
         Some(&all_files),
     );
-    tree.style_violations = report
+    // An exempt component is asked for no layer; cycles still count.
+    let exempt: std::collections::HashSet<&str> = tree.layer_exempt.iter().map(String::as_str).collect();
+    let positional = |kind: &str| matches!(kind, "layerless" | "layer_violation" | "misplaced");
+    let violations: Vec<_> = report
         .violations
+        .into_iter()
+        .filter(|v| {
+            !(positional(v.kind.as_str())
+                && (exempt.contains(v.node.as_str()) || v.other.as_deref().is_some_and(|o| exempt.contains(o))))
+        })
+        .collect();
+    tree.style_violations = violations
         .into_iter()
         .map(|v| DerivedViolation {
             node_id: v.node,

@@ -1,5 +1,41 @@
 //! The read side of the MCP: the derived C4 tree, its claims, and where a
 //! file's new todo stubs go.
+//!
+//! Lists the plan's outstanding element queue, filterable by change
+//!
+//! Scopes the model to a task and/or files in one call: governing chain, matching rules, pending work, and a phase verdict
+//!
+//! Reports claim discharge, completeness, and boundary/anchor hygiene, scoped to a node's subtree or the whole model, rolling leaf blind spots upward
+//!
+//! Searches nodes by text, requiring every query term to match somewhere on the node
+//!
+//! Report the stale test verdicts apart from the drift-stale claims, as the status line counts them
+//!
+//! Filters nodes by a composable set of typed field predicates
+//!
+//! Computes model health — claim discharge, completeness, boundary and anchor hygiene — and validates the working view's structural invariants before a close
+//!
+//! Returns the architecture overview down to components, or a full node subtree on request
+//!
+//! Scans a project's file/symbol structure for the discovery step before any model exists
+//!
+//! Bundles task orientation (governing scope, directives, pending work, matching rules) into one call at the top of a coding session
+//!
+//! Reports code that has drifted from the model since the last reconcile baseline
+//!
+//! Builds one node's full subtree payload: descendants, links, external context, and the slice of source map and boundaries that cover it
+//!
+//! Evaluates one query predicate against a node's resolved field value, failing loud on a malformed condition
+//!
+//! Resolves a source file (and optional symbol) to its governing claims, directives, breadcrumb, and scoped pending work
+//!
+//! Scores a node's searchable fields against query terms by substring and fuzzy (Jaro-Winkler) similarity
+//!
+//! Validates the working view's structural invariants (e.g. a claim id duplicated across hosts) before a close, quiet on pending deletions
+//!
+//! Fetches named rules in full, or an index matched by topic, degrading a stale slug citation to the index instead of an error
+//!
+//! Serves model reads at multiple altitudes — architecture overview, full node subtrees, fuzzy search, structured field queries, file-anchored locate
 
 use crate::derived;
 use crate::helpers::*;
@@ -327,7 +363,7 @@ fn fit_orient(mut payload: serde_json::Value) -> String {
 /// The other sessions live in this project, and the import graph to see
 /// where their work and the caller's meet. Awareness only: nothing is ever
 /// refused on its account.
-struct Peers {
+pub(crate) struct Peers {
     live: Vec<scryer_core::session::LiveSession>,
     edges: Vec<(String, String)>,
 }
@@ -335,7 +371,12 @@ struct Peers {
 impl Peers {
     fn of(server: &ScryerServer, model_ref: &ModelRef, tree: &scryer_core::derived_tree::DerivedTree) -> Self {
         let me = server.session_id(model_ref);
-        let live = scryer_core::session::live_sessions(model_ref, me.as_deref());
+        Self::besides(model_ref, tree, me.as_deref())
+    }
+
+    /// The live sessions besides `me`.
+    pub(crate) fn besides(model_ref: &ModelRef, tree: &scryer_core::derived_tree::DerivedTree, me: Option<&str>) -> Self {
+        let live = scryer_core::session::live_sessions(model_ref, me);
         let edges = if live.is_empty() { Vec::new() } else { derived::import_edges(model_ref, tree).unwrap_or_default() };
         Peers { live, edges }
     }
@@ -387,7 +428,7 @@ impl Peers {
 /// What the tree says about one file: its node chain, layer, module
 /// description, claims and where new stubs go — and what other live sessions
 /// are doing near it.
-fn file_report(loaded: &derived::Loaded, peers: &Peers, file: &str, claims_cap: Option<usize>) -> serde_json::Value {
+pub(crate) fn file_report(loaded: &derived::Loaded, peers: &Peers, file: &str, claims_cap: Option<usize>) -> serde_json::Value {
     let tree = &loaded.tree;
     let model = &tree.planned;
     let node = derived::file_node(tree, model, file);

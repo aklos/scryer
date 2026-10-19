@@ -1,3 +1,9 @@
+//! Accepts a responsibility as a plain statement string or a rich form carrying a concern slug and source line range
+//!
+//! Declares the typed, field-level request contract for every MCP tool call
+//!
+//! Defines the shared C4 authoring vocabulary — plan layer, statement/concern, link kind — reused across the add_*, fill_container, and drift payloads
+
 use serde::Deserialize;
 
 /// Which layer of the derived tree a read returns.

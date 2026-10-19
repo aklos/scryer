@@ -1,3 +1,7 @@
+/**
+ * Shared text field styling for titles, inline rows, and forms
+ */
+
 import type { InputHTMLAttributes } from "react";
 
 type InputVariant = "title" | "inline" | "bordered" | "ghost";

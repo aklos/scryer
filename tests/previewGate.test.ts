@@ -21,11 +21,11 @@ const otherButton: PreviewComponentInfo = { ...button, file: "src/legacy/Button.
 const components = [button];
 
 describe("previewEntryFor", () => {
-  it("shows a preview when the sidecar reports a mountable export for the node", () => {
+  it("When the sidecar reports a mountable export for the node, shows a preview", () => {
     expect(previewEntryFor({ kind: "symbol", name: "Button" }, components, "src/ui/Button.tsx")).toBe(button);
   });
 
-  it("matches by name alone when the node's anchor is elsewhere or missing", () => {
+  it("When the node's anchor is elsewhere or missing, matches by name alone", () => {
     expect(previewEntryFor({ kind: "symbol", name: "Button" }, components, undefined)).toBe(button);
     expect(previewEntryFor({ kind: "symbol", name: "Button" }, components, "src/other.tsx")).toBe(button);
   });
@@ -40,16 +40,16 @@ describe("previewEntryFor", () => {
     expect(previewEntryFor({ kind: "symbol", name: "resolveLaunch" }, components, "src/ui/Button.tsx")).toBeNull();
   });
 
-  it("omits the section when the sidecar reports nothing for the node", () => {
+  it("When the sidecar reports nothing for the node, omits the section", () => {
     expect(previewEntryFor({ kind: "symbol", name: "parseConfig" }, components, "src/config.ts")).toBeNull();
     expect(previewEntryFor({ kind: "symbol", name: "Button" }, [], "src/ui/Button.tsx")).toBeNull();
   });
 
-  it("omits the section while the component list is still loading", () => {
+  it("While the component list is still loading, omits the section", () => {
     expect(previewEntryFor({ kind: "symbol", name: "Button" }, null, "src/ui/Button.tsx")).toBeNull();
   });
 
-  it("never previews structural nodes, even when a file-level match exists", () => {
+  it("When a structural node has a file-level match, still never previews it", () => {
     expect(previewEntryFor({ kind: "component", name: "Button" }, components, "src/ui/Button.tsx")).toBeNull();
   });
 });

@@ -4,6 +4,14 @@
  * the list of renderable components it discovered. No agent involved —
  * components render by pointing an iframe at
  * `{url}/__preview?file=...&export=...`.
+ *
+ * Matches a model symbol to the sidecar's mountable export for it
+ *
+ * Connects to the project's preview sidecar and tracks its discovered component list
+ *
+ * Matches a model symbol to the sidecar's mountable export for it, by name and anchored file
+ *
+ * Connects to the project's preview sidecar and tracks its discovered component list
  */
 
 import { useEffect, useState } from "react";

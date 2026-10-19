@@ -60,3 +60,23 @@ pub fn anchors_untouched_since(
             .is_ok_and(|mtime| mtime < recorded)
     })
 }
+
+/// The project's exclusive lock, held across a read-modify-write of the
+/// evidence caches so concurrent sessions serialize. Released on drop.
+pub struct ProjectLock {
+    _file: std::fs::File,
+}
+
+/// Acquire the project lock, blocking until it is free.
+pub fn lock_project_dir(dir: &Path) -> Result<ProjectLock, String> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(dir.join(".lock"))
+        .map_err(|e| format!("Failed to open the project lock: {e}"))?;
+    file.lock().map_err(|e| format!("Failed to acquire the project lock: {e}"))?;
+    Ok(ProjectLock { _file: file })
+}

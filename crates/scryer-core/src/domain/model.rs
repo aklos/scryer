@@ -1,3 +1,7 @@
+//! Walks a node's ancestry nearest-first to collect every inherited directive constraint above it.
+//!
+//! Derives whether a symbol carries no responsibilities, no properties, and isn't external — the empty-symbol flag mirrored in the frontend.
+
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 

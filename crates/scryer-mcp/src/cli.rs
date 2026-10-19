@@ -8,6 +8,20 @@
 //! reports its parent's. `status` and `statusline` exit 0 on every legal
 //! invocation, so they are safe to call from prompts; `check` and `lint` are
 //! gates and exit non-zero on findings.
+//!
+//! Prints the single-line statusline segment Claude Code shows under the prompt, staying silent when no model is found
+//!
+//! Walks up from a start directory to the nearest .scryer/, stopping at the first hit so a nested project never reports its parent's model
+//!
+//! Runs the CI gate: exit 0 clean, 1 on findings, 2 when no model exists or the repo is unusable
+//!
+//! Registers scryer-mcp's statusline command in Claude Code's project settings without ever clobbering a foreign statusline entry
+//!
+//! Renders the human-facing status line from loop-state counts: changes in flight, pending work, drift, and test verdicts
+//!
+//! Phrases outstanding plan work as "N pending across M nodes", suppressing the breakdown when the plan is empty
+//!
+//! Computes gate failures and notes across validator warnings, broken/missing anchors, drift, and test verdicts, naming any dimension it cannot verify
 
 use scryer_core::derived_tree::{DerivedCounts, DerivedStatus, DerivedTree};
 use scryer_core::ModelRef;
@@ -112,6 +126,38 @@ fn gate_project(args: &[String], usage: &str) -> Result<(PathBuf, Vec<String>), 
         None => std::env::current_dir()?,
     };
     Ok((find_project(&start).unwrap_or(start), flags))
+}
+
+/// `scryer-mcp migrate [path]`: move an authored model into the code once —
+/// claims into test descriptions, statements into module docs, untested
+/// claims into todo stubs, container names and styles into structure.toml.
+/// Prints each write; a second run prints nothing to do.
+pub(crate) fn run_migrate(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let (project, _) = gate_project(args, "scryer-mcp migrate [path]")?;
+    let report = match scryer_extract::claim_files::migrate(&project) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("migrate: {e}");
+            std::process::exit(2);
+        }
+    };
+    let section = |title: &str, rows: &[String]| {
+        if !rows.is_empty() {
+            println!("{title} ({}):", rows.len());
+            for r in rows {
+                println!("  {r}");
+            }
+        }
+    };
+    section("test descriptions", &report.described);
+    section("module docs", &report.documented);
+    section("todo stubs", &report.stubbed);
+    section("structure.toml", &report.structure);
+    section("left as they are", &report.skipped);
+    if !report.wrote_anything() {
+        println!("nothing to migrate: the code already says it all");
+    }
+    Ok(())
 }
 
 /// One test description that breaks the claim grammar.
@@ -362,8 +408,7 @@ mod tests {
         assert_eq!(statusline_start_dir("not json"), None);
     }
 
-    /// The line counts claims by status, and names surviving mutants only
-    /// when there are some.
+    /// When the status line is printed, counts claims by status, and names surviving mutants only if there are some.
     #[test]
     fn the_status_line_counts_claims_by_status() {
         let mut t = DerivedCounts { proven: 3, stale: 2, failing: 1, planned: 4, ..Default::default() };

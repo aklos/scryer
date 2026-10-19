@@ -1,3 +1,7 @@
+/**
+ * Editable lede paragraph directly under the page header
+ */
+
 import type { Editor } from "../../entities/model/editor";
 import {
   DESCRIPTION_MAX,

@@ -8,17 +8,17 @@ import { describe, expect, it } from "vitest";
 import { testRegression } from "../src/entities/model/health";
 
 describe("testRegression", () => {
-  it("is quiet while the test resolves and nothing changed", () => {
+  it("While the test resolves and nothing changed, is quiet", () => {
     expect(testRegression(null, null)).toBeNull();
     expect(testRegression("resolved", null)).toBeNull();
   });
 
-  it("reads changed when the fingerprint saw the test's content change", () => {
+  it("When the fingerprint saw the test's content change, reads changed", () => {
     expect(testRegression("resolved", "changed")).toBe("changed");
     expect(testRegression(null, "changed")).toBe("changed");
   });
 
-  it("reads gone when the test no longer resolves, from either input", () => {
+  it("When the test no longer resolves, from either input, reads gone", () => {
     expect(testRegression("symbolMissing", null)).toBe("gone");
     expect(testRegression("fileMissing", null)).toBe("gone");
     expect(testRegression("lineOutOfRange", null)).toBe("gone");

@@ -5,6 +5,12 @@
 //! shapes, `application` the prompts, `infrastructure` the subprocess runtime
 //! and the ACP client, `composition` the entry points another container uses.
 //! The re-exports below are that public surface.
+//!
+//! Relay prompts to the agent and stream its events and usage back to the host.
+//!
+//! Resolve which coding agent to launch and how to communicate with it.
+//!
+//! Negotiate and drive a session with an external coding agent.
 
 pub mod application;
 pub mod composition;

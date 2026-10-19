@@ -13,6 +13,16 @@
 //! concern with zero tagged responsibilities is itself signal ("this app has no
 //! auth story"), and explicit deletion is a user act. Slugs are normalized to
 //! kebab-case on write so the vocabulary can't fork on casing or spacing.
+//!
+//! Normalizes a raw concern value to a canonical kebab-case slug.
+//!
+//! Syncs concern tags and registry curation from the plan through to the committed layer without waiting for a fold.
+//!
+//! Writes concern tags and registry curation through from the plan to committed on every plan write, since a tag-only change never triggers a fold.
+//!
+//! Normalizes every responsibility's concern slug and mints a registry entry for each newly used slug, seeding standard descriptions/icons where they match.
+//!
+//! Maintains the model's concern registry (the vocabulary responsibilities tag themselves with) and keeps every used slug normalized and registered.
 
 
 use crate::domain::model::ScryModel;

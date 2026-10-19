@@ -164,6 +164,31 @@ mod tests {
         assert_eq!((parent.kind, parent.name.as_str()), (Kind::Container, "web"));
     }
 
+    /// When a styled crate has files outside its source root, asks them for no layer, and still flags a source module that matches no declared layer.
+    #[test]
+    fn only_source_modules_are_asked_for_a_layer() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "Cargo.toml", "[package]\nname = \"core\"\nversion = \"0.1.0\"\n");
+        write(d, "build.rs", "fn main() {}\n");
+        write(d, "examples/demo.rs", "fn main() {}\n");
+        write(d, "src/lib.rs", "pub mod domain;\npub mod odd;\n");
+        write(d, "src/domain/mod.rs", "pub fn rule() {}\n");
+        write(d, "src/odd/mod.rs", "pub fn thing() {}\n");
+        write(d, ".scryer/structure.toml", "[containers.\"\"]\nstyle = \"library\"\n");
+        let tree = derived_tree_uncached(d).unwrap();
+        let name_of = |id: &str| tree.planned.nodes.iter().find(|n| n.id == id).unwrap().name.clone();
+        let layerless: BTreeSet<String> = tree
+            .style_violations
+            .iter()
+            .filter(|v| v.kind == "layerless")
+            .map(|v| name_of(&v.node_id))
+            .collect();
+        assert_eq!(layerless, BTreeSet::from(["odd".to_string()]), "{:?}", tree.style_violations);
+        let exempt: BTreeSet<String> = tree.layer_exempt.iter().map(|id| name_of(id)).collect();
+        assert_eq!(exempt, BTreeSet::from(["build".to_string(), "examples".to_string()]));
+    }
+
     /// When no file changed, the cached tree is returned; touching a file
     /// derives again.
     #[test]
@@ -184,7 +209,8 @@ mod tests {
         assert_eq!(read_derived_tree_at(&r).unwrap().fingerprint, changed.fingerprint);
     }
 
-    /// Ad-hoc: summarise the derived tree of any repo without writing to it.
+    /// Ad-hoc: summarise the derived tree of any repo without writing to it [manual]
+    ///
     /// `REPO=/path cargo test -p scryer-extract dump_derived -- --ignored --nocapture`
     #[test]
     #[ignore]
@@ -269,10 +295,7 @@ mod tests {
         }
     }
 
-    /// A crate's lib.rs and main.rs are its root, not a component: their doc
-    /// describes the crate, their definitions and unit tests sit on it, and
-    /// a declared style asks no layer of them — while their imports stay in
-    /// the import graph.
+    /// When a crate has a lib.rs or main.rs, makes it the crate's root rather than a component, with its claims on the crate and its imports kept in the graph.
     #[test]
     fn a_crates_root_file_belongs_to_the_crate() {
         let dir = tempfile::tempdir().unwrap();

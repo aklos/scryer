@@ -22,7 +22,7 @@ describe("red edge reasons", () => {
     expect(nextOpenEdge("e1", { id: "plain" })).toBeNull();
   });
 
-  it("lists reasons only while the edge is the clicked one, never because a selection lights it", () => {
+  it("While the edge is the clicked one, lists its reasons, never because a selection lights it", () => {
     expect(showsViolationPanel({ violations: ["x"], highlighted: true })).toBe(false);
     expect(showsViolationPanel({ violations: ["x"], open: true })).toBe(true);
     expect(showsViolationPanel({ open: true })).toBe(false);

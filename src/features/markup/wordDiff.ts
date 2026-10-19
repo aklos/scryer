@@ -7,6 +7,8 @@
  * Granularity is the word, not the character: a reworded sentence reads as a
  * few replaced phrases, not a storm of single-letter edits. The caller paints
  * `added` and `removed` segments (green / struck red) and leaves `equal` plain.
+ *
+ * Word-level diff between two strings, used for reworded claims, descriptions, and link labels
  */
 
 export type WordSeg = { kind: "equal" | "added" | "removed"; text: string };

@@ -1,3 +1,7 @@
+/**
+ * Lists a node's claims grouped by concern, each rendered as a diff row with its verdict actions
+ */
+
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -42,6 +46,7 @@ import {
   WordDiffText,
 } from "../../shared/ui/pagekit";
 import { CTL_DROW, CTL_SROW, DIR_HL, RESP_ROW, STMT_HL_HOVER } from "./kit";
+import { onAddClaimRequest } from "../../features/derived-tree/addClaim";
 
 // --- responsibilities (the diff view) ---------------------------------------
 
@@ -218,6 +223,16 @@ export function ResponsibilitiesSection({
   // "Add responsibility" from read mode opens the editor seeded with a fresh
   // row; nothing is written to the model until Done.
   const [seedNewRow, setSeedNewRow] = useState(false);
+  // "Add claim" from the tree opens this editor seeded with a fresh row.
+  useEffect(
+    () =>
+      onAddClaimRequest(hostId, () => {
+        if (!editor || editing) return;
+        setSeedNewRow(true);
+        onToggle();
+      }),
+    [hostId, editor, editing, onToggle],
+  );
 
   return (
     <PageSection
