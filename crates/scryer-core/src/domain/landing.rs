@@ -19,6 +19,9 @@ pub struct LandingClaim {
     pub file: String,
     pub line: u32,
     pub state: ClaimState,
+    /// The claim's concern tags, shown at the end of its row.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub concerns: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -222,6 +225,7 @@ pub fn landing(
                 file: c.file.clone(),
                 line: c.line,
                 state: st.state,
+                concerns: c.concerns.clone(),
             };
             let verdict_in_window = st.recorded_at.is_some_and(|at| at >= start);
             match st.state {
