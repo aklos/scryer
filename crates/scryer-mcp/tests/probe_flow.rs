@@ -99,8 +99,12 @@ fn a_passing_test_is_ingested_probed_and_reset() {
     git(d, &["config", "user.name", "t"]);
     git(d, &["add", "-A"]);
     git(d, &["commit", "-qm", "init"]);
-    // A verdict must postdate the files it fingerprints.
-    std::thread::sleep(std::time::Duration::from_millis(1100));
+    // The verdict is fingerprinted against these files: date them an hour
+    // back, so its freshness never depends on landing in a later second.
+    let hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    for f in ["crates/notes/src/lib.rs", "crates/notes/src/draft.rs"] {
+        std::fs::File::options().write(true).open(d.join(f)).unwrap().set_modified(hour_ago).unwrap();
+    }
     write(
         d,
         "report.xml",

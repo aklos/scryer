@@ -654,9 +654,13 @@ mod tests {
     #[test]
     fn untouched_anchor_files_prove_freshness_by_stat_alone() {
         let (_dir, r) = project();
-        // Recording must land in a LATER second than the files' mtimes, or the
-        // fast path abstains (same-second edits are indistinguishable by stat).
-        std::thread::sleep(std::time::Duration::from_millis(1100));
+        // The fast path proves freshness only for files older than the
+        // record's second: date the fixture's files an hour back.
+        let hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        for f in ["src/m.ts", "src/m.spec.ts"] {
+            let file = std::fs::File::options().write(true).open(r.project_path().join(f)).unwrap();
+            file.set_modified(hour_ago).unwrap();
+        }
         ingest_report_file(&r, REPORT).unwrap();
         let model = working_model(&r).unwrap();
         let rec = read_cache(&r).results[0].clone();
@@ -860,8 +864,8 @@ mod tests {
   <testcase classname="core" name="draft::tests::saves"/>
   <testcase classname="core" name="draft::tests::loads"><failure message="boom"/></testcase>
 </testsuite>"#;
-        // Verdicts must postdate the files they fingerprint.
-        std::thread::sleep(std::time::Duration::from_millis(1100));
+        // The verdict lands in the same second the files were written: its
+        // freshness rests on the content hashes, not the clock.
         let summary = ingest_report_on(&r, &tree.planned, junit).unwrap();
         assert_eq!(summary.recorded, 2);
 

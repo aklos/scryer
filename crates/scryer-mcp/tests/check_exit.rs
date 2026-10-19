@@ -89,7 +89,6 @@ fn check_passes_a_clean_project_and_gates_stale_on_request() {
 #[test]
 fn check_fails_on_a_failing_claim() {
     let dir = project();
-    std::thread::sleep(std::time::Duration::from_millis(1100));
     ingest(
         dir.path(),
         "ingest_test_report",
