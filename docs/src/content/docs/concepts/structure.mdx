@@ -27,6 +27,6 @@ style = "hexagonal"
 
 ## Styles
 
-A style is a structural claim: which layers a container has and which may import which. The import graph is checked against it deterministically, and a violation is a red finding like a failing test. It is fixed by moving code, never by loosening the rule. A container's files outside its source root (build scripts, tool configs, examples) are asked for no layer.
+A style is a structural claim: which layers a container has and which may import which. The import graph is checked against it deterministically, and a violation is a red finding like a failing test. It is fixed by moving the code, or, when the declared style was a guess, by declaring the shape the code actually has; never by loosening a rule to let one violation through. A container's files outside its source root (build scripts, tool configs, examples) are asked for no layer.
 
 Renaming a container in the app writes its display name here.
