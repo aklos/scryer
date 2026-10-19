@@ -991,8 +991,15 @@ fn build_edges(
                         // path head for the call sites that follow.
                         None => {
                             if let Some(cands) = mod_files.get(cd).and_then(|m| m.get(leaf)) {
-                                if cands.len() == 1 && cands[0] != file {
-                                    file_edges.insert((file.to_string(), cands[0].to_string()));
+                                // `crate::a::b` names the file at that path;
+                                // other heads keep the unique-name match.
+                                let target = if head == "crate" {
+                                    module_file_at(cands, cd, &pref.segments[1..])
+                                } else {
+                                    (cands.len() == 1).then(|| cands[0])
+                                };
+                                if let Some(df) = target.filter(|df| *df != file) {
+                                    file_edges.insert((file.to_string(), df.to_string()));
                                 }
                             }
                         }
@@ -1215,10 +1222,14 @@ fn build_edges(
                 Some(_) => {} // ambiguous leaf — skip (under-report, never guess)
                 None => {
                     // The leaf names a module, not a def (`use scryer_core::drift;`).
-                    // Resolve to that module's file so the coupling still shows up.
+                    // Resolve to the file at that module path so the coupling
+                    // still shows up; a module declared inline has no file,
+                    // and a same-named file elsewhere in the crate is not it.
                     if let Some(cands) = mod_files.get(dst_dir).and_then(|m| m.get(sym)) {
-                        if cands.len() == 1 && cands[0] != file {
-                            file_edges.insert((file.to_string(), cands[0].to_string()));
+                        if let Some(df) = module_file_at(cands, dst_dir, &pref.segments[1..]) {
+                            if df != file {
+                                file_edges.insert((file.to_string(), df.to_string()));
+                            }
                         }
                     }
                 }
@@ -1236,6 +1247,17 @@ fn build_edges(
     symbol_edges.extend(guessed_edges.into_iter().map(|(src, dst)| Edge { src, dst, guessed: true }));
     symbol_edges.sort();
     (symbol_edges, sorted_edges(file_edges), externals)
+}
+
+/// The file of the Rust module at `segments` (the path below the crate root)
+/// among the candidates sharing its name: `src/a/b.rs` or `src/a/b/mod.rs`
+/// in the crate at `dir`. `None` when the module is declared inline or the
+/// path names no file.
+fn module_file_at<'a>(cands: &[&'a str], dir: &str, segments: &[String]) -> Option<&'a str> {
+    let base = if dir.is_empty() { "src/".to_string() } else { format!("{dir}/src/") };
+    let path = segments.join("/");
+    let (flat, nested) = (format!("{base}{path}.rs"), format!("{base}{path}/mod.rs"));
+    cands.iter().copied().find(|c| *c == flat || *c == nested)
 }
 
 /// The module name a Rust file contributes: its stem, except `mod.rs`/`lib.rs`/
@@ -3813,5 +3835,56 @@ fn add_one(x: u32) -> u32 {
             "packages/ui/src/button.ts"
         ));
         assert!(has_sym_edge(&ctx, "App", "Button"));
+    }
+
+    fn parsed(rel: &str, src: &str) -> ParsedFile {
+        ParsedFile {
+            rel_path: rel.to_string(),
+            source: src.to_string(),
+            parse: crate::domain::lang::parse_file(std::path::Path::new(rel), src).unwrap(),
+        }
+    }
+
+    /// When a type is named by a full path (`&crate::domain::status::Status`),
+    /// the path's module segments are not references: a fn elsewhere that
+    /// shares a module's name gets no edge.
+    #[test]
+    fn a_type_paths_module_segments_name_no_def() {
+        let files = vec![
+            parsed("src/lib.rs", "pub mod domain;\npub mod store;\n"),
+            parsed("src/domain/mod.rs", "pub mod status;\npub mod landing;\n"),
+            parsed("src/domain/status.rs", "pub struct Status;\n"),
+            parsed("src/store.rs", "pub fn status() {}\n"),
+            parsed(
+                "src/domain/landing.rs",
+                "pub fn landing(s: &crate::domain::status::Status) -> usize {\n    let _ = s;\n    1\n}\n",
+            ),
+        ];
+        let ctx = build_context("proj", &[container("", "core")], &files, &[]);
+        assert!(has_file_edge(&ctx, "src/domain/landing.rs", "src/domain/status.rs"));
+        assert!(!has_file_edge(&ctx, "src/domain/landing.rs", "src/store.rs"), "{:?}", ctx.file_edges);
+    }
+
+    /// When another crate's module is used by path (`use engine::scan;`), the
+    /// edge goes to the file at that path; a module declared inline in the
+    /// crate root has no file, so a same-named file deeper in the crate gets
+    /// no edge.
+    #[test]
+    fn a_module_path_resolves_only_to_the_file_at_that_path() {
+        let files = vec![
+            parsed("crates/engine/src/lib.rs", "pub mod adapters;\npub mod drift;\npub mod scan {\n    pub fn walk() {}\n}\n"),
+            parsed("crates/engine/src/adapters/mod.rs", "pub mod scan;\n"),
+            parsed("crates/engine/src/adapters/scan.rs", "pub fn read_dir() {}\n"),
+            parsed("crates/engine/src/drift.rs", "pub fn check() {}\n"),
+            parsed("crates/app/src/main.rs", "use engine::scan;\nuse engine::drift;\nfn main() {}\n"),
+        ];
+        let containers = vec![container("crates/engine", "engine"), container("crates/app", "app")];
+        let ctx = build_context("proj", &containers, &files, &[]);
+        assert!(has_file_edge(&ctx, "crates/app/src/main.rs", "crates/engine/src/drift.rs"));
+        assert!(
+            !has_file_edge(&ctx, "crates/app/src/main.rs", "crates/engine/src/adapters/scan.rs"),
+            "{:?}",
+            ctx.file_edges
+        );
     }
 }

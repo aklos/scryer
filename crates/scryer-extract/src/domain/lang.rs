@@ -1727,9 +1727,13 @@ fn collect_qualified_paths(node: Node, bytes: &[u8], out: &mut Vec<PathRef>) {
         if child.kind() == "use_declaration" {
             continue; // handled by collect_use_paths
         }
-        // A scoped_identifier nested inside another is just a prefix of it; only
-        // flatten the outermost occurrence.
-        if child.kind() == "scoped_identifier" && node.kind() != "scoped_identifier" {
+        // A scoped path nested inside another is just a prefix of it — the
+        // `crate::model` in `crate::model::Node`, whether that is a value path
+        // or a type path (`scoped_type_identifier`). Only the outermost one is
+        // a reference: its prefix names modules, and a module segment
+        // resolved as a leaf would bind to any def that shares its name.
+        let scoped = |k: &str| matches!(k, "scoped_identifier" | "scoped_type_identifier");
+        if scoped(child.kind()) && !scoped(node.kind()) {
             if let Some(segments) = flatten_use(child, bytes).into_iter().next() {
                 if segments.len() >= 2 {
                     out.push(PathRef {
@@ -1751,7 +1755,7 @@ fn flatten_use(node: Node, bytes: &[u8]) -> Vec<Vec<String>> {
         "identifier" | "type_identifier" | "crate" | "self" | "super" | "primitive_type" => {
             vec![vec![node.utf8_text(bytes).unwrap_or("").to_string()]]
         }
-        "scoped_identifier" => {
+        "scoped_identifier" | "scoped_type_identifier" => {
             let name = node
                 .child_by_field_name("name")
                 .and_then(|n| n.utf8_text(bytes).ok())

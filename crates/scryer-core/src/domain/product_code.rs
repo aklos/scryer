@@ -3,7 +3,7 @@
 //! `*.d.ts` mirror, a `stubs/` double, a build descriptor or generated source;
 //! the tree marks manifests, infrastructure and environment templates by file
 //! name. Deciding either is a question about a path, not about the disk —
-//! walking the project is `infrastructure::project_dir`.
+//! walking the project is `infrastructure::scan`.
 
 use std::collections::BTreeMap;
 use std::path::Path;
