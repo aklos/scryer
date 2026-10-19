@@ -36,6 +36,18 @@ import { rollupTestFindings, structuralBySubtree, testFindings } from "../entiti
 import { effectiveSourceMap, type ScryModel } from "../entities/model/viewmodel";
 import type { Editor } from "../entities/model/editor";
 
+/** Navigation a host sends through the event layer: the demo film, which
+ *  mounts this app and drives it frame by frame. The desktop backend never
+ *  sends it. */
+interface Navigate {
+  project?: string;
+  view?: WorkspaceView;
+  /** A node id, or `"landing"` for the since-you-last-looked page. */
+  page?: string;
+  diagramFocus?: string | null;
+  lens?: string | null;
+}
+
 /** Whether a keydown landed inside an editable field (input, textarea, or an
  *  in-place contentEditable). Global shortcuts that overlap with text entry
  *  (Ctrl+Space) bail out when this is true. */
@@ -66,6 +78,15 @@ export default function App() {
 
 function AppBody() {
   const storage = useModelStorage();
+  const { openProject, projectPath } = storage;
+  const opened = useRef(projectPath);
+  opened.current = projectPath;
+  useEffect(() => {
+    const un = listen<Navigate>("navigate", ({ payload }) => {
+      if (payload.project && payload.project !== opened.current) void openProject(payload.project);
+    });
+    return () => void un.then((f) => f());
+  }, [openProject]);
   const model = storage.model;
   if (!model || storage.status !== "ready") {
     return <ProjectPicker storage={storage} />;
@@ -299,6 +320,17 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
     openedFor.current = key;
     setSelected({ kind: "special", id: "session" });
   }, [projectPath]);
+
+  useEffect(() => {
+    const un = listen<Navigate>("navigate", ({ payload: nav }) => {
+      if (nav.view) setWorkspaceView(nav.view);
+      if (nav.page === "landing") setSelected({ kind: "special", id: "session" });
+      else if (nav.page) selectNode(nav.page);
+      if (nav.diagramFocus !== undefined) drillDiagram(nav.diagramFocus);
+      if (nav.lens !== undefined) setConcernLens(nav.lens);
+    });
+    return () => void un.then((f) => f());
+  }, [setWorkspaceView, selectNode, drillDiagram]);
 
   const onFixture = useCallback(
     (nodeId: string, renderStatus: string, renderError: string | null) => {
