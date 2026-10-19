@@ -1,5 +1,5 @@
 /**
- * The app's real components, mounted one at a time for a shot: its
+ * The app's real components, mounted one at a time for the film: its
  * stylesheet and dark theme, the film's base (demo/fixture.json derived from
  * aperture-pay, else fixture.ts), and claim rows as the node page draws them.
  */
@@ -13,22 +13,42 @@ import type { ClaimTestStatus, ClaimProbeStatus } from "../../src/entities/model
 import type { Responsibility } from "../../src/entities/model/viewmodel";
 import { ResponsibilitiesSection } from "../../src/widgets/node-page-sections/ResponsibilitiesSection";
 import { GAUGE_CHIP } from "../../src/widgets/node-page-sections/kit";
+import { REFUND_STUBS } from "../fixture";
 import type { DerivedClaim, Fixture } from "../types";
 
 applyTheme({ ...loadTheme(), colorMode: "dark" });
 
 export const fixture = base as Fixture;
 
-/** A claim of the base by its wording. */
+/** A claim of the base by its wording — or, for a claim the film writes and
+ *  deletes before it ever reaches the repo, the fixture's own stub. */
 export function claim(text: string): DerivedClaim {
-  const c = fixture.tree.claims.find((c) => c.description === text);
+  const c = fixture.tree.claims.find((c) => c.description === text) ?? REFUND_STUBS.find((c) => c.description === text);
   if (!c) throw new Error(`no claim "${text}" in the film's base`);
   return c;
 }
 
-/** A node of the base by name (`Ledger`), and its container-level id. */
-export function nodeId(name: string): string {
-  const n = fixture.tree.planned.nodes.find((n) => n.name === name && n.kind !== "symbol");
+/** In aperture-pay the Payments DB is an external system beside the banks,
+ *  so the context map sets the three externals in one column. */
+const FILM_PLACEMENTS: Record<string, { x: number; y: number }> = {
+  "Acquiring Bank": { x: 940, y: 40 },
+  "Card Networks": { x: 940, y: 290 },
+  "Payments DB": { x: 940, y: 540 },
+};
+
+/** The base's model with the story's placements (by node name) pinned on
+ *  the context and container levels, as the app would read them. */
+export const placedModel = {
+  ...fixture.tree.planned,
+  nodes: fixture.tree.planned.nodes.map((n) => {
+    const at = n.kind === "component" || n.kind === "symbol" ? undefined : (FILM_PLACEMENTS[n.name] ?? fixture.layout[n.id] ?? fixture.layout[n.name]);
+    return at ? { ...n, position: at } : n;
+  }),
+};
+
+/** A node of the base by name (`Ledger`), skipping code symbols. */
+export function nodeId(name: string, parent?: string): string {
+  const n = fixture.tree.planned.nodes.find((n) => n.name === name && n.kind !== "symbol" && (!parent || n.parentId === parent));
   if (!n) throw new Error(`no node "${name}" in the film's base`);
   return n.id;
 }
@@ -36,24 +56,28 @@ export function nodeId(name: string): string {
 /** How a row stands: planned (a todo test, no verdict yet), proven, or
  *  proven with a probe's mark. */
 export type RowState = "planned" | "proven" | "crosshair" | "doubleCheck";
+export type Row = { claim: DerivedClaim; state: RowState; css?: string };
 
 const RECORDED = 1_792_400_000;
 
-/** The film's grade for claim rows, by row id: proven is the bright state
- *  (white sentence, filled green flask), planned is dimmed with no change
- *  mark. The app's own emerald "+" for a planned claim is a product choice
- *  that reads backwards on screen, where green means proven. */
-function filmGrade(rows: { claim: DerivedClaim; state: RowState }[]): string {
+/** The film's grade for claim rows, by row id: proven is the full state
+ *  (off-white sentence, filled green flask), planned recedes with no change
+ *  mark — the app's emerald "+" for a planned claim is a product choice that
+ *  reads backwards on screen, where green means proven. A row's own `css`
+ *  (its motion) goes last. */
+function filmGrade(rows: Row[]): string {
   return rows
-    .map(({ claim: c, state }) => {
+    .map(({ claim: c, state, css }) => {
       const row = `#resp-${CSS.escape(c.id)}`;
-      return state === "planned"
-        ? `${row} { opacity: 0.45; }
-           ${row} > :first-child { visibility: hidden; }
-           ${row} .font-mono span { color: var(--text) !important; }`
-        : `${row} .font-mono span { color: #ffffff !important; }
-           ${row} span.absolute.right-1 { color: #4ade80 !important; }
-           ${row} .lucide-flask-conical { fill: rgba(74, 222, 128, 0.45); }`;
+      const grade =
+        state === "planned"
+          ? `${row} { opacity: 0.42; }
+             ${row} > :first-child { visibility: hidden; }
+             ${row} .font-mono span { color: var(--text) !important; }`
+          : `${row} .font-mono span { color: #ece9e2 !important; }
+             ${row} span.absolute.right-1 { color: var(--color-emerald-400) !important; }
+             ${row} .lucide-flask-conical { fill: rgb(52 211 153 / 0.35); }`;
+      return css ? `${grade}\n${row} { ${css} }` : grade;
     })
     .join("\n");
 }
@@ -61,10 +85,9 @@ function filmGrade(rows: { claim: DerivedClaim; state: RowState }[]): string {
 /**
  * Claim rows exactly as the node page draws them, read-only. A planned row
  * is one the committed layer lacks — the page marks it added and gives it
- * no test lane yet; every other row carries its test and verdict. `film`
- * lays the film's grade over them.
+ * no test lane yet; every other row carries its test and verdict.
  */
-export function ClaimRows({ host, rows, film = true }: { host: string; rows: { claim: DerivedClaim; state: RowState }[]; film?: boolean }) {
+export function ClaimRows({ host, rows }: { host: string; rows: Row[] }) {
   const resps: Responsibility[] = rows.map(({ claim: c }) => ({ id: c.id, statement: c.description, concern: c.concerns?.[0] }));
   const prev = resps.filter((_, i) => rows[i].state !== "planned");
   const proven = rows.filter((r) => r.state !== "planned");
@@ -79,7 +102,7 @@ export function ClaimRows({ host, rows, film = true }: { host: string; rows: { c
         c.id,
         {
           respId: c.id,
-          probes: 2,
+          probes: 1,
           survived: state === "crosshair" ? 1 : 0,
           survivors: state === "crosshair" ? ["doubling the cap went unnoticed"] : [],
           stale: false,
@@ -89,27 +112,27 @@ export function ClaimRows({ host, rows, film = true }: { host: string; rows: { c
   );
   return (
     <>
-    {film && <style>{filmGrade(rows)}</style>}
-    <ResponsibilitiesSection
-      host="node"
-      hostId={host}
-      resps={resps}
-      prevResps={prev}
-      plannedHosts={new Map()}
-      concerns={fixture.tree.planned.concerns ?? []}
-      sourceMap={{}}
-      testMap={testMap}
-      testStates={{}}
-      testVerdicts={testVerdicts}
-      probeResults={probeResults}
-      projectPath={null}
-      leafHost={false}
-      codeBackedHost
-      mintId={() => "draft"}
-      editor={undefined}
-      editing={false}
-      onToggle={() => {}}
-    />
+      <style>{filmGrade(rows)}</style>
+      <ResponsibilitiesSection
+        host="node"
+        hostId={host}
+        resps={resps}
+        prevResps={prev}
+        plannedHosts={new Map()}
+        concerns={fixture.tree.planned.concerns ?? []}
+        sourceMap={{}}
+        testMap={testMap}
+        testStates={{}}
+        testVerdicts={testVerdicts}
+        probeResults={probeResults}
+        projectPath={null}
+        leafHost={false}
+        codeBackedHost
+        mintId={() => "draft"}
+        editor={undefined}
+        editing={false}
+        onToggle={() => {}}
+      />
     </>
   );
 }

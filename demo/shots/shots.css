@@ -23,11 +23,9 @@
   padding-right: 64px !important;
 }
 
-/* Film grade: body text a step brighter than the desktop's, so a settled
-   claim reads as settled on a projected frame. */
-.dark.shot-grade {
-  --text: #dde3ea;
-  --text-secondary: #dde3ea;
+/* Film grade: a settled claim reads at full strength on the page. */
+.shot-grade {
+  --text-secondary: var(--text);
 }
 
 /* The page's no-concern lane glyph is a dashed circle, which reads as a
@@ -57,7 +55,8 @@
 .shot-hex .react-flow__node .absolute.bottom-1\.5.right-2\.5 {
   font-size: var(--film-count) !important;
 }
-.shot-hex .react-flow__node .overflow-hidden {
+.shot-hex .react-flow__node .overflow-hidden,
+.shot-hex .react-flow__node .line-clamp-2 {
   overflow: visible !important;
 }
 .shot-hex .react-flow__node .pointer-events-auto.absolute.left-2\.5 {
@@ -73,4 +72,15 @@
 }
 .shot-hex .react-flow__edge path {
   stroke-width: var(--film-edge) !important;
+}
+
+/* Implied edges (the inward dependencies a style draws) take the accent
+   when a beat shows them. */
+.shot-hex .react-flow__edge.shot-implied path {
+  stroke: var(--accent) !important;
+}
+
+/* A page that shows where each claim's test lives keeps the test line. */
+.shot-claims.with-tests div.mt-1:has([data-cam="resp-test"]) {
+  display: flex;
 }
