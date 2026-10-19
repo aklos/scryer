@@ -1,8 +1,7 @@
-//! Strips JSON-schema generator noise (dialect URLs, null defaults, titles) from advertised tool schemas so a client model isn't taxed reading them
-//!
-//! Reads and sets the session's current change id, scoped so a change opened in one project never tags writes into another
-//!
-//! Builds the server by combining every tool category's router and slimming each tool's advertised schema
+//! The MCP server: one stdio process per agent session, advertising the read
+//! and testing tools — their input schemas stripped of generator noise once at
+//! construction — and the connect-time instructions. The session it serves is
+//! the one its harness process last bound, else the one named in the env.
 
 use crate::instructions::INSTRUCTIONS;
 use rmcp::{

@@ -5,15 +5,19 @@
 //! All three name the event fields the same way — `hook_event_name`,
 //! `session_id`, `cwd`, `tool_name`, `tool_input` — so one client serves them
 //! all, dispatching on the event and tool names. Everything runs in-process
-//! against the project's model and the session's log
+//! against the project's derived tree and the session's log
 //! (`.scryer/sessions/<session_id>.jsonl`); the desktop app need not be open.
 //!
-//! - UserPromptSubmit  → bind the harness process to the session, say nothing
-//!                       (the prompt itself is never read)
-//! - PostToolUse read  → inject the file's governing intent (once per session
-//!                       until it changes)
+//! - UserPromptSubmit  → bind the harness process to the session and keep the
+//!                       first prompt, clipped, as its fallback title; say
+//!                       nothing
+//! - PostToolUse read  → inject what the tree says about the file — its node,
+//!                       description and claims (once per session until it
+//!                       changes)
 //! - PostToolUse edit… → record the touch, say nothing
-//! - Pre/PostToolUse shell → record the files the command modified
+//! - Pre/PostToolUse shell → record the files the command modified; while a
+//!                       probe is open, refuse a git command that would
+//!                       discard uncommitted work outside the probe worktree
 //! - Stop              → close the session's record — the todo tests it
 //!                       wrote, the claims its edits reach — say nothing
 //!
@@ -26,41 +30,9 @@
 //! file named in the envelope. Copilot fires post-read like Claude Code does,
 //! so it gets the same post-Read overlay.
 //!
-//! Every failure path — no model above the working directory, malformed input,
-//! an unreadable model — exits 0 with no output: a hook must never break the
-//! session it observes.
-//!
-//! Finds the project's model by walking up from $CLAUDE_PROJECT_DIR or the event's working directory
-//!
-//! Renders a compact intent overlay (governing claims, directives, pending work) for files as they are read or patched, deduped per session
-//!
-//! Discovers the live app endpoint per project and refuses to trust a crashed author's stale discovery file
-//!
-//! Records one touched file at zero token cost to the session
-//!
-//! Emits injected context in the envelope shape each harness reads it from
-//!
-//! Dispatches an incoming hook event to the prompt-submit, tool-use, or stop handler by event name
-//!
-//! On session stop, runs the close, unfolded-work and probe gates, blocking once with what is missing or showing the session summary
-//!
-//! Bridges Claude Code / Copilot / Codex hook events to the running Scryer app over a loopback HTTP endpoint
-//!
-//! Renders the compact intent overlay text for a file, or nothing when the model has nothing to say about it
-//!
-//! Reads the file a tool call names, under either Claude/Codex's or Copilot's key
-//!
-//! Parses Add/Update/Delete/Move markers out of an apply_patch envelope
-//!
-//! Injects the intent overlay for every file a Codex apply_patch is about to touch, since Codex reads fire no hook events
-//!
-//! Maps a harness's own tool name to what it means to scryer (a read, a write, a patch), reconciling Claude Code's, Copilot's, and Codex's differing vocabularies
-//!
-//! Extracts the file paths named by an apply_patch envelope, wherever it's carried (native, a Bash heredoc, or Copilot's freeform tool)
-//!
-//! Binds the harness process to the session on each prompt, so an MCP server spawned before a /clear follows the session
-//!
-//! On a read, injects the file's intent overlay; on a write or a finished shell command, records the files touched
+//! Every failure path — no project above the working directory, malformed
+//! input, a tree that cannot be derived — exits 0 with no output: a hook must
+//! never break the session it observes.
 
 use scryer_core::ModelRef;
 use std::io::Read;
