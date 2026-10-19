@@ -1,5 +1,5 @@
 /**
- * Reactive read of the active color mode, since theme lives on the DOM class rather than React state
+ * A hook that tracks whether the dark color mode is active.
  */
 
 import { useEffect, useState } from "react";

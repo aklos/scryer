@@ -1,9 +1,5 @@
 /**
- * Provides the pixel-identical read/edit inline text field every renameable label uses
- *
- * Provides the shared bordered text/select field styling used across forms and settings
- *
- * Provides the shared section chrome and commit-on-Done editing shell every page section uses
+ * The shared form fields: Input and Select.
  */
 
 export { Input } from "./Input";

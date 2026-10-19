@@ -1,7 +1,7 @@
 /**
- * Shared editing shell for a page section: drafts changes locally and commits only on Done
- *
- * Standard wiki-style section chrome (eyebrow heading, hover-revealed edit toggle) shared by every page section
+ * Page-section building blocks: `PageSection` (the wiki-style eyebrow heading
+ * with a hover-revealed Edit toggle), `SectionEditor` (the one editing shell:
+ * a local draft that commits only on Done), plus `SegField` and `Empty`.
  */
 
 import {
