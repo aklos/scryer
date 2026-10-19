@@ -17,6 +17,10 @@ import { TopBar, type WorkspaceView } from "../widgets/top-bar/TopBar";
 import { DiagramView } from "../widgets/diagram-canvas/DiagramView";
 import { NodePage, type Selected, type SpecialPage } from "../pages/node/NodePage";
 import { ChangesPage, DarkCodePage, SessionPage, UnmappedClaimsPage } from "../pages";
+import { LandingPage } from "../pages/landing/LandingPage";
+import { makeDerivedEditor } from "../features/derived-tree/derivedEditor";
+import { takeLastOpened } from "../features/derived-tree/derivedSetting";
+import { useToast } from "../shared/feedback/Toast";
 import { ProjectPicker } from "../pages/project-picker/ProjectPicker";
 import { SearchPalette } from "../features/search/SearchPalette";
 import { planCounts } from "../features/change-marks/changeMarks";
@@ -113,6 +117,8 @@ function AppBody() {
       externalGeneration={storage.externalGeneration}
       openProject={storage.openProject}
       closeProject={storage.closeProject}
+      derived={storage.derived}
+      setDerived={storage.setDerived}
     />
   );
 }
@@ -132,6 +138,8 @@ function Workspace({
   externalGeneration,
   openProject,
   closeProject,
+  derived,
+  setDerived,
 }: {
   model: ScryModel;
   committed: ScryModel | null;
@@ -141,14 +149,26 @@ function Workspace({
   modelRef: string | null;
   build: ModelBuild;
   setAgentRunning: (running: boolean) => void;
-  reloadFromDisk: () => Promise<void>;
+  reloadFromDisk: () => Promise<boolean>;
   changeLog: ReturnType<typeof useModelStorage>["changeLog"];
   history: ReturnType<typeof useModelStorage>["history"];
   externalGeneration: number;
   openProject: (path: string) => Promise<void>;
   closeProject: () => void;
+  derived: boolean;
+  setDerived: (on: boolean) => Promise<void>;
 }) {
   const agent = useAgentSession();
+  const { toast } = useToast();
+  // When this project was last opened before now: the landing page's window.
+  // Taken once per project (StrictMode re-runs effects).
+  const [since, setSince] = useState(0);
+  const sinceFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!projectPath || sinceFor.current === projectPath) return;
+    sinceFor.current = projectPath;
+    setSince(takeLastOpened(projectPath));
+  }, [projectPath]);
   // One preview sidecar per open project; node pages derive their Preview
   // section from the exports it reports.
   const preview = usePreviewServer(projectPath);
@@ -190,7 +210,11 @@ function Workspace({
 
   // Claim test verdicts: cheap, refreshed live when the on-disk cache changes
   // (an agent ingesting a report mid-session) — not only on the busy edge.
-  const { verdicts: testVerdicts, probes: probeResults } = useTestStatuses(projectPath, writing);
+  const {
+    verdicts: testVerdicts,
+    probes: probeResults,
+    refresh: refreshTests,
+  } = useTestStatuses(projectPath, writing);
 
   // The agent session log: what each session was asked and what it did,
   // re-read live as the hook server appends. The top bar shows its badge.
@@ -431,8 +455,10 @@ function Workspace({
     const top = model.nodes.find((n) => !n.parentId);
     if (!top) return; // model not loaded yet; try again when it is
     autoSelectedFor.current = key;
-    if (!selected) selectNode(top.id);
-  }, [model, projectPath, selected, selectNode]);
+    // The derived tree opens on what changed since you last looked.
+    if (derived) setSelected({ kind: "special", id: "session" });
+    else if (!selected) selectNode(top.id);
+  }, [model, projectPath, selected, selectNode, derived]);
 
   const onFixture = useCallback(
     (nodeId: string, renderStatus: string, renderError: string | null) => {
@@ -607,7 +633,25 @@ function Workspace({
     [updateModel, projectPath, refreshHealth, committed],
   );
 
-  const pageEditor = writing ? undefined : editor;
+  // The derived tree edits the code: claims into test files, container names
+  // into structure.toml. Structural intents do nothing there.
+  const derivedEditor = useMemo<Editor | undefined>(
+    () =>
+      derived && projectPath
+        ? makeDerivedEditor({
+            projectPath,
+            model,
+            onWritten: () => {
+              void reloadFromDisk();
+              refreshObservability();
+              refreshTests();
+            },
+            onError: (m) => toast(m),
+          })
+        : undefined,
+    [derived, projectPath, model, reloadFromDisk, refreshObservability, refreshTests, toast],
+  );
+  const pageEditor = writing ? undefined : derivedEditor ?? editor;
 
   // Persist a manual card placement from the map (null releases it back to
   // auto-layout — the re-layout control). Pure cosmetics — the plan diff
@@ -669,6 +713,8 @@ function Workspace({
         sessionLive={sessionLog.live}
         sessionOpen={sessionOpen}
         onOpenSession={() => openSpecial("session")}
+        derived={derived}
+        onSetDerived={(on) => void setDerived(on)}
       />
       <div className="flex min-h-0 flex-1">
         <ModelTree
@@ -692,6 +738,7 @@ function Workspace({
           onSetConcernLens={setConcernLens}
           testTally={testTally}
           structural={structural}
+          derived={derived}
         />
         {view === "diagram" ? (
           <DiagramView
@@ -708,7 +755,9 @@ function Workspace({
             concernLens={concernLens}
           />
         ) : selected?.kind === "special" ? (
-          selected.id === "changes" ? (
+          derived && selected.id !== "dark" ? (
+            <LandingPage projectPath={projectPath} since={since} model={model} onSelectNode={selectNode} />
+          ) : selected.id === "changes" ? (
             <ChangesPage
               planDiff={planDiff}
               model={model}
@@ -742,8 +791,10 @@ function Workspace({
             onSelectGroup={selectGroup}
             onFixture={projectPath && !writing ? onFixture : undefined}
             preview={preview}
-            changeLog={changeLog}
-            history={history}
+            // The authored model's journal and history mean nothing for a
+            // tree read from the code.
+            changeLog={derived ? EMPTY_LOG : changeLog}
+            history={derived ? EMPTY_HISTORY : history}
             driftScopes={driftScopes}
             onCheckDrift={pageEditor ? onCheckDrift : undefined}
           />
@@ -787,3 +838,5 @@ function Workspace({
 
 /** Stable empty set so children don't re-render on a fresh `new Set()` each pass. */
 const EMPTY_IDS: ReadonlySet<string> = new Set();
+const EMPTY_LOG: ReturnType<typeof useModelStorage>["changeLog"] = [];
+const EMPTY_HISTORY: ReturnType<typeof useModelStorage>["history"] = [];

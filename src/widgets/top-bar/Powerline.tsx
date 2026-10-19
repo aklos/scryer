@@ -95,9 +95,29 @@ export function Powerline({
         )}
       </button>
 
+      {/* Derived tree: claim states in place of anchor coverage. Click for
+          what changed since you last looked. */}
+      {health?.derivedStatus && (
+        <button
+          type="button"
+          onClick={() => onOpenSpecial("session")}
+          className="seg"
+          style={sb("color-mix(in srgb, var(--text) 4%, var(--surface-canvas))")}
+          title="Claims by derived status — proven, stale, failing, planned. Click for what changed since you last looked."
+        >
+          <span className="pl-strong font-medium">{health.derivedStatus.totals.proven}</span>
+          <span className="text-[var(--text-secondary)]">proven</span>
+          <span className="text-[var(--text-tertiary)]">
+            · {health.derivedStatus.totals.stale} stale · {health.derivedStatus.totals.failing} failing ·{" "}
+            {health.derivedStatus.totals.planned} planned
+          </span>
+        </button>
+      )}
+
       {/* Coverage — anchored / anchorable claims (the model→code direction).
           Click to list the unmapped claims (the inverse; symmetric with the
           dark-code segment that follows). */}
+      {!health?.derivedStatus && (
       <button
         type="button"
         onClick={() => onOpenSpecial("unmapped")}
@@ -114,6 +134,7 @@ export function Powerline({
           <span className="text-[var(--text-secondary)]">claims mapped —</span>
         )}
       </button>
+      )}
 
       {/* Dark code — files under a node's boundary that no claim reads into (the
           code→model direction). Click to list them on the special page. */}
@@ -175,7 +196,7 @@ export function Powerline({
             cancel
           </button>
         </>
-      ) : (
+      ) : health?.derivedStatus ? null : (
         <>
           <button
             type="button"

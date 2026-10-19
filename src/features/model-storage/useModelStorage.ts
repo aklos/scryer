@@ -24,10 +24,14 @@ import { registerConcerns, respTruthChanged, stampTouches } from "../../entities
 import { stripMarkup } from "../markup/markup";
 import { EMPTY_DIFF, planDiff as computePlanDiff, type ModelDiff } from "../../entities/model/planDiff";
 import type { HistoryEvent } from "../../entities/model/history";
+import { readDerivedSetting, writeDerivedSetting } from "../derived-tree/derivedSetting";
 
 const RECENT_KEY = "scryer:recent-projects";
 const RECENT_CAP = 8;
 const SAVE_DEBOUNCE_MS = 500;
+/** How often the derived tree is re-read while it is on: it follows the
+ *  code, and the watcher only covers `.scryer/`. */
+const DERIVED_POLL_MS = 4000;
 
 function readRecent(): string[] {
   try {
@@ -298,9 +302,14 @@ export interface ModelStorage {
    *  (plan edits, and the committed model when it folds work in) and loads the
    *  final result, WITHOUT writing our (possibly stale) in-memory model back
    *  over the agent's work. */
-  reloadFromDisk: () => Promise<void>;
+  reloadFromDisk: () => Promise<boolean>;
   /** Drop a recent project from localStorage. */
   forgetRecent: (path: string) => void;
+  /** The "derived tree (preview)" project setting: the model is read from
+   *  packaging and tests instead of the authored files, and is read-only
+   *  here — edits go to the code through the derived editor. */
+  derived: boolean;
+  setDerived: (on: boolean) => Promise<void>;
 }
 
 export function useModelStorage(): ModelStorage {
@@ -314,6 +323,8 @@ export function useModelStorage(): ModelStorage {
   const [recentProjects, setRecentProjects] = useState<string[]>(() => readRecent());
   const [changeLog, setChangeLog] = useState<ChangeRevision[]>([]);
   const [history, setHistory] = useState<HistoryEvent[]>([]);
+  const [derived, setDerivedState] = useState(false);
+  const derivedRef = useRef(false);
 
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Exact bytes of our last PLANNED write. A `model-changed` event whose plan
@@ -385,7 +396,8 @@ export function useModelStorage(): ModelStorage {
   const applyLoadedRaw = useCallback((raw: string) => {
     const loaded = JSON.parse(raw) as ScryModel;
     const prevModel = modelStateRef.current;
-    if (prevModel) {
+    // A re-derived tree is the code changing, not an agent writing the model.
+    if (prevModel && !derivedRef.current) {
       // Journal this external write for the Recent changes page.
       const revItems = diffRevision(prevModel, loaded);
       if (revItems.length > 0) {
@@ -511,6 +523,10 @@ export function useModelStorage(): ModelStorage {
         return;
       }
       const ref = `project:${path}`;
+      const derivedOn = readDerivedSetting(path);
+      await invoke("set_derived_tree", { on: derivedOn }).catch(() => {});
+      derivedRef.current = derivedOn;
+      setDerivedState(derivedOn);
       try {
         // The committed model decides whether a model exists at all; the plan
         // is the working layer (it falls back to the committed model when no
@@ -590,6 +606,8 @@ export function useModelStorage(): ModelStorage {
     (updater: (m: ScryModel) => ScryModel) => {
       setModel((cur) => {
         if (!cur || !modelRef) return cur;
+        // The derived tree is read from the code; it has no file to save to.
+        if (derivedRef.current) return cur;
         const edited = updater(cur);
         if (edited === cur) return cur;
         // No status/baseline bookkeeping here any more: a canvas edit just
@@ -649,22 +667,30 @@ export function useModelStorage(): ModelStorage {
   // NEVER write the in-memory model back at the end of an agent run: if a live
   // reload was missed the in-memory model is stale/empty and the write would
   // clobber the agent's work (only the separate baseline file would survive).
-  const reloadFromDisk = useCallback(async () => {
+  const reloadFromDisk = useCallback(async (): Promise<boolean> => {
     const ref = modelRefRef.current;
-    if (!ref) return;
+    if (!ref) return false;
+    let applied = false;
     try {
       const planned = await invoke<string>("read_planned", { refStr: ref });
-      if (planned !== lastWrittenRaw.current) applyLoadedRaw(planned);
+      if (planned !== lastWrittenRaw.current) {
+        applyLoadedRaw(planned);
+        applied = true;
+      }
     } catch {
       /* transient — ignore */
     }
     try {
       const committedRaw = await invoke<string>("read_model", { refStr: ref });
-      if (committedRaw !== lastCommittedRaw.current) applyCommittedRaw(committedRaw);
+      if (committedRaw !== lastCommittedRaw.current) {
+        applyCommittedRaw(committedRaw);
+        applied = true;
+      }
     } catch {
       /* transient — ignore */
     }
     await loadHistory(ref);
+    return applied;
   }, [applyLoadedRaw, applyCommittedRaw, loadHistory]);
 
   // The plan: how the working draft diverges from the committed model. Computed
@@ -674,6 +700,31 @@ export function useModelStorage(): ModelStorage {
   const planDiff = useMemo<ModelDiff>(
     () => (committed && model ? computePlanDiff(committed, model) : EMPTY_DIFF),
     [committed, model],
+  );
+
+  // The derived tree follows the code: re-read it while it is on.
+  useEffect(() => {
+    if (!derived || !modelRef) return;
+    const t = setInterval(() => {
+      void reloadFromDisk().then((changed) => {
+        if (changed) setExternalGeneration((g) => g + 1);
+      });
+    }, DERIVED_POLL_MS);
+    return () => clearInterval(t);
+  }, [derived, modelRef, reloadFromDisk]);
+
+  const setDerived = useCallback(
+    async (on: boolean) => {
+      if (!projectPath) return;
+      writeDerivedSetting(projectPath, on);
+      await invoke("set_derived_tree", { on }).catch(() => {});
+      derivedRef.current = on;
+      setDerivedState(on);
+      cancelPendingSave();
+      await reloadFromDisk();
+      setExternalGeneration((g) => g + 1);
+    },
+    [projectPath, reloadFromDisk, cancelPendingSave],
   );
 
   return {
@@ -695,5 +746,7 @@ export function useModelStorage(): ModelStorage {
     setAgentRunning,
     reloadFromDisk,
     forgetRecent,
+    derived,
+    setDerived,
   };
 }

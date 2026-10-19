@@ -52,6 +52,8 @@ export function TopBar({
   sessionLive = false,
   sessionOpen = false,
   onOpenSession,
+  derived = false,
+  onSetDerived,
 }: {
   projectPath: string | null;
   view: WorkspaceView;
@@ -67,6 +69,9 @@ export function TopBar({
   /** The session page is the one showing — the entry reads pressed. */
   sessionOpen?: boolean;
   onOpenSession?: () => void;
+  /** The "derived tree (preview)" project setting. */
+  derived?: boolean;
+  onSetDerived?: (on: boolean) => void;
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const projectName = projectPath?.split("/").filter(Boolean).pop() ?? "scryer";
@@ -83,6 +88,15 @@ export function TopBar({
     },
     { id: "close", label: "Close project", onSelect: onCloseProject },
     { id: "settings", label: "Settings", onSelect: onOpenSettings },
+    ...(projectPath && onSetDerived
+      ? [
+          {
+            id: "derived",
+            label: derived ? "Derived tree (preview): on" : "Derived tree (preview): off",
+            onSelect: () => onSetDerived(!derived),
+          },
+        ]
+      : []),
   ];
 
   return (

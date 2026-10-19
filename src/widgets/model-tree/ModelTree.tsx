@@ -59,6 +59,7 @@ import { ContextMenu, type ContextMenuItem } from "../../features/search/Context
 import { ConfirmPopover } from "../../shared/feedback/ConfirmPopover";
 import { Select } from "../../shared/ui/Select";
 import type { Selected } from "../../pages/node/NodePage";
+import { requestAddClaim } from "../../features/derived-tree/addClaim";
 
 const INDENT = 14;
 // Fixed gutter at the row's left edge carrying the change letter; depth indent
@@ -187,6 +188,7 @@ export function ModelTree({
   previewable,
   testTally,
   structural,
+  derived = false,
 }: {
   model: ScryModel;
   /** Symbol ids the preview sidecar can render — derived from its export list,
@@ -224,6 +226,9 @@ export function ModelTree({
    *  id — from {@link structuralBySubtree}. Shown on every row, lens or not:
    *  it is the trail from a flagged system down to the file to fix. */
   structural?: ReadonlyMap<string, readonly StyleViolation[]>;
+  /** The derived tree is showing: its structure is the code's, so the tree
+   *  offers only what lands in the code — add a claim, rename a container. */
+  derived?: boolean;
 }) {
   const [width, setWidth] = useState(() => {
     const saved = Number(localStorage.getItem("scryer:treeWidth"));
@@ -434,7 +439,7 @@ export function ModelTree({
   // Right-clicking the empty tree surface adds a top-level node — the root is
   // the "parent" of systems, mirroring right-click-to-add-child on a node.
   const openRootMenu = (e: React.MouseEvent) => {
-    if (!editor) return;
+    if (!editor || derived) return;
     e.preventDefault();
     setMenu({ x: e.clientX, y: e.clientY, items: rootMenuItems() });
   };
@@ -444,6 +449,22 @@ export function ModelTree({
     e.preventDefault();
     e.stopPropagation();
     const items: ContextMenuItem[] = [];
+    if (derived) {
+      if (node.kind === "system" || node.kind === "container" || node.kind === "component") {
+        items.push({
+          id: "add-claim",
+          label: "Add claim",
+          onSelect: () => {
+            onSelectNode(node.id);
+            requestAddClaim(node.id);
+          },
+        });
+      }
+      if (node.kind === "container")
+        items.push({ id: "rename", label: "Rename", onSelect: () => setRenaming(node.id) });
+      if (items.length > 0) setMenu({ x: e.clientX, y: e.clientY, items });
+      return;
+    }
     const canHaveChildren = node.kind !== "symbol" && node.kind !== "person";
     if (canHaveChildren) {
       const childKind = childKindFor(node.kind);
@@ -499,7 +520,7 @@ export function ModelTree({
   };
 
   const groupMenu = (e: React.MouseEvent, group: Group) => {
-    if (!editor) return;
+    if (!editor || derived) return;
     e.preventDefault();
     e.stopPropagation();
     setMenu({
@@ -640,7 +661,7 @@ export function ModelTree({
   };
 
   const dropProps = (row: TreeRow) => {
-    if (!editor) return {};
+    if (!editor || derived) return {};
     const key = `${row.kind}:${row.id}`;
     const valid =
       row.kind === "node" ? canDropOnNode(row.node!) : canDropOnGroup(row.group!);
@@ -665,7 +686,7 @@ export function ModelTree({
   };
 
   const dragProps = (node: Node) =>
-    editor && renaming !== node.id
+    editor && !derived && renaming !== node.id
       ? {
           draggable: true,
           onDragStart: (e: React.DragEvent) => {

@@ -216,6 +216,8 @@ export interface ModelHealthReport {
   structural: StyleReport;
   /** The project's style table (built-ins plus `.scryer/styles/*.json`). */
   styles?: StyleDef[];
+  /** The derived tree's claim states and health counts, when it is on. */
+  derivedStatus?: import("./derived").DerivedStatus;
 }
 
 /** Per-claim state of the ATTACHED TEST's fingerprint, from the test-namespaced
@@ -264,6 +266,9 @@ export interface ClaimProbeStatus {
   /** The code moved on since these probes ran — the result describes a past. */
   stale: boolean;
   recordedAt: number;
+  /** `"mutation"` when the breaks came from an ingested mutation report,
+   *  which carries no fingerprints and so holds as of its ingest. */
+  source?: string;
 }
 
 /** respId → probe result, for row lookups. */
@@ -317,11 +322,16 @@ export function testLaneGlyph(
 export function probeTitle(probe: ClaimProbeStatus | undefined): string {
   const mark = probeMark(probe);
   if (mark === "none" || !probe) return "";
+  // A mutation report is not fingerprinted: it holds as of its ingest.
+  const asOf =
+    probe.source === "mutation"
+      ? ` (mutation report, as of ${new Date(probe.recordedAt * 1000).toLocaleString()})`
+      : "";
   if (mark === "hollow") {
     const lines = probe.survivors.map((s) => `  • ${s}`).join("\n");
-    return `\nPROBE: ${probe.survived} of ${probe.probes} deliberate break(s) went UNCAUGHT — this test does not hold the claim:\n${lines}`;
+    return `\nPROBE${asOf}: ${probe.survived} of ${probe.probes} deliberate break(s) went UNCAUGHT — this test does not hold the claim:\n${lines}`;
   }
-  return `\nPROBE: all ${probe.probes} deliberate break(s) were caught. A sample, not a proof.`;
+  return `\nPROBE${asOf}: all ${probe.probes} deliberate break(s) were caught. A sample, not a proof.`;
 }
 
 /** respId → verdict, for row lookups. */
