@@ -341,6 +341,7 @@ mod tests {
             file_nodes: Default::default(),
             dark_files: Vec::new(),
             style_violations: Vec::new(),
+            layer_exempt: Vec::new(),
         }
     }
 

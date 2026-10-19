@@ -215,6 +215,7 @@ mod tests {
             ]),
             dark_files: vec!["src/a.rs".into()],
             style_violations: Vec::new(),
+            layer_exempt: Vec::new(),
         };
         let status = DerivedStatus {
             claims: vec![

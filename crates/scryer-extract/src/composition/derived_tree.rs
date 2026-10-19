@@ -164,6 +164,33 @@ mod tests {
         assert_eq!((parent.kind, parent.name.as_str()), (Kind::Container, "web"));
     }
 
+    /// What sits outside a styled crate's source root (a build script, an
+    /// example) is asked for no layer, while a module inside it that matches
+    /// no declared layer stays a violation.
+    #[test]
+    fn only_source_modules_are_asked_for_a_layer() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "Cargo.toml", "[package]\nname = \"core\"\nversion = \"0.1.0\"\n");
+        write(d, "build.rs", "fn main() {}\n");
+        write(d, "examples/demo.rs", "fn main() {}\n");
+        write(d, "src/lib.rs", "pub mod domain;\npub mod odd;\n");
+        write(d, "src/domain/mod.rs", "pub fn rule() {}\n");
+        write(d, "src/odd/mod.rs", "pub fn thing() {}\n");
+        write(d, ".scryer/structure.toml", "[containers.\"\"]\nstyle = \"library\"\n");
+        let tree = derived_tree_uncached(d).unwrap();
+        let name_of = |id: &str| tree.planned.nodes.iter().find(|n| n.id == id).unwrap().name.clone();
+        let layerless: BTreeSet<String> = tree
+            .style_violations
+            .iter()
+            .filter(|v| v.kind == "layerless")
+            .map(|v| name_of(&v.node_id))
+            .collect();
+        assert_eq!(layerless, BTreeSet::from(["odd".to_string()]), "{:?}", tree.style_violations);
+        let exempt: BTreeSet<String> = tree.layer_exempt.iter().map(|id| name_of(id)).collect();
+        assert_eq!(exempt, BTreeSet::from(["build".to_string(), "examples".to_string()]));
+    }
+
     /// When no file changed, the cached tree is returned; touching a file
     /// derives again.
     #[test]

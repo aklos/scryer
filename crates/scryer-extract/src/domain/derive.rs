@@ -538,6 +538,32 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
             Some((f.clone(), id.clone()))
         }))
         .collect();
+    // Layer position asks nothing of what sits outside a container's source
+    // root — build scripts, tool configs, examples, benches — nor of a
+    // component named after an orphan test file.
+    let has_src: HashSet<&str> = input
+        .lifts
+        .keys()
+        .filter_map(|f| owner(f).filter(|c| inner_path(&c.dir, f).0.ends_with("src")).map(|c| c.dir.as_str()))
+        .collect();
+    let outside_source = |f: &str| {
+        let Some(c) = owner(f) else { return false };
+        let within = if c.dir.is_empty() { f } else { f.strip_prefix(c.dir.as_str()).and_then(|r| r.strip_prefix('/')).unwrap_or(f) };
+        let aux = ["examples/", "benches/"].iter().any(|d| within.starts_with(d));
+        if has_src.contains(c.dir.as_str()) {
+            !within.starts_with("src/")
+        } else {
+            let name = file_name(within);
+            aux || (!within.contains('/') && (name == "build.rs" || name.contains(".config.") || name.starts_with("tsconfig")))
+        }
+    };
+    let mut layer_exempt: Vec<String> = components
+        .values()
+        .filter(|c| c.files.iter().all(|f| outside_source(f)))
+        .map(|c| c.id.clone())
+        .chain(stem_ids.values().cloned())
+        .collect();
+    layer_exempt.sort();
     // Dark code: product files no test file reaches through the import graph.
     let mut reached: HashSet<&str> = homes.iter().map(|(rel, ..)| rel.as_str()).collect();
     let mut queue: Vec<&str> = reached.iter().copied().collect();
@@ -558,6 +584,7 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         file_nodes,
         dark_files,
         style_violations: Vec::new(),
+        layer_exempt,
     }
 }
 

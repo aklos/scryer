@@ -66,6 +66,12 @@ pub struct DerivedTree {
     /// What the declared styles (from `structure.toml`) say the code breaks.
     #[serde(default)]
     pub style_violations: Vec<DerivedViolation>,
+    /// Components no style asks for a layer: a container's files outside
+    /// its source root (build scripts, tool configs, examples, benches) and
+    /// components named after an orphan test file. They still count for
+    /// cycles.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layer_exempt: Vec<String>,
 }
 
 /// One style violation, charged to the node whose code has to move.
