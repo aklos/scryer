@@ -106,21 +106,28 @@ impl Structure {
 /// everything else left as written. The section is keyed by directory and
 /// added when missing.
 pub fn set_container_name(text: &str, dir: &str, name: &str) -> String {
-    let quoted_name = format!("\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\""));
+    set_container_field(text, dir, "name", name)
+}
+
+/// `structure.toml` text with one string field of one container set, the
+/// way [`set_container_name`] sets the name.
+pub fn set_container_field(text: &str, dir: &str, key: &str, value: &str) -> String {
+    let quoted_name = format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""));
     let headers = [format!("[containers.\"{dir}\"]"), format!("[containers.{dir}]")];
     let lines: Vec<&str> = text.lines().collect();
     let Some(start) = lines.iter().position(|l| headers.iter().any(|h| l.trim() == h)) else {
         let sep = if text.is_empty() || text.ends_with("\n\n") { "" } else if text.ends_with('\n') { "\n" } else { "\n\n" };
-        return format!("{text}{sep}[containers.\"{dir}\"]\nname = {quoted_name}\n");
+        return format!("{text}{sep}[containers.\"{dir}\"]\n{key} = {quoted_name}\n");
     };
     let end = lines[start + 1..]
         .iter()
         .position(|l| l.trim_start().starts_with('['))
         .map_or(lines.len(), |i| start + 1 + i);
     let mut out: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
-    match (start + 1..end).find(|&i| lines[i].trim_start().starts_with("name") && lines[i].contains('=')) {
-        Some(i) => out[i] = format!("name = {quoted_name}"),
-        None => out.insert(start + 1, format!("name = {quoted_name}")),
+    let is_key = |l: &str| l.split('=').next().is_some_and(|k| k.trim() == key) && l.contains('=');
+    match (start + 1..end).find(|&i| is_key(lines[i])) {
+        Some(i) => out[i] = format!("{key} = {quoted_name}"),
+        None => out.insert(start + 1, format!("{key} = {quoted_name}")),
     }
     let mut joined = out.join("\n");
     if text.ends_with('\n') {

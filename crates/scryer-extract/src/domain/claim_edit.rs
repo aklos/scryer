@@ -277,6 +277,78 @@ fn cs_rewrite(root: Node, src: &str, site: &ClaimSite, new_text: &str) -> Result
     }
 }
 
+/// Add descriptive statements to a file's module doc, each its own
+/// paragraph after whatever the doc already says (a `//!` block, a
+/// file-head JSDoc, a module docstring), creating the doc when there is
+/// none. Statements the file already contains are left out; `None` when
+/// nothing is left to add.
+pub fn add_module_doc(rel_path: &str, source: &str, statements: &[String]) -> Result<Option<String>, String> {
+    let fresh: Vec<&str> = statements
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty() && !source.contains(*s))
+        .collect();
+    if fresh.is_empty() {
+        return Ok(None);
+    }
+    let ext = lang::ext_of(Path::new(rel_path)).unwrap_or_default();
+    let out = match ext {
+        "rs" => {
+            let lines: Vec<&str> = source.lines().collect();
+            let head = lines.iter().take_while(|l| l.starts_with("//!")).count();
+            let mut block: Vec<String> = Vec::new();
+            for (i, s) in fresh.iter().enumerate() {
+                if head > 0 || i > 0 {
+                    block.push("//!".into());
+                }
+                block.push(format!("//! {s}"));
+            }
+            let mut out: Vec<String> = lines[..head].iter().map(|l| l.to_string()).collect();
+            out.extend(block);
+            if head == 0 && !lines.is_empty() {
+                out.push(String::new());
+            }
+            out.extend(lines[head..].iter().map(|l| l.to_string()));
+            out.join("\n") + if source.ends_with('\n') || source.is_empty() { "\n" } else { "" }
+        }
+        "ts" | "tsx" | "js" | "jsx" | "mts" | "cts" | "mjs" | "cjs" => {
+            let doc = fresh.iter().map(|s| format!(" * {}", s.replace("*/", "* /"))).collect::<Vec<_>>().join("\n *\n");
+            let has_head = parse(rel_path, source)
+                .ok()
+                .and_then(|t| crate::domain::claims::js_head_doc_span(t.root_node(), source));
+            match has_head {
+                Some((_, end)) => {
+                    let close = source[..end].rfind("*/").ok_or("malformed file-head JSDoc")?;
+                    let before = source[..close].trim_end_matches([' ', '\t']);
+                    let before = before.strip_suffix('\n').unwrap_or(before);
+                    format!("{before}\n *\n{doc}\n */{}", &source[close + 2..])
+                }
+                None => format!("/**\n{doc}\n */\n\n{source}"),
+            }
+        }
+        "py" => {
+            let tree = parse(rel_path, source)?;
+            let first = tree.root_node().named_child(0);
+            let docstring = first
+                .filter(|f| f.kind() == "expression_statement")
+                .and_then(|f| f.named_child(0))
+                .filter(|s| s.kind() == "string");
+            let paras = fresh.iter().map(|s| s.replace("\"\"\"", "\\\"\"\"")).collect::<Vec<_>>().join("\n\n");
+            match docstring {
+                Some(s) if text(s, source).ends_with("\"\"\"") => {
+                    let close = s.end_byte() - 3;
+                    let before = source[..close].trim_end();
+                    format!("{before}\n\n{paras}\n\"\"\"{}", &source[s.end_byte()..])
+                }
+                Some(_) => return Err("module docstring is not triple-quoted".into()),
+                None => format!("\"\"\"{paras}\"\"\"\n\n{source}"),
+            }
+        }
+        _ => return Err(format!("no module doc comments in .{ext} files")),
+    };
+    Ok(Some(out))
+}
+
 /// An identifier for a stub from its claim: the first words, snake_cased.
 pub fn snake_name(claim: &str) -> String {
     let words: Vec<String> = claim
@@ -530,6 +602,30 @@ mod tests {
             lifted("XTests.cs", &out),
             vec![("Docks in range".into(), false), ("Refuses &lt;far&gt; rigs".into(), false), ("Refuels".into(), false)]
         );
+    }
+
+    /// When descriptive statements migrate into a file, each becomes its own
+    /// paragraph after the existing module doc (or starts one), the first
+    /// becomes the file's description when it had none, and a statement
+    /// already there is not added again.
+    #[test]
+    fn adds_statements_to_module_docs() {
+        let st = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let docs = |path: &str, src: &str| {
+            lift_file(path, src, &mut Parser::new()).module_description
+        };
+        let rs = add_module_doc("src/a.rs", "//! Holds drafts.\nfn a() {}\n", &st(&["Keeps edits."])).unwrap().unwrap();
+        assert_eq!(rs, "//! Holds drafts.\n//!\n//! Keeps edits.\nfn a() {}\n");
+        let bare = add_module_doc("src/b.rs", "fn b() {}\n", &st(&["Saves notes.", "Loads notes."])).unwrap().unwrap();
+        assert_eq!(docs("src/b.rs", &bare).as_deref(), Some("Saves notes."));
+        assert!(add_module_doc("src/b.rs", &bare, &st(&["Saves notes."])).unwrap().is_none());
+        let ts = add_module_doc("a.ts", "/**\n * Renders.\n */\n\nexport const x = 1;\n", &st(&["Owns the tree."])).unwrap().unwrap();
+        assert!(ts.starts_with("/**\n * Renders.\n *\n * Owns the tree.\n */\n"), "{ts}");
+        let fresh_ts = add_module_doc("b.ts", "export const y = 2;\n", &st(&["Counts."])).unwrap().unwrap();
+        assert_eq!(docs("b.ts", &fresh_ts).as_deref(), Some("Counts."));
+        let py = add_module_doc("a.py", "\"\"\"Prices.\"\"\"\nx = 1\n", &st(&["Rounds."])).unwrap().unwrap();
+        assert_eq!(py, "\"\"\"Prices.\n\nRounds.\n\"\"\"\nx = 1\n");
+        assert!(add_module_doc("A.cs", "class A {}", &st(&["x"])).is_err());
     }
 
     /// When a claim is added to a Rust file, it lands as an ignored todo test

@@ -404,9 +404,18 @@ fn jsdoc_lines(comment: &str) -> Vec<String> {
         .collect()
 }
 
+/// The byte span of the file-head JSDoc [`js_module_doc`] reads, if any.
+pub(crate) fn js_head_doc_span(root: Node, source: &str) -> Option<(usize, usize)> {
+    js_head_doc(root, source.as_bytes()).map(|n| (n.start_byte(), n.end_byte()))
+}
+
 /// A JSDoc at the head of the file that documents the file, not the first
 /// declaration under it.
 fn js_module_doc(root: Node, bytes: &[u8]) -> Option<String> {
+    js_head_doc(root, bytes).and_then(|n| first_paragraph(&jsdoc_lines(text(n, bytes))))
+}
+
+fn js_head_doc<'t>(root: Node<'t>, bytes: &[u8]) -> Option<Node<'t>> {
     let mut cursor = root.walk();
     let children: Vec<Node> = root.named_children(&mut cursor).collect();
     for (i, child) in children.iter().enumerate() {
@@ -429,7 +438,7 @@ fn js_module_doc(root: Node, bytes: &[u8]) -> Option<String> {
         if attached && !tagged {
             return None;
         }
-        return first_paragraph(&jsdoc_lines(t));
+        return Some(*child);
     }
     None
 }

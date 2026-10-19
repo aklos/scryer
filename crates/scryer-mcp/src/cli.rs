@@ -114,6 +114,38 @@ fn gate_project(args: &[String], usage: &str) -> Result<(PathBuf, Vec<String>), 
     Ok((find_project(&start).unwrap_or(start), flags))
 }
 
+/// `scryer-mcp migrate [path]`: move an authored model into the code once —
+/// claims into test descriptions, statements into module docs, untested
+/// claims into todo stubs, container names and styles into structure.toml.
+/// Prints each write; a second run prints nothing to do.
+pub(crate) fn run_migrate(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let (project, _) = gate_project(args, "scryer-mcp migrate [path]")?;
+    let report = match scryer_extract::claim_files::migrate(&project) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("migrate: {e}");
+            std::process::exit(2);
+        }
+    };
+    let section = |title: &str, rows: &[String]| {
+        if !rows.is_empty() {
+            println!("{title} ({}):", rows.len());
+            for r in rows {
+                println!("  {r}");
+            }
+        }
+    };
+    section("test descriptions", &report.described);
+    section("module docs", &report.documented);
+    section("todo stubs", &report.stubbed);
+    section("structure.toml", &report.structure);
+    section("left as they are", &report.skipped);
+    if !report.wrote_anything() {
+        println!("nothing to migrate: the code already says it all");
+    }
+    Ok(())
+}
+
 /// One test description that breaks the claim grammar.
 pub(crate) struct LintFinding {
     pub at: String,
