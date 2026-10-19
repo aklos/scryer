@@ -18,14 +18,9 @@ Open the installer and follow the prompts. On macOS, drag scryer to your Applica
 
 ## First launch
 
-When you open scryer for the first time, you'll see an empty canvas with a command palette. Press <kbd>Ctrl+K</kbd> (or <kbd>Cmd+K</kbd> on macOS) to open it at any time.
+Open a project folder. Scryer derives the tree from its packaging and tests on the spot; a project with no behaviour tests shows its containers and components with nothing proven yet. Press <kbd>Ctrl+K</kbd> (or <kbd>Cmd+K</kbd> on macOS) to jump to any node.
 
-From the command palette you can:
-- **Create a new model** — starts with a blank canvas
-- **Open an existing model** — browse your saved diagrams
-- **Load a template** — start from a pre-built architecture
-
-Models are saved as `.scry` files in `~/.scryer/` — everything stays local on your machine.
+Nothing is stored outside the project: `.scryer/` holds `structure.toml` (committed) and regenerable caches and session logs (ignored).
 
 ## Building from source
 

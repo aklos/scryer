@@ -6,16 +6,16 @@
   </h1>
 
   <p>
-    <b>Model-driven development for coding agents.</b>
+    <b>What's true about your codebase.</b>
     <br />
-    A shared model you and your agent plan from. The model leads; the code follows.
+    A C4 model derived from your code and tests, with every claim verified, for people and agent swarms working together.
     <br />
     <br />
-    <a href="#features">Features</a>
+    <a href="#how-it-works">How it works</a>
     <span>&nbsp;&nbsp;&bull;&nbsp;&nbsp;</span>
     <a href="#getting-started">Getting started</a>
     <span>&nbsp;&nbsp;&bull;&nbsp;&nbsp;</span>
-    <a href="#the-model-as-a-plan">The model as a plan</a>
+    <a href="#writing-claims">Writing claims</a>
     <span>&nbsp;&nbsp;&bull;&nbsp;&nbsp;</span>
     <a href="#mcp-server">MCP server</a>
     <span>&nbsp;&nbsp;&bull;&nbsp;&nbsp;</span>
@@ -27,82 +27,75 @@
 </div>
 
 > [!IMPORTANT]
-> Scryer is in **alpha**. Expect rough edges, breaking changes between releases, and model-format migrations before 1.0. Bug reports and feedback are very welcome in [issues](https://github.com/aklos/scryer/issues).
+> Scryer is in **alpha**. Expect rough edges and breaking changes before 1.0. Bug reports and feedback are very welcome in [issues](https://github.com/aklos/scryer/issues).
 
 <br/>
 
 <p align="center">
-<video src="https://github.com/user-attachments/assets/a05fd23d-a32c-4f06-b1b0-ff9419a0a6f9" width="100%" autoplay loop muted></video>
+<video src="TODO-new-demo" width="100%" autoplay loop muted></video>
 </p>
 
-Coding agents write faster than you can review. You end up shipping code you don't fully understand, and what you meant drifts from what got built. Scryer keeps a model next to your code: a graph of what each part of the system is responsible for, mapped to the source lines that implement it and to the tests that back each claim. Use it to see how the code matches your intent, and to plan changes against that intent before the agent writes them.
+Coding agents write faster than you can read. After a week, or a weekend of three agents running in parallel, nobody can say with confidence what is implemented, what was only planned, and what quietly broke. Ask the agent and it guesses from whatever code it has open.
 
-The model describes what each part is responsible for — not its class-by-class structure — in short, language-independent claims on an opinionated [C4](https://c4model.com/)-style hierarchy. It isn't UML, and it isn't your code redrawn as boxes. You plan a change in the model first; the agent reads it over MCP and builds code to match, so the model stays ahead of the code rather than lagging behind it. Underneath, a deterministic observability layer (no LLM) reports what's built versus planned, source and test coverage, and drift in both directions.
+Scryer answers that question with evidence. It reads your repository and derives a [C4](https://c4model.com/) model of it: containers from packaging, components from modules, links from imports, and claims from your behaviour tests. A claim is proven when its test is green and the code it exercises has not changed since. It is planned when the test is a todo. It is stale when the code moved under it. Nothing in the model is written by hand or by an agent; it is computed from the repo, so it cannot drift.
 
-Works with <b>Claude Code</b>, <b>Codex</b> and <b>GitHub Copilot CLI</b> out of the box. Any agent that supports [MCP](https://modelcontextprotocol.io/) can read and write the model.
+The same model is the plan. An agent plans a change by writing the claims it intends to satisfy as todo tests, in EARS grammar, one sentence each. You read a column of sentences instead of an essay, and watch them flip to proven as the work lands.
 
-## Features
+## How it works
 
-- **Wiki-style node pages** — Every node, down to individual symbols, gets a page that leads with whatever helps you plan changes to that kind of thing: responsibilities for handlers and services (each mapped to source lines), properties for data types, a live rendered preview for UI components. Source code shows as reference, with structured metadata — kind, technology, status, connections — surfaced inline on the page. Edit any section in place.
-- **Model tree** — An IDE-style explorer for defining the model: create, rename, move, group, and delete nodes. Groups are folders. Rolled-up plan and drift marks show per row, so you see the model's health at a glance.
-- **Responsibilities & directives** — Each node states what it's responsible for (responsibilities) and, optionally, how the agent should implement it (directives, e.g. "authenticate with JWTs"). Responsibilities are language-independent and survive a rewrite. Claims are written in [EARS](https://alistairmavin.com/ears/) grammar — condition first ("When a save fails, …"), verb-led response last — so a testable claim already names the trigger to arrange and the response to assert, and the editor lints statements live as you write them.
-- **Test backing** — Attaching a test is part of implementing a claim, not a follow-up chore. Every claim row carries a test lane: a flask means a test is attached, a ghost outline means testable but bare, and health counts `untested` claims so the gap stays visible. Scryer never runs your tests, but it tracks their verdicts: after a run, the agent hands over the runner's JUnit report and each attached test's pass/fail lands on its claim, fingerprinted so a later edit to the code or the test flips it to stale. Passing is assumed and shows nothing; the lane marks only what's wrong — stale or failing. To find the gaps without opening nodes one by one, the model tree's **Tests** lens keeps only branches with something to look at — untested claims, failing tests, uncaught breaks — with per-subtree counts, and Needs Review lists the same claims as rows that open on their page. `get_test_radius` then names exactly the test files that need re-running — never the whole suite.
-- **Falsification probes** — A green test says it passes; it doesn't say it would notice a break. `open_probe` lets the agent deliberately break a claim's code in an isolated git worktree (synced to your working tree, never touching it), run the attached test, and expect red. A break that survives is the finding: the test doesn't hold the claim. The claim row's lane shows it as its one mark — a double check when every break was caught (a sample, not a proof), a red crosshair when one slipped through — and nothing for claims nobody has probed.
-- **Concerns** — A cross-cutting third axis over responsibilities: tag claims with a concern slug (`auth`, `persistence`, `idempotency`, …) and scan the model through a concern lens in the tree and on the map. Core domain flow stays untagged.
-- **The plan** — Scryer holds a committed model (what the code satisfies) and a planned draft (what you and the agent edit). Their difference is the plan: the model→code work queue, shown as add/move/delete/reword marks until the agent implements them and they fold into the committed model. Parallel workstreams can be filed as named changes, each folding and closing on its own.
-- **Live component previews** — React components and Vue single-file components render deterministically through a per-project Vite dev server, with no agent and no per-component build. Which nodes get a preview is derived from what the server can mount — never a flag stored on the model.
-- **Observability layer** — An always-on, deterministic health report over the model↔code relationship (no LLM): plan and drift rollup, source-anchor and test-backing coverage, disconnected nodes, and an import-graph audit of declared links against actual imports. The import graph resolves real declared imports for Rust, TypeScript/JavaScript (including tsconfig path aliases), Python, Go, and Clojure/ClojureScript (`ns` requires, including `:as` aliases and `:refer`); Java, Ruby, C/C++, C#, and PHP are covered by a conservative name-matching heuristic, and the health report says which tier applies so the audit's verdict is calibrated. It tells you where work is needed before you read a single page.
-- **Drift detection & sync** — Scryer tracks when source files change relative to the model. When code diverges, the agent reads the changed files and reconciles the model, adopting new behavior or flagging stale claims.
-- **Source mapping** — Responsibilities and nodes link to files and line ranges. Click to open in your editor.
-- **Build from a codebase** — Point an agent at a project and it scans the code to populate the model.
-- **Diagram view** — A diagram renders the model one level at a time for spatial navigation. Drag cards where you want them — placements persist, and auto-layout manages the rest.
-- **MCP server** — Agents connect to read, modify, and build from the model in real time.
-- **Agent integration** — One switch per project. On, it wires every detected agent CLI (Claude Code, Codex, Copilot CLI) to scryer: MCP config, auto-approve, silent session hooks and a Claude Code status line. Off removes exactly those entries.
+**The claim is the test.** A behaviour test's description, the `///` doc comment on a Rust test, the string in `it("…")`, a pytest docstring, a .NET `DisplayName`, is an EARS claim about the code it tests: *When a save fails, keeps the draft.* Scryer lifts those sentences and lints them live. One test, one claim.
+
+**The level is the test level.** An end-to-end test claims for the system. An integration test at a deployable's boundary claims for its container. A unit test claims for its component. The tree you see is the test pyramid with the C4 vocabulary on it.
+
+**Status is derived.** After a test run, hand scryer the JUnit report. Each claim becomes proven, failing, or planned, and a later edit to the test or to the code it exercises makes the verdict stale until the next run. Health counts what needs attention: planned, stale, failing, components with no claims, files no test reaches, surviving mutants, architecture violations.
+
+**Styles are structural claims.** A container declares its architecture style in `.scryer/structure.toml`, hexagonal, layered, and the layers it has. The import graph is checked against it deterministically, and a violation is a red row like any other failing claim. It is fixed by moving code, never by loosening the rule.
+
+**Probes ask whether a green test would notice.** `open_probe` lets an agent break the code a passing test exercises, in an isolated worktree, and run the test expecting red. A break that survives is a finding on the claim. Mutation reports from cargo-mutants or Stryker feed the same mark without an agent in the loop.
+
+**Concerns cut across.** A trailing `[persistence]` or `[auth]` on a claim tags it with a concern. The concern lens dims everything else, so you can read down a component or across a concern.
+
+**Several agents, one substrate.** Each session's touched files and planned stubs are recorded. An agent orienting on a file sees that another session edited it, that a todo there belongs to someone else, or that their test radius overlaps. Awareness, not locks: nothing blocks, and coordination happens through the repo.
+
+**Nothing talks at turn end.** Session hooks record what an agent touched and put the claims for a file in front of it when it reads that file. They emit no errors, no summaries, no gates.
 
 ## Getting started
 
 Download the latest release for your platform from the [releases page](https://github.com/aklos/scryer/releases).
 
-### Typical workflow
+1. Open your project in the app. Scryer derives the tree from your packaging and tests on the spot; a project with no behaviour tests shows its containers and components with nothing proven yet.
+2. Flip **Agent integration** on in settings (or run `scryer-mcp setup on`). This writes the MCP entry and session hooks for whichever of Claude Code, Codex and Copilot CLI you have, and nothing else.
+3. Add `.scryer/structure.toml` to name the system, its people and external systems, which directories hold e2e and integration tests, and each container's style:
 
-1. Link your project directory in the app and turn on Agent integration in settings (or run `scryer-mcp setup on`).
-2. Tell your agent: *"Use scryer to model this project's architecture."* It scans the code and the model fills in, with nodes appearing in the tree and on their pages in real time.
-3. Review the model: read the node pages, rename, regroup, restructure, and refine responsibilities.
-4. To make a change, plan it in the model first: add or edit the responsibilities and links it implies. These land in the plan as pending work.
-5. Tell the agent to implement the plan. It builds each piece and marks nodes implemented as it goes, folding the plan into the committed model.
-6. Check the model's health any time. `get_health` reports the plan and drift rollup, source-anchor coverage, and where code and model have parted ways.
+   ```toml
+   [system]
+   name = "aperture-pay"
+   persons = ["cardholder", "merchant"]
+   externals = ["acquiring bank", "card networks"]
 
-As you work on code, Scryer detects when source files drift from the model. Trigger a drift check to have the agent reconcile: adopting new behavior into the model, or flagging where the code regressed from what the model claims.
+   [levels]
+   e2e = ["tests/e2e/**"]
+   integration = ["crates/*/tests/**"]
 
-## The model as a plan
+   [containers.ledger]
+   style = "hexagonal"
+   ```
 
-Scryer keeps two layers on disk in `.scryer/`:
+4. Give your agent a task. It orients, writes the claims it will satisfy as todo tests, builds, runs the radius, and ingests the report. Open scryer's landing page to see what changed since you last looked: newly proven, still planned, newly stale, and which components more than one session touched.
+5. Run `scryer-mcp check` in CI to fail on failing claims, violations, or lint errors in claim text.
 
-- **`model.scry`** — the committed model, the source of truth: what the code is believed to satisfy.
-- **`planned.scry`** — the draft you and the agent edit on the canvas.
+## Writing claims
 
-The difference between them is the **plan**: the outstanding model→code work. When you add a responsibility or a node, it shows in the plan as an `added` mark in the tree. When the agent writes the code, `mark_implemented` folds that work into the committed model. Drift works the other way: when code changes, the agent reconciles undescribed behavior back into the model.
+EARS, subject dropped, condition first, one response per claim:
 
-Plan work is filed into **changes**, one per agent session: the session's first plan write opens it with the user's first prompt as its rationale, and later writes tag to it automatically, so parallel sessions (or you, on the canvas) stay separable. When a change's last entry folds in, it closes and its rationale lands in the history log.
+| Pattern | Shape | Example |
+|---|---|---|
+| Ubiquitous | `<verb> <object>` | Persists the ledger on every post |
+| Event | `When <trigger>, <response>` | When a refund exceeds the captured amount, rejects it |
+| State | `While <state>, <response>` | While settlement is unconfirmed, holds funds in escrow |
+| Unwanted | `If <condition>, then <response>` | If the bank times out, then retries once |
 
-What the user asked for is tracked too. A hook logs every prompt verbatim; the agent breaks it into **asks** and ends each one delivered (claims that are verified and anchored to code the session edited), answered, or descoped with a reason. The session can't stop while an ask is open without being told exactly what's left, and the Session page shows each session's asks, the files it touched, and any edit no ask accounts for.
-
-This is how the model stays ahead of the code: intent is captured as a plan before the code exists, and the committed model only ever reflects what's actually been built.
-
-## Agent support
-
-Scryer works with **Claude Code**, **Codex** and **GitHub Copilot CLI**.
-
-- **MCP** (Model Context Protocol) — how agents read and write architecture models. Required for any agent integration.
-- **CLI spawning** — how Scryer launches agents for automated model builds and drift sync. Claude Code is spawned via `claude -p` (uses your subscription), Codex via `codex exec` (uses your API key). Both get the Scryer MCP server attached automatically.
-- **ACP** (Agent Client Protocol) — Copilot CLI serves ACP from its own binary (`copilot --acp`), so that's how Scryer launches it; any other agent with a `{name}-acp` adapter on PATH is launched the same way.
-- **Session hooks** — part of Agent integration, for all three: the claims governing a file as the agent reads it, and a record of the files the session touched. They never block and never speak at Stop. They run in-process with or without the Scryer app open, and log to `.scryer/sessions/` (untracked).
-
-When an agent connects via MCP, Scryer captures its identity from the protocol handshake. When a build or sync is triggered, Scryer resolves that identity to a binary and launches it with the right flags.
-
-**Copilot notes.** Copilot reads the same project `.mcp.json` Claude Code does, so one file serves both. Two things differ from the others: it reaches Scryer *only* through that file (its ACP mode doesn't accept a stdio MCP server over the protocol), and it loads a project's MCP servers and hooks only in a folder you've **trusted** — it asks the first time you open one. Until you do, it stays quiet about both.
-
-Copilot fronts several model providers on one subscription, so its model list spans Claude, GPT and Gemini; pick one under Subagent settings. If you type a model name by hand there, check the spelling — run `copilot help config` for the current list. Copilot ignores an unrecognised model in ACP mode rather than reporting it, so a typo runs on its default model instead of failing.
+A trailing `[tag]` names a concern. A todo test (`it.todo`, `#[ignore]`, `@pytest.mark.skip`, `[Fact(Skip = …)]`) is a planned claim. A `[manual]` tag keeps a test out of the model.
 
 ## MCP server
 
@@ -180,22 +173,9 @@ The server's own instructions, worth keeping in the project's CLAUDE.md (or AGEN
 
 > Scryer reads this project's architecture from its code: containers from packaging, components from modules, claims from behaviour tests. A behaviour test's description is an EARS claim about the code it tests, subject dropped, condition first: `<verb> <object>` when always true; `When <trigger>, <response>`; `While <state>, <response>`; `If <unwanted condition>, then <response>`. One pattern and one response per test; a cross-cutting concern is a trailing `[tag]`. The test's level is the claim's level: an e2e test claims for the whole system, an integration test at a deployable's boundary for its container, a unit test for its component — write a claim at the level it speaks for. Before building, `orient {task, files}` and write each claim you will satisfy as a todo test in the file orient names; a todo test is work to do. Run only what `get_test_radius` names, then `ingest_test_report`. A surviving probe (`open_probe`) is a finding: strengthen the test. Every tool takes an optional absolute `project`, defaulting to the working directory.
 
-## Drift detection & sync
-
-Architecture models go stale as code changes. Scryer detects drift deterministically — no LLM — two ways: source-mapped nodes whose files changed since the last reconcile, and new files appearing in the project that the model doesn't cover yet.
-
-When drift is detected:
-
-1. A review surface and drift indicators flag the potentially drifted scopes — click through to the affected node pages.
-2. Trigger a drift check to spawn your agent (Claude Code via `claude -p`, Codex via `codex exec`, Copilot via `copilot --acp`) with Scryer's MCP server attached. Drifted scopes are checked in parallel, and each agent gets the changed code embedded inline as evidence, so it judges divergence without re-reading the tree and updates the model only where code has actually diverged.
-3. Undescribed behavior is proposed into the plan as a **vagrant** claim for you to adopt or reject; a **stale** claim is flagged on the committed model where the code regressed from what was claimed.
-4. Model changes appear in the editor in real time. When every scope has been examined, the drift anchor advances so the same changes stop surfacing.
-
-For Claude Code, the MCP server config is passed inline via `--mcp-config`. For Codex, the project must have MCP already configured (via `scryer-mcp setup on` or the app's Agent integration switch), since Codex reads MCP config from `.codex/config.toml`.
-
 ## Tech
 
-Scryer is a [Tauri](https://tauri.app/) desktop app. The UI is written in [React](https://react.dev/) with [TypeScript](https://www.typescriptlang.org/) — a two-pane workspace of a model tree and wiki-style node pages, with a secondary [ReactFlow](https://reactflow.dev/) diagram for spatial navigation. The backend is written in [Rust](https://www.rust-lang.org/): the core model, diff, drift, and health engines (`scryer-core`), the tree-sitter code-extraction and import-graph engine (`scryer-extract`), the MCP server (`scryer-mcp`), and ACP integration (`scryer-acp`). Live component previews run through a per-project [Vite](https://vite.dev/) dev server.
+Rust core (`scryer-core`, `scryer-extract`, `scryer-mcp`), Tauri 2 shell, React frontend. Import resolution for Rust, TypeScript/JavaScript, Python, Go and Clojure; name-matching heuristics for Java, Ruby, C/C++, C#, PHP. Test lifting for Rust, Vitest/Jest, pytest and .NET.
 
 ## Building from source
 
