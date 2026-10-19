@@ -165,14 +165,17 @@ pub const COPILOT_HOOK_EVENTS: &[HookEvent] = &[
 pub const GITIGNORE_MARKER: &str = "# Written by `scryer-mcp setup on`.";
 
 /// `.scryer/.gitignore` as `setup on` writes it: commit only what a teammate
-/// needs — `structure.toml` and the diagram layout. Everything else there
-/// (session logs, verdict and derivation caches) is regenerable or personal.
+/// needs — `structure.toml`, the project's own styles and the diagram layout.
+/// Everything else there (session logs, verdict and derivation caches) is
+/// regenerable or personal.
 pub fn gitignore_text() -> String {
     format!(
         "{GITIGNORE_MARKER} Only what a teammate needs is committed.\n\
          *\n\
          !.gitignore\n\
          !structure.toml\n\
+         !styles\n\
+         !styles/**\n\
          !layout\n\
          !layout/**\n"
     )

@@ -50,6 +50,10 @@ style = "core-shell"
 name = "Build Tasks"
 style = "core-shell"
 
+# The docs site was declared feature-sliced, which its code never was: it is
+# an Astro Starlight site, laid out the way Astro documents src/ (components
+# embedded by content collections). That is the shape declared here, as the
+# project style .scryer/styles/astro.json.
 [containers.docs]
 name = "Docs Site"
-style = "feature-sliced"
+style = "astro"
