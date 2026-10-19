@@ -10,7 +10,8 @@
  *     (`layoutGraph`), the formal C4 boxes-and-lines.
  *   - the component level of a styled container → the style's own drawing
  *     (`styledLayout`): rows, columns, rings or Cockburn's hexagon, with each
- *     card fixed to its layer's band and only the order within it free.
+ *     card fixed to its layer's band and only the order within it free; a
+ *     root module's own symbols sit in a composition-root strip below it.
  *   - the code tier (symbols) → a force-directed dot graph, where boxes-and-
  *     lines would be noise and relationships read better as a constellation.
  */
@@ -21,7 +22,7 @@ import type { ScryModel, Kind } from "../../entities/model/viewmodel";
 import { isDataShape } from "../../entities/model/viewmodel";
 import { styleTable, type ModelHealthReport } from "../../entities/model/health";
 import { governingStyleDef, layerOf, type Drawing, type StyleDef } from "../../entities/model/styles";
-import { classifyStyledEdge, styledLayout, type LayerRegion } from "./styled";
+import { classifyStyledEdge, rootStrip, styledLayout, type LayerRegion } from "./styled";
 import { depthLayout } from "./depth";
 
 export type DiagramMode = "arch" | "styled" | "code";
@@ -341,10 +342,14 @@ export async function buildDiagramScene(
   };
 
   // The component level of a styled container draws in its style's shape.
-  const styleDef =
-    focusId !== null && children.length > 0 && children.every((c) => c.kind === "component")
-      ? governingStyleDef(model, focusId, styles)
-      : undefined;
+  // A crate root's own definitions may sit beside the components; they go in
+  // a composition-root strip at the edge rather than costing the level its
+  // drawing.
+  const styledLevel =
+    focusId !== null &&
+    children.some((c) => c.kind === "component") &&
+    children.every((c) => c.kind === "component" || c.kind === "symbol");
+  const styleDef = styledLevel ? governingStyleDef(model, focusId, styles) : undefined;
   const mode: DiagramMode =
     children.length > 0 && children.every((c) => c.kind === "symbol")
       ? "code"
@@ -400,14 +405,17 @@ export async function buildDiagramScene(
     );
     regions = laid.regions;
   } else if (mode === "styled" && styleDef) {
-    const members = children.map((c) => ({ id: c.id, layer: c.layer }));
+    const members = children.filter((c) => c.kind === "component").map((c) => ({ id: c.id, layer: c.layer }));
+    const rootIds = new Set(children.filter((c) => c.kind === "symbol").map((c) => c.id));
     const laid = styledLayout(styleDef, members, ghosts, edges);
+    const strip = rootStrip(laid, [...rootIds]);
     positions = new Map(
-      [...laid.centers].map(([id, c]) => [id, { x: c.x - CARD_W / 2, y: c.y - CARD_H / 2 }]),
+      [...laid.centers, ...strip.centers].map(([id, c]) => [id, { x: c.x - CARD_W / 2, y: c.y - CARD_H / 2 }]),
     );
     for (const [id, at] of pinnedPos) positions.set(id, at);
-    styled = { name: styleDef.name, drawing: styleDef.drawing, regions: laid.regions };
-    regions = laid.regions;
+    const allRegions = strip.region ? [...laid.regions, strip.region] : laid.regions;
+    styled = { name: styleDef.name, drawing: styleDef.drawing, regions: allRegions };
+    regions = allRegions;
     // Structural violations from the health report — imports and declared
     // links the style forbids — are the only source of red. They are drawn even when no link
     // declares the pair: a declared-links-only view would read as compliance
@@ -444,6 +452,11 @@ export async function buildDiagramScene(
     const innermost = styleDef.layers[styleDef.layers.length - 1]?.name;
     for (const e of edges) {
       if (e.id.startsWith("violation:")) continue;
+      // The root's own links sit outside the drawing: always shown.
+      if (rootIds.has(e.source) || rootIds.has(e.target)) {
+        e.implied = false;
+        continue;
+      }
       const sourceGhost = ghostIds.has(e.source), targetGhost = ghostIds.has(e.target);
       const sl = layerById.get(e.source), tl = layerById.get(e.target);
       // A ghost carries its OWN container's style and layer: a library is
