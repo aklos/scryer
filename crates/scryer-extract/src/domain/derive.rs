@@ -243,6 +243,71 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         comp.patterns.insert(if inner.contains('/') { format!("{path}/**") } else { rel.clone() });
         file_component.insert(rel.as_str(), path);
     }
+
+    // Where each test file's claims go, by level.
+    let mut edges_from: HashMap<&str, Vec<&str>> = HashMap::new();
+    for e in input.file_edges.iter().filter(|e| !e.guessed) {
+        edges_from.entry(e.src.as_str()).or_default().push(e.dst.as_str());
+    }
+    let cargo_dirs: HashSet<&str> = input
+        .containers
+        .iter()
+        .filter(|c| {
+            let manifest = if c.dir.is_empty() { "Cargo.toml".to_string() } else { format!("{}/Cargo.toml", c.dir) };
+            input.all_files.contains(&manifest)
+        })
+        .map(|c| c.dir.as_str())
+        .collect();
+    let mut homes: Vec<(&String, &FileLift, ClaimLevel, Home)> = Vec::new();
+    for (rel, lift) in input.lifts {
+        if lift.tests.is_empty() {
+            continue;
+        }
+        let own = owner(rel);
+        let level = s.configured_level(rel).unwrap_or_else(|| {
+            // Cargo's convention: a crate's `tests/` directory is integration.
+            let cargo_tests = !s.integration_configured()
+                && rel.ends_with(".rs")
+                && own.is_some_and(|c| {
+                    cargo_dirs.contains(c.dir.as_str()) && {
+                        let prefix = if c.dir.is_empty() { "tests/".to_string() } else { format!("{}/tests/", c.dir) };
+                        rel.starts_with(&prefix)
+                    }
+                });
+            if cargo_tests { ClaimLevel::Container } else { ClaimLevel::Component }
+        });
+        let target_container = own
+            .filter(|c| container_ids.contains_key(c.dir.as_str()))
+            .map(|c| c.dir.clone())
+            .or_else(|| own.and_then(|c| tested_container(c, input, &container_ids, &edges_from, rel, &owner)));
+        let home = match (level, target_container) {
+            (ClaimLevel::System, _) | (_, None) => Home::System,
+            (ClaimLevel::Container, Some(dir)) => Home::Container(dir),
+            (ClaimLevel::Component, Some(dir)) => {
+                unit_home(rel, &dir, &components, &file_component, &edges_from)
+                    .unwrap_or_else(|| Home::TestStem(dir, tested_stem(file_name(rel))))
+            }
+        };
+        homes.push((rel, lift, level, home));
+    }
+
+    // A product file with a module doc and claims of its own is a
+    // sub-component of its directory component, unless it is that
+    // directory's root, whose doc describes the directory itself.
+    let sub_files: BTreeSet<&str> = homes
+        .iter()
+        .filter_map(|(_, _, _, h)| match h {
+            Home::File(f) => Some(f.as_str()),
+            _ => None,
+        })
+        .filter(|f| {
+            let comp = &components[&file_component[f]];
+            input.lifts[*f].module_description.is_some()
+                && inner_path(&comp.container_dir, f).1.contains('/')
+                && !ENTRY_FILES.contains(&file_name(f))
+        })
+        .collect();
+
     for (path, comp) in components.iter_mut() {
         comp.id = stable_id("node", &format!("component:{path}"), &mut taken);
         let container = &container_ids[comp.container_dir.as_str()];
@@ -265,7 +330,7 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         if layers.contains(&comp.name) {
             n.layer = Some(comp.name.clone());
         }
-        // The module doc of the component's entry: `domain/mod.rs`,
+        // The module doc of the component's root: `domain/mod.rs`,
         // `domain.rs`, `index.ts`, `__init__.py`, or a one-file module.
         n.description = comp
             .files
@@ -284,11 +349,38 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         );
         model.nodes.push(n);
     }
+    let mut sub_ids: HashMap<&str, String> = HashMap::new();
+    for f in &sub_files {
+        let id = stable_id("node", &format!("subcomponent:{f}"), &mut taken);
+        let parent = &components[&file_component[f]].id;
+        let mut n = node(&id, Kind::Component, file_stem(f), Some(parent));
+        n.description = input.lifts[*f].module_description.clone();
+        model.boundaries.insert(id.clone(), vec![Source { pattern: f.to_string(), comment: None }]);
+        model.nodes.push(n);
+        sub_ids.insert(f, id);
+    }
+    // A test whose code under test cannot be found gets a component of its
+    // own, named after its file, on the container it belongs to.
+    let mut stem_ids: BTreeMap<(String, String), String> = BTreeMap::new();
+    for (rel, _, _, home) in &homes {
+        let Home::TestStem(dir, stem) = home else { continue };
+        let key = (dir.clone(), stem.clone());
+        let id = stem_ids.entry(key).or_insert_with(|| {
+            let id = stable_id("node", &format!("testcomponent:{dir}/{stem}"), &mut taken);
+            model.nodes.push(node(&id, Kind::Component, stem, Some(&container_ids[dir.as_str()])));
+            id
+        });
+        model
+            .boundaries
+            .entry(id.clone())
+            .or_default()
+            .push(Source { pattern: rel.to_string(), comment: None });
+    }
 
     // Symbols: outermost definitions of product files, test code left out.
     for f in input.files {
         let Some(path) = file_component.get(f.rel_path.as_str()) else { continue };
-        let comp = &components[path];
+        let parent = sub_ids.get(f.rel_path.as_str()).unwrap_or(&components[path].id).clone();
         let lift = input.lifts.get(&f.rel_path);
         let in_test = |line: u32| {
             lift.is_some_and(|l| {
@@ -306,7 +398,7 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
                 continue;
             }
             let id = stable_id("node", &format!("symbol:{}#{}", f.rel_path, sym.name), &mut taken);
-            let mut n = node(&id, Kind::Symbol, &sym.name, Some(&comp.id));
+            let mut n = node(&id, Kind::Symbol, &sym.name, Some(&parent));
             if sym.is_data_shape {
                 n.properties = sym
                     .fields
@@ -333,60 +425,20 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         }
     }
 
-    // Claims, placed by level.
-    let mut edges_from: HashMap<&str, Vec<&str>> = HashMap::new();
-    for e in input.file_edges.iter().filter(|e| !e.guessed) {
-        edges_from.entry(e.src.as_str()).or_default().push(e.dst.as_str());
-    }
-    let cargo_dirs: HashSet<&str> = input
-        .containers
-        .iter()
-        .filter(|c| {
-            let manifest = if c.dir.is_empty() { "Cargo.toml".to_string() } else { format!("{}/Cargo.toml", c.dir) };
-            input.all_files.contains(&manifest)
-        })
-        .map(|c| c.dir.as_str())
-        .collect();
+    // Claims onto their homes.
     let mut claims = Vec::new();
     let node_index: HashMap<String, usize> =
         model.nodes.iter().enumerate().map(|(i, n)| (n.id.clone(), i)).collect();
-    for (rel, lift) in input.lifts {
-        if lift.tests.is_empty() {
-            continue;
-        }
-        let own = owner(rel);
-        let level = s.configured_level(rel).unwrap_or_else(|| {
-            // Cargo's convention: a crate's `tests/` directory is integration.
-            let cargo_tests = !s.integration_configured()
-                && rel.ends_with(".rs")
-                && own.is_some_and(|c| {
-                    cargo_dirs.contains(c.dir.as_str()) && {
-                        let prefix = if c.dir.is_empty() { "tests/".to_string() } else { format!("{}/tests/", c.dir) };
-                        rel.starts_with(&prefix)
-                    }
-                });
-            if cargo_tests { ClaimLevel::Container } else { ClaimLevel::Component }
-        });
-        let target_container = own
-            .filter(|c| container_ids.contains_key(c.dir.as_str()))
-            .map(|c| c.dir.clone())
-            .or_else(|| own.and_then(|c| tested_container(c, input, &container_ids, &edges_from, rel, &owner)));
-        let node_id = match level {
-            ClaimLevel::System => system_id.clone(),
-            ClaimLevel::Container | ClaimLevel::Component => {
-                let comp = (level == ClaimLevel::Component)
-                    .then(|| {
-                        target_container.as_deref().and_then(|dir| {
-                            unit_component(rel, dir, &components, &file_component, &edges_from)
-                        })
-                    })
-                    .flatten();
-                match (comp, &target_container) {
-                    (Some(path), _) => components[&path].id.clone(),
-                    (None, Some(dir)) => container_ids[dir.as_str()].clone(),
-                    (None, None) => system_id.clone(),
-                }
-            }
+    for (rel, lift, level, home) in &homes {
+        let node_id = match home {
+            Home::File(f) => sub_ids
+                .get(f.as_str())
+                .unwrap_or(&components[&file_component[f.as_str()]].id)
+                .clone(),
+            Home::Component(path) => components[path].id.clone(),
+            Home::Container(dir) => container_ids[dir.as_str()].clone(),
+            Home::TestStem(dir, stem) => stem_ids[&(dir.clone(), stem.clone())].clone(),
+            Home::System => system_id.clone(),
         };
         for t in &lift.tests {
             let id = stable_id("resp", &format!("claim:{rel}#{}", t.junit_name), &mut taken);
@@ -405,7 +457,7 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
             model.test_map.insert(
                 id.clone(),
                 vec![SourceLocation {
-                    pattern: rel.clone(),
+                    pattern: rel.to_string(),
                     symbol: Some(t.identifier.clone()),
                     line: Some(t.line),
                     end_line: Some(t.end_line),
@@ -414,8 +466,8 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
             claims.push(DerivedClaim {
                 id,
                 node_id: node_id.clone(),
-                level,
-                file: rel.clone(),
+                level: *level,
+                file: rel.to_string(),
                 line: t.line,
                 identifier: t.identifier.clone(),
                 description: t.description.clone(),
@@ -516,44 +568,62 @@ fn tested_container<'a>(
         .cloned()
 }
 
-/// The component a unit test exercises: its own when it lives in one, else
-/// the module its file name mirrors, else the one its imports reach most.
-fn unit_component(
+/// Where a test file's claims nest.
+enum Home {
+    /// The product file under test (a sub-component when it has a doc).
+    File(String),
+    Component(String),
+    Container(String),
+    /// A component named after a test file whose code under test is unknown.
+    TestStem(String, String),
+    System,
+}
+
+/// The code a unit test exercises: its own file when the test is inline,
+/// else the product file its name mirrors (nearest directory first), else
+/// the component of its own directory, else the most-imported file of the
+/// component its imports reach most.
+fn unit_home(
     rel: &str,
     container_dir: &str,
     components: &BTreeMap<String, Component>,
     file_component: &HashMap<&str, String>,
     edges_from: &HashMap<&str, Vec<&str>>,
-) -> Option<String> {
-    if let Some(path) = file_component.get(rel) {
-        return Some(path.clone());
+) -> Option<Home> {
+    if file_component.contains_key(rel) {
+        return Some(Home::File(rel.to_string()));
     }
-    let in_container = |path: &&String| components[*path].container_dir == container_dir;
+    let in_container = |f: &str| components[&file_component[f]].container_dir == container_dir;
+    let stem = tested_stem(file_name(rel));
+    let shared_dirs = |f: &str| {
+        f.split('/').zip(rel.split('/')).take_while(|(a, b)| a == b).count()
+    };
+    let mirrored = file_component
+        .keys()
+        .filter(|f| file_stem(f) == stem && in_container(f))
+        .max_by_key(|f| (shared_dirs(f), std::cmp::Reverse(**f)));
+    if let Some(f) = mirrored {
+        return Some(Home::File(f.to_string()));
+    }
     // A colocated test file sits in its component's directory.
     let (own_path, _) = component_of(container_dir, rel);
     if inner_path(container_dir, rel).1.contains('/') && components.contains_key(&own_path) {
-        return Some(own_path);
+        return Some(Home::Component(own_path));
     }
-    let stem = tested_stem(file_name(rel));
-    let mirrored: Option<&String> = file_component
-        .iter()
-        .filter(|(f, _)| file_stem(f) == stem)
-        .map(|(_, p)| p)
-        .filter(in_container)
-        .min();
-    if let Some(path) = mirrored {
-        return Some(path.clone());
-    }
-    let mut counts: BTreeMap<&String, usize> = BTreeMap::new();
+    let mut by_component: BTreeMap<&String, usize> = BTreeMap::new();
+    let mut by_file: BTreeMap<&str, usize> = BTreeMap::new();
     for dst in edges_from.get(rel).into_iter().flatten() {
-        if let Some(path) = file_component.get(dst).filter(in_container) {
-            *counts.entry(path).or_default() += 1;
+        if let Some(path) = file_component.get(dst).filter(|_| in_container(dst)) {
+            *by_component.entry(path).or_default() += 1;
+            *by_file.entry(dst).or_default() += 1;
         }
     }
-    counts
+    let (top, _) = by_component.into_iter().max_by_key(|&(path, n)| (n, std::cmp::Reverse(path)))?;
+    by_file
         .into_iter()
-        .max_by_key(|&(path, n)| (n, std::cmp::Reverse(path)))
-        .map(|(p, _)| p.clone())
+        .filter(|(f, _)| &file_component[f] == top)
+        .max_by_key(|&(f, n)| (n, std::cmp::Reverse(f)))
+        .map(|(f, _)| Home::File(f.to_string()))
 }
 
 fn push_link(

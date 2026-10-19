@@ -216,6 +216,52 @@ mod tests {
         assert!(m.links.iter().any(|l| l.src == draft.id && l.dst == store.id), "links: {:?}", m.links);
     }
 
+    /// When a file inside a directory component has a module doc and claims
+    /// of its own, it becomes a sub-component carrying both; a file with
+    /// claims but no doc leaves them on the directory; a test whose code under
+    /// test cannot be found gets a component named after its file.
+    #[test]
+    fn documented_tested_files_become_sub_components() {
+        let dir = cargo_workspace();
+        let d = dir.path();
+        write(
+            d,
+            "crates/core/src/store/disk.rs",
+            "//! Writes text to disk.\npub fn flush() {}\n#[cfg(test)]\nmod tests {\n    /// Flushes on close\n    #[test]\n    fn flushes() {}\n}\n",
+        );
+        write(
+            d,
+            "crates/core/src/store/cache.rs",
+            "pub fn warm() {}\n#[cfg(test)]\nmod tests {\n    /// Warms lazily\n    #[test]\n    fn warms() {}\n}\n",
+        );
+        write(d, "package.json", r#"{"name":"web"}"#);
+        write(d, "web/main.ts", "export function boot() { return 1; }\n");
+        write(d, "tests/smoke.test.ts", "it('boots without a backend', () => {});\n");
+        let tree = derived_tree_uncached(d).unwrap();
+        let m = &tree.planned;
+        let named = |name: &str| m.nodes.iter().find(|n| n.name == name).unwrap();
+        let home_of = |desc: &str| {
+            let c = tree.claims.iter().find(|c| c.description == desc).unwrap();
+            m.nodes.iter().find(|n| n.id == c.node_id).unwrap()
+        };
+
+        let store = named("store");
+        let disk = named("disk");
+        assert_eq!(disk.kind, Kind::Component);
+        assert_eq!(disk.parent_id.as_deref(), Some(store.id.as_str()));
+        assert_eq!(disk.description.as_deref(), Some("Writes text to disk."));
+        assert_eq!(home_of("Flushes on close").id, disk.id);
+        assert_eq!(named("flush").parent_id.as_deref(), Some(disk.id.as_str()));
+        assert!(m.nodes.iter().all(|n| n.name != "cache"), "an undocumented file is no sub-component");
+        assert_eq!(home_of("Warms lazily").id, store.id);
+        assert_eq!(named("warm").parent_id.as_deref(), Some(store.id.as_str()));
+
+        let smoke = home_of("boots without a backend");
+        assert_eq!((smoke.kind, smoke.name.as_str()), (Kind::Component, "smoke"));
+        let parent = m.nodes.iter().find(|n| Some(n.id.as_str()) == smoke.parent_id.as_deref()).unwrap();
+        assert_eq!((parent.kind, parent.name.as_str()), (Kind::Container, "web"));
+    }
+
     /// When no file changed, the cached tree is returned; touching a file
     /// derives again.
     #[test]
@@ -278,10 +324,25 @@ mod tests {
             eprintln!("    {:?} {}: {}", n.kind, n.name, n.description.as_deref().unwrap_or_default());
         }
         for c in m.nodes.iter().filter(|n| n.kind == Kind::Container) {
-            let comps: Vec<&scryer_core::Node> =
-                m.nodes.iter().filter(|n| n.parent_id.as_deref() == Some(c.id.as_str())).collect();
+            let comps: Vec<&scryer_core::Node> = m
+                .nodes
+                .iter()
+                .filter(|n| n.kind == Kind::Component && n.parent_id.as_deref() == Some(c.id.as_str()))
+                .collect();
             let own = c.responsibilities.len();
-            let unit: usize = comps.iter().map(|n| n.responsibilities.len()).sum();
+            // Unit claims sit on components and their sub-components.
+            let mut below: BTreeSet<&str> = comps.iter().map(|n| n.id.as_str()).collect();
+            for n in m.nodes.iter().filter(|n| n.kind == Kind::Component) {
+                if n.parent_id.as_deref().is_some_and(|p| below.contains(p)) {
+                    below.insert(n.id.as_str());
+                }
+            }
+            let unit: usize = m
+                .nodes
+                .iter()
+                .filter(|n| below.contains(n.id.as_str()))
+                .map(|n| n.responsibilities.len())
+                .sum();
             eprintln!(
                 "  {} — {} components, {} container claims, {} unit claims{}",
                 c.name,
