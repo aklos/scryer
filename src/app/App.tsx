@@ -28,8 +28,6 @@ import { planCounts } from "../features/change-marks/changeMarks";
 import { Powerline } from "../widgets/top-bar/Powerline";
 import { SettingsPanel } from "../widgets/settings-panel/SettingsPanel";
 import { useLaunchSettings } from "../features/agent-launch/useLaunchSettings";
-import { useMcpSetup } from "../features/mcp-setup/useMcpSetup";
-import { McpSetupPrompt } from "../features/mcp-setup/McpSetupPrompt";
 import { useAgentLaunchGate } from "../features/agent-launch/AgentLaunchConfirm";
 import { useModelStorage } from "../features/model-storage/useModelStorage";
 import { useModelBuild, type ModelBuild } from "../features/model-build/useModelBuild";
@@ -293,11 +291,6 @@ function Workspace({
   // the (billable) launch; "don't ask again" clears it (the violet buttons stay
   // as the standing cue).
   const launchGate = useAgentLaunchGate(launchSettings);
-  // A modelled project can still be missing its MCP wiring (e.g. opened before
-  // setup, or never wired at all) — offer one-click integration on open. The
-  // new-project screen handles the empty case; this catches everything already
-  // past it.
-  const mcpSetup = useMcpSetup(projectPath);
 
   // The Wiki/Diagram toggle. The diagram is a secondary nav surface onto the
   // same model and selection; `diagramFocus` is the level it currently shows
@@ -707,11 +700,6 @@ function Workspace({
 
   return (
     <div className="relative flex h-screen w-screen flex-col bg-[var(--surface-canvas)]">
-      {(mcpSetup.needsSetup || mcpSetup.hooksOutdated.length > 0) && !mcpSetup.dismissed && (
-        <div className="absolute right-3 top-12 z-30 w-[300px]">
-          <McpSetupPrompt setup={mcpSetup} onDone={launchSettings.reload} dismissable />
-        </div>
-      )}
       <TopBar
         projectPath={projectPath}
         view={view}

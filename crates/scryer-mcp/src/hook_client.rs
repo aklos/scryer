@@ -14,9 +14,8 @@
 //!                       until it changes)
 //! - PostToolUse edit… → record the touch, say nothing
 //! - Pre/PostToolUse shell → record the files the command modified
-//! - Stop              → block once each on planned work left without a note,
-//!                       an unprobed test and unreconciled claims; otherwise
-//!                       hand the user a one-line summary
+//! - Stop              → close the session's record — the todo tests it
+//!                       wrote, the claims its edits reach — say nothing
 //!
 //! Where they differ is the tool vocabulary and the reply shape, and neither is
 //! discoverable from the event — so the install writes which harness it is
@@ -228,8 +227,8 @@ fn tool_use_id(event: &serde_json::Value) -> Option<&str> {
 }
 
 /// The first time the session reads `file` (or, on Codex, is about to patch
-/// it), note which of its anchors are already out of sync, so the close gate
-/// later blames the session only for drift it made.
+/// it), note which of its anchors are already out of sync — drift it found,
+/// not drift it made.
 fn first_sight(r: &ModelRef, event: &serde_json::Value, file: &str) {
     if let Some(session) = session_id(event) {
         let _ = scryer_core::session::record_first_sight(r, session, file, |f| {
@@ -504,6 +503,11 @@ fn user_prompt_submit(r: &ModelRef, event: &serde_json::Value) {
     for pid in ancestor_pids() {
         let _ = scryer_core::session::bind_pid(r, session, pid);
     }
+    // The first prompt notes the todo tests already there, so the stubs this
+    // session writes can be told apart at its stops.
+    let _ = scryer_core::session::begin(r, session, || {
+        crate::derived::load_tree(r).map(|t| crate::derived::planned_tests(&t)).unwrap_or_default()
+    });
 }
 
 /// The hook's ancestor processes, nearest first — the harness process that
@@ -536,27 +540,26 @@ fn parent_of(pid: u32) -> Option<u32> {
     stat.rsplit_once(')')?.1.split_whitespace().nth(1)?.parse().ok()
 }
 
+/// Close the session's record: the todo tests it wrote become its stubs, and
+/// the claims its edits reach are noted. Silent: a stop never blocks and
+/// never hands anyone a summary — the record is read where the user looks.
 fn stop(r: &ModelRef, event: &serde_json::Value) {
     let Some(session) = session_id(event) else { return };
-    let out = scryer_core::session::stop(
-        r,
-        session,
-        |files| anchor_flags(r, files),
-        |log| {
-            let c = scryer_extract::test_status::probe_check(r, log);
-            (c.block, c.summary)
-        },
-    );
-    if let Some(reason) = out.block {
-        emit(&serde_json::json!({ "decision": "block", "reason": reason }));
-    } else if let Some(summary) = out.summary {
-        emit(&serde_json::json!({ "systemMessage": summary }));
+    let touched = scryer_core::session::session_log(r, session).touched;
+    match crate::derived::load_tree(r) {
+        Ok(tree) => {
+            let planned = crate::derived::planned_tests(&tree);
+            let reached = crate::derived::reached_claims(r, &tree, &touched);
+            let _ = scryer_core::session::stop(r, session, Some(&planned), reached);
+        }
+        Err(_) => {
+            let _ = scryer_core::session::stop(r, session, None, Vec::new());
+        }
     }
 }
 
-/// Out-of-sync anchors in the session's touched files (may silently re-anchor
-/// moved symbols, exactly like get_health). No baseline yet → no flags → the
-/// gate stays silent rather than crying wolf on a fresh model.
+/// Out-of-sync anchors in `files` (may silently re-anchor moved symbols,
+/// exactly like get_health). No baseline yet → no flags.
 fn anchor_flags(r: &ModelRef, files: &[String]) -> Vec<scryer_core::session::AnchorFlag> {
     let files = files.iter().cloned().collect();
     let Ok(check) = scryer_extract::anchors::check_anchors_in(r, &files) else { return Vec::new() };
@@ -711,6 +714,32 @@ mod tests {
         }
         scryer_core::session::record_probe(&r, "s", false).unwrap();
         assert!(probe_guard(&r, &checkout()).is_none(), "the probe closed");
+    }
+
+    /// A session that writes a todo test into a file it edits owns it from
+    /// its next stop; a stub already there at its first prompt stays
+    /// unowned. The stop also records the claims the edit reaches.
+    #[test]
+    fn a_stop_takes_ownership_of_the_stubs_the_session_wrote() {
+        let dir = crate::tools::fixture::project();
+        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let event = |hook: &str| serde_json::json!({ "hook_event_name": hook, "session_id": "s", "cwd": dir.path() });
+        user_prompt_submit(&r, &event("UserPromptSubmit"));
+
+        let draft = dir.path().join("crates/notes/src/draft.rs");
+        let text = std::fs::read_to_string(&draft).unwrap().replace(
+            "    fn merges() { todo!() }\n",
+            "    fn merges() { todo!() }\n\n    /// When a draft is renamed, keeps its text\n    #[test]\n    fn renames() { todo!() }\n",
+        );
+        std::fs::write(&draft, text).unwrap();
+        scryer_core::session::record_touch(&r, "s", &draft.to_string_lossy()).unwrap();
+        stop(&r, &event("Stop"));
+
+        let log = scryer_core::session::session_log(&r, "s");
+        assert_eq!(log.stubs, vec![("crates/notes/src/draft.rs".to_string(), "renames".to_string())]);
+        let tree = crate::derived::load_tree(&r).unwrap();
+        let keeps = tree.claims.iter().find(|c| c.identifier == "keeps_draft").unwrap();
+        assert!(log.reached.contains(&keeps.id), "{:?}", log.reached);
     }
 
     /// An overlay with no claims, directives, pending work or placement — a

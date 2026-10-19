@@ -12,8 +12,7 @@ import { AgentMark, EYEBROW_BASE } from "../../shared/ui/pagekit";
 import type { ModelStorage } from "../../features/model-storage/useModelStorage";
 import type { ModelBuild } from "../../features/model-build/useModelBuild";
 import { useLaunchSettings } from "../../features/agent-launch/useLaunchSettings";
-import { useMcpSetup } from "../../features/mcp-setup/useMcpSetup";
-import { McpSetupPrompt } from "../../features/mcp-setup/McpSetupPrompt";
+import { AgentIntegrationSwitch } from "../../features/agent-integration/AgentIntegrationSwitch";
 import { useAgentLaunchGate } from "../../features/agent-launch/AgentLaunchConfirm";
 import { AGENT_LABEL, SettingsPanel } from "../../widgets/settings-panel/SettingsPanel";
 import { WindowControls } from "../../widgets/top-bar/TopBar";
@@ -31,11 +30,6 @@ export function ProjectPicker({
   const launchSettings = useLaunchSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const launchGate = useAgentLaunchGate(launchSettings, () => setSettingsOpen(true));
-  // Offer MCP wiring on the same screen where the model store is created, so a
-  // fresh project gets set up in one sitting. The `.mcp.json` etc. are written
-  // independently of `.scryer/`, so this works whether they enable before or
-  // after creating the model.
-  const mcpSetup = useMcpSetup(storage.projectPath);
 
   useEffect(() => {
     if (storage.status === "needs-model") {
@@ -171,9 +165,15 @@ export function ProjectPicker({
               Either option creates a <code className="font-mono">.scryer/</code> folder &mdash; your
               model store &mdash; in this project.
             </p>
-            {mcpSetup.needsSetup && !mcpSetup.dismissed && (
+            {/* The project's one integration switch, off until the user
+                flips it — written independently of `.scryer/`, so it works
+                before or after the model store exists. */}
+            {storage.projectPath && (
               <div className="mt-1 text-left">
-                <McpSetupPrompt setup={mcpSetup} onDone={launchSettings.reload} />
+                <AgentIntegrationSwitch
+                  projectPath={storage.projectPath}
+                  onChange={launchSettings.reload}
+                />
               </div>
             )}
             <button

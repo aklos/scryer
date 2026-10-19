@@ -57,7 +57,7 @@ Works with <b>Claude Code</b>, <b>Codex</b> and <b>GitHub Copilot CLI</b> out of
 - **Build from a codebase** — Point an agent at a project and it scans the code to populate the model.
 - **Diagram view** — A diagram renders the model one level at a time for spatial navigation. Drag cards where you want them — placements persist, and auto-layout manages the rest.
 - **MCP server** — Agents connect to read, modify, and build from the model in real time.
-- **AI tool setup** — Detects Claude Code, Codex and Copilot CLI and writes MCP config and auto-approve permissions. Session hooks put the model in front of the agent as it works, per project and per tool. Optionally installs a Claude Code statusLine that reports the model's pending work and drift even while Scryer is closed.
+- **Agent integration** — One switch per project. On, it wires every detected agent CLI (Claude Code, Codex, Copilot CLI) to scryer: MCP config, auto-approve, silent session hooks and a Claude Code status line. Off removes exactly those entries.
 
 ## Getting started
 
@@ -65,7 +65,7 @@ Download the latest release for your platform from the [releases page](https://g
 
 ### Typical workflow
 
-1. Link your project directory in the app and enable AI tool integration when prompted (or run `scryer-mcp init`).
+1. Link your project directory in the app and turn on Agent integration in settings (or run `scryer-mcp setup on`).
 2. Tell your agent: *"Use scryer to model this project's architecture."* It scans the code and the model fills in, with nodes appearing in the tree and on their pages in real time.
 3. Review the model: read the node pages, rename, regroup, restructure, and refine responsibilities.
 4. To make a change, plan it in the model first: add or edit the responsibilities and links it implies. These land in the plan as pending work.
@@ -96,7 +96,7 @@ Scryer works with **Claude Code**, **Codex** and **GitHub Copilot CLI**.
 - **MCP** (Model Context Protocol) — how agents read and write architecture models. Required for any agent integration.
 - **CLI spawning** — how Scryer launches agents for automated model builds and drift sync. Claude Code is spawned via `claude -p` (uses your subscription), Codex via `codex exec` (uses your API key). Both get the Scryer MCP server attached automatically.
 - **ACP** (Agent Client Protocol) — Copilot CLI serves ACP from its own binary (`copilot --acp`), so that's how Scryer launches it; any other agent with a `{name}-acp` adapter on PATH is launched the same way.
-- **Session hooks** — an optional, per-project opt-in for all three: each prompt logged for the ask ledger, the claims governing a file as the agent works in it, and a Stop check that holds the agent to its open asks and to reconciling claims it touched. They run in-process with or without the Scryer app open, and log to `.scryer/sessions/` (untracked).
+- **Session hooks** — part of Agent integration, for all three: the claims governing a file as the agent reads it, and a record of the files the session touched. They never block and never speak at Stop. They run in-process with or without the Scryer app open, and log to `.scryer/sessions/` (untracked).
 
 When an agent connects via MCP, Scryer captures its identity from the protocol handshake. When a build or sync is triggered, Scryer resolves that identity to a binary and launches it with the right flags.
 
@@ -110,17 +110,21 @@ The MCP server lets AI agents read and modify your architecture models. It ships
 
 ### Setup
 
-Link a project directory in the app and click "Enable" on the prompt, or run `scryer-mcp init` from the command line. Both detect installed AI tools and write config:
+One switch per project, from the app (settings → Agent integration) or the command line:
 
-- **Claude Code** — `.mcp.json` + tool auto-approve in `.claude/settings.local.json`
-- **Codex** — `.codex/config.toml`
-- **Copilot CLI** — `.mcp.json`, the same file Claude Code reads (Copilot also accepts a committed `.github/mcp.json`, if you'd rather keep it there)
+```
+scryer-mcp setup        # what is installed, per tool, per file
+scryer-mcp setup on     # write every entry for each detected agent CLI
+scryer-mcp setup off    # remove exactly scryer's entries, nothing else
+```
 
-Existing config files are preserved — only the `scryer` entry is added or updated.
+`on` writes, for each agent CLI on PATH:
 
-Session hooks are a separate opt-in, per tool, from Subagent settings: `.claude/settings.local.json`, `.codex/hooks.json`, or `.github/hooks/scryer.json` for Copilot.
+- **Claude Code** — the scryer server in `.mcp.json`; auto-approve, session hooks and the status line in `.claude/settings.local.json`
+- **Codex** — the scryer server in `.codex/config.toml`; session hooks in `.codex/hooks.json`
+- **Copilot CLI** — the scryer server in `.mcp.json` (the file Claude Code reads); session hooks in `.github/hooks/scryer.json`
 
-For Claude Code you can also install a **statusLine** (from the app, or `scryer-mcp init --statusline`): a one-line model status — pending work, drift scopes, and changes in flight — in every Claude Code session. It reads the model straight off disk, so it keeps reporting while Scryer is closed.
+and `.scryer/.gitignore`, so only what a teammate needs is committed. Both commands are idempotent. Everything else in those files is left alone, and a status line of your own is never replaced. An entry from an earlier scryer, or one naming a binary that has moved, reads as off with a note; `on` rewrites it.
 
 ### Manual setup
 
@@ -146,7 +150,7 @@ If you prefer to configure MCP manually, add Scryer to your project config:
 command = "/path/to/scryer-mcp"
 ```
 
-For Claude Code, you can also auto-approve Scryer's tools so the agent doesn't prompt for every call. This is safe: Scryer's tools only ever read or mutate the model under `.scryer/` — which is git-tracked and shown in Scryer's own diff — never your source, shell, or network. The app can set this up for you, or add the server-wide entry manually to `.claude/settings.local.json`:
+For Claude Code, you can also auto-approve Scryer's tools so the agent doesn't prompt for every call. This is safe: they read your code and tests and write only scryer's own caches and records under `.scryer/` — never your source, shell, or network. The app can set this up for you, or add the server-wide entry manually to `.claude/settings.local.json`:
 
 ```json
 {
@@ -160,37 +164,21 @@ For Claude Code, you can also auto-approve Scryer's tools so the agent doesn't p
 
 ### What the MCP server provides
 
-**Reading & observability:**
-- `orient` — one-call, task-scoped orientation: pass a task and/or files and get the governing nodes, their claims and binding directives, the scoped pending work and drift, the matching modeling rules, and a phase verdict. The front door for coding sessions.
-- `locate` — reverse lookup from code into the model: a file (and optional symbol) resolves to the claims anchored there, the owning node chain, binding directives, and the surrounding scope's health.
-- `read_model` — the model, or a scoped subtree, with responsibilities, links, and context. Auto-resolves the model linked to the current working directory.
-- `search_model` / `query_model` — find nodes by text or by structure.
-- `get_health` — deterministic observability: rolled-up plan and drift marks, vagrant/stale flags, source-anchor and test-backing coverage, disconnected nodes, and an import-graph audit of declared links.
-- `get_pending` — the plan: model→code work not yet built.
-- `get_drift` — boundary-owning nodes whose code changed since the last reconcile (cheap, deterministic — no LLM verdict).
-- `get_rules` — the authoritative C4 modeling rules and workflow guidance.
-- `read_codebase` — annotated project tree: deployable units, data stores, external services.
-- `validate_model` — check the model against C4 rules.
+The server reads the C4 tree derived from your code — containers from packaging, components from modules, claims from behaviour-test descriptions — and keeps the test loop. It writes no model: a claim is a test.
 
-**Authoring (writes the plan):**
-- `file_asks` / `resolve_ask` / `get_asks` — break a logged prompt into asks, and deliver (link claims), answer, or descope each.
-- `refile` — move pending work between changes.
-- `add_person` / `add_system` / `add_container` / `add_component` / `add_symbol` — mint nodes from plain responsibility statements.
-- `add_group` / `update_group` / `delete_group` — group sibling nodes (a secondary packaging axis).
-- `add_links` / `update_links` / `delete_links` — typed relationships between nodes.
-- `update_source_map` — link nodes and responsibilities to files and line ranges, and claims to their backing tests.
+- `orient` — the front door for a coding task: per file its node chain, layer, module description, claims with status, and the test file where new todo stubs go; per task the nodes it matches. Capped at about 4k characters.
+- `locate` — one file in full: every claim that speaks for it with status, test level and JUnit name, and where its stubs go.
+- `read_model` / `search_model` — the derived tree, as an overview, a subtree, or ranked text search.
+- `get_test_radius` — which tests a change reaches by import, at unit and integration level (e2e too with `radius = "all"` in `.scryer/structure.toml`), as the exact command to run.
+- `ingest_test_report` — record a run's JUnit XML against the claims; a later edit to the test or the code it exercises makes the verdict stale.
+- `ingest_mutation_report` — record a cargo-mutants or Stryker run; surviving mutants mark the code they landed in.
+- `open_probe` / `close_probe` — break the code a passing test exercises in an isolated worktree and see whether the test notices; a surviving break is a finding.
 
-**Testing:**
-- `ingest_test_report` — point it at the JUnit XML a runner just wrote; every attached test's result is recorded against its claim, fingerprint-keyed so a later edit to the implementation or the test reads as stale.
-- `get_test_radius` — which test files actually need running: exactly those behind claims with a missing or stale verdict, never the whole suite.
-- `open_probe` / `close_probe` — open a falsification probe on a claim (an isolated worktree, the span to break, the tests to run there), then record how many deliberate breaks were tried and which ones the test failed to catch.
+### Suggested CLAUDE.md
 
-**Building & reconciliation:**
-- `fill_container` — fill in a whole container's subtree at once when extracting from existing code (generation pipeline).
-- `mark_implemented` — fold implemented work from the plan into the committed model, anchoring claims and linking their tests in the same call.
-- `flag_drift` / `reconcile_drift` — record undescribed behavior or stale claims, then advance the drift anchor.
-- `update_nodes` / `delete_nodes` / `descope` / `move_nodes` / `move_responsibilities` — interactive edits and refinement (`descope` drops a node from the model while leaving its code in place).
-- `replace_model` / `replace_subtree` / `replace_groups` — generation-pipeline primitives for whole-model / whole-subtree / bulk-group writes.
+The server's own instructions, worth keeping in the project's CLAUDE.md (or AGENTS.md) too:
+
+> Scryer reads this project's architecture from its code: containers from packaging, components from modules, claims from behaviour tests. A behaviour test's description is an EARS claim about the code it tests, subject dropped, condition first: `<verb> <object>` when always true; `When <trigger>, <response>`; `While <state>, <response>`; `If <unwanted condition>, then <response>`. One pattern and one response per test; a cross-cutting concern is a trailing `[tag]`. The test's level is the claim's level: an e2e test claims for the whole system, an integration test at a deployable's boundary for its container, a unit test for its component — write a claim at the level it speaks for. Before building, `orient {task, files}` and write each claim you will satisfy as a todo test in the file orient names; a todo test is work to do. Run only what `get_test_radius` names, then `ingest_test_report`. A surviving probe (`open_probe`) is a finding: strengthen the test. Every tool takes an optional absolute `project`, defaulting to the working directory.
 
 ## Drift detection & sync
 
@@ -203,7 +191,7 @@ When drift is detected:
 3. Undescribed behavior is proposed into the plan as a **vagrant** claim for you to adopt or reject; a **stale** claim is flagged on the committed model where the code regressed from what was claimed.
 4. Model changes appear in the editor in real time. When every scope has been examined, the drift anchor advances so the same changes stop surfacing.
 
-For Claude Code, the MCP server config is passed inline via `--mcp-config`. For Codex, the project must have MCP already configured (via `scryer-mcp init` or the app's setup flow), since Codex reads MCP config from `.codex/config.toml`.
+For Claude Code, the MCP server config is passed inline via `--mcp-config`. For Codex, the project must have MCP already configured (via `scryer-mcp setup on` or the app's Agent integration switch), since Codex reads MCP config from `.codex/config.toml`.
 
 ## Tech
 

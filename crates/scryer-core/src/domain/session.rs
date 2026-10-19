@@ -27,21 +27,8 @@ pub enum SessionEvent {
     Touch { file: String },
     /// The read overlay for `file` was served with this payload hash.
     Overlay { file: String, hash: u64 },
-    /// The Stop gate blocked on unreconciled anchors — at most once per session.
-    ReconcileGate,
     /// The agent wrote these plan elements (change-map keys).
     ModelEdit { keys: Vec<String> },
-    /// The summary last shown to the user, so an unchanged one stays silent.
-    Summary { text: String },
-    /// The Stop gate blocked on these unfolded plan entries, which carried
-    /// no progress note. Each is blocked on at most once.
-    PendingGate {
-        #[serde(default)]
-        keys: Vec<String>,
-    },
-    /// The Stop gate blocked until this session's new tests were
-    /// mutation-probed — at most once per session.
-    ProbeGate,
     /// The task the agent oriented on, in its own words — the title the
     /// session's change takes. Only the first is kept.
     Task { text: String },
@@ -64,6 +51,30 @@ pub enum SessionEvent {
     /// off-limits to commands that discard uncommitted work.
     ProbeOpen,
     ProbeClose,
+    /// The agent stopped — the end of a turn, not necessarily of the session.
+    Stop,
+    /// The todo tests in the project when this was recorded — at the
+    /// session's start and at each stop — as [`test_key`]s, so the next stop
+    /// can tell the stubs this session wrote from ones that were there.
+    Planned {
+        #[serde(default)]
+        tests: Vec<String>,
+    },
+    /// This session wrote this todo test: the work is its until the test
+    /// passes. The owner record; the test's own text carries no tag.
+    Stub { file: String, test: String },
+    /// The claims this session's edits reach (derived claim ids), as of its
+    /// last stop.
+    Reached {
+        #[serde(default)]
+        ids: Vec<String>,
+    },
+}
+
+/// One test as the session log names it: `file#junit_name`. A JUnit name is
+/// unique only within its file.
+pub fn test_key(file: &str, junit_name: &str) -> String {
+    format!("{file}#{junit_name}")
 }
 
 /// The fold of a session's events.
@@ -73,19 +84,10 @@ pub struct SessionLog {
     pub touched: Vec<String>,
     /// The last overlay hash served per file.
     pub overlays: Vec<(String, u64)>,
-    /// Whether the reconcile gate already fired.
-    pub reconcile_gated: bool,
-    /// Unfolded plan entries the Stop gate already blocked on.
-    pub gated_pending: Vec<String>,
-    /// Whether the probe gate already fired.
-    pub probe_gated: bool,
     /// Whether the session has a probe open.
     pub probe_open: bool,
     /// Plan elements the agent wrote, first-write order, each once.
     pub model_edits: Vec<String>,
-    /// Plan elements a file edit followed — planned, then built on.
-    pub built_on: Vec<String>,
-    pub last_summary: Option<String>,
     /// Shell commands started, `(tool-call id, unix ns)`, in start order.
     pub shell_starts: Vec<(Option<String>, u64)>,
     /// The first task the agent oriented on.
@@ -93,6 +95,13 @@ pub struct SessionLog {
     /// Per file the session has read, the anchors already out of sync when
     /// it first did, as `(key, state)`.
     pub first_sight: Vec<(String, Vec<(String, String)>)>,
+    /// The todo tests last recorded (at start or the last stop), as
+    /// [`test_key`]s; `None` until the first record.
+    pub planned_seen: Option<Vec<String>>,
+    /// The todo tests this session wrote, `(file, junit_name)`, each once.
+    pub stubs: Vec<(String, String)>,
+    /// The claims its edits reached at the last stop.
+    pub reached: Vec<String>,
 }
 
 impl SessionLog {
@@ -110,11 +119,6 @@ impl SessionLog {
                 if !self.touched.contains(file) {
                     self.touched.push(file.clone());
                 }
-                for k in &self.model_edits {
-                    if !self.built_on.contains(k) {
-                        self.built_on.push(k.clone());
-                    }
-                }
             }
             SessionEvent::Overlay { file, hash } => {
                 match self.overlays.iter_mut().find(|(f, _)| f == file) {
@@ -122,7 +126,6 @@ impl SessionLog {
                     None => self.overlays.push((file.clone(), *hash)),
                 }
             }
-            SessionEvent::ReconcileGate => self.reconcile_gated = true,
             SessionEvent::ModelEdit { keys } => {
                 for k in keys {
                     if !self.model_edits.contains(k) {
@@ -130,11 +133,16 @@ impl SessionLog {
                     }
                 }
             }
-            SessionEvent::Summary { text } => self.last_summary = Some(text.clone()),
-            SessionEvent::PendingGate { keys } => self.gated_pending.extend(keys.iter().cloned()),
-            SessionEvent::ProbeGate => self.probe_gated = true,
             SessionEvent::ProbeOpen => self.probe_open = true,
             SessionEvent::ProbeClose => self.probe_open = false,
+            SessionEvent::Stop => {}
+            SessionEvent::Planned { tests } => self.planned_seen = Some(tests.clone()),
+            SessionEvent::Stub { file, test } => {
+                if !self.stubs.iter().any(|(f, t)| f == file && t == test) {
+                    self.stubs.push((file.clone(), test.clone()));
+                }
+            }
+            SessionEvent::Reached { ids } => self.reached = ids.clone(),
             SessionEvent::ShellStart { tool, ns } => self.shell_starts.push((tool.clone(), *ns)),
             SessionEvent::Task { text } => {
                 if self.task.is_none() {
@@ -149,22 +157,19 @@ impl SessionLog {
         }
     }
 
-    /// Whether anchor `key` was already in `state` when the session first
-    /// read `file`.
-    pub fn found_stale(&self, file: &str, key: &str, state: &str) -> bool {
-        self.first_sight
+    /// The todo tests in `planned` (`(file, junit_name)`) this session wrote
+    /// since its last record: in a file it touched, absent from what was
+    /// there at its start or last stop, and not already its own.
+    pub fn new_stubs<'p>(&self, planned: &'p [(String, String)]) -> Vec<&'p (String, String)> {
+        let seen = self.planned_seen.as_deref().unwrap_or_default();
+        planned
             .iter()
-            .any(|(f, stale)| f == file && stale.iter().any(|(k, s)| k == key && s == state))
-    }
-
-    /// Whether the session edited a file after planning `key`. An entry the
-    /// log never saw planned counts any edit at all.
-    pub fn edited_since_planning(&self, key: &str) -> bool {
-        if self.model_edits.iter().any(|k| k == key) {
-            self.built_on.iter().any(|k| k == key)
-        } else {
-            !self.touched.is_empty()
-        }
+            .filter(|(file, test)| {
+                self.touched.contains(file)
+                    && !seen.contains(&test_key(file, test))
+                    && !self.stubs.iter().any(|(f, t)| f == file && t == test)
+            })
+            .collect()
     }
 
     /// Whether the session has read `file` yet.
@@ -226,8 +231,8 @@ mod tests {
         let line = serde_json::to_string(&e).unwrap();
         assert_eq!(line, r#"{"at":1,"event":"touch","file":"src/a.rs"}"#);
         assert_eq!(serde_json::from_str::<SessionEntry>(&line).unwrap(), e);
-        let gate = serde_json::to_string(&entry(SessionEvent::ReconcileGate)).unwrap();
-        assert_eq!(gate, r#"{"at":1,"event":"reconcileGate"}"#);
+        let stop = serde_json::to_string(&entry(SessionEvent::Stop)).unwrap();
+        assert_eq!(stop, r#"{"at":1,"event":"stop"}"#);
     }
 
     #[test]
@@ -244,7 +249,27 @@ mod tests {
         assert!(log.overlay_is_repeat("a.rs", 2));
         assert!(!log.overlay_is_repeat("a.rs", 1), "a changed payload re-fires");
         assert!(!log.overlay_is_repeat("b.rs", 2), "per file");
-        assert!(!log.reconcile_gated);
+    }
+
+    /// A stub is the session's when it appeared since the last record, in a
+    /// file the session touched; with no record yet, every stub in a touched
+    /// file counts as new.
+    #[test]
+    fn new_stubs_are_the_ones_since_the_last_record_in_touched_files() {
+        let planned = |tests: &[(&str, &str)]| -> Vec<(String, String)> {
+            tests.iter().map(|(f, t)| (f.to_string(), t.to_string())).collect()
+        };
+        let now = planned(&[("a.rs", "old"), ("a.rs", "new"), ("b.rs", "elsewhere")]);
+        let mut log = SessionLog::from_events(&[entry(SessionEvent::Touch { file: "a.rs".into() })]);
+        assert_eq!(log.new_stubs(&now).len(), 2, "no record yet: both stubs in a.rs");
+
+        log.apply(&SessionEvent::Planned { tests: vec![test_key("a.rs", "old")] });
+        let fresh: Vec<&str> = log.new_stubs(&now).iter().map(|(_, t)| t.as_str()).collect();
+        assert_eq!(fresh, ["new"]);
+
+        log.apply(&SessionEvent::Stub { file: "a.rs".into(), test: "new".into() });
+        assert!(log.new_stubs(&now).is_empty(), "already owned");
+        assert_eq!(log.stubs, vec![("a.rs".to_string(), "new".to_string())]);
     }
 
     #[test]

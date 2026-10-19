@@ -1121,13 +1121,16 @@ fn build_edges(
             continue; // the Rust manifest-map scope below reads Rust semantics
         }
 
-        // --- third scope: CROSS-container references via the manifest map ---
+        // --- third scope: references by CRATE NAME via the manifest map ---
         // The two scopes above resolve names only within the file's own
         // container. A qualified path (`scryer_extract::anchors::write_baseline`
         // or a `use` of it) names its target container in the head segment, so
         // we can follow it across the boundary — the one resolution the
-        // name-only design deliberately ducked. Same unique-or-skip discipline:
-        // an ambiguous leaf yields no edge.
+        // name-only design deliberately ducked. The head may name the file's
+        // OWN crate too: a crate's `tests/`, `benches/`, `examples/` and
+        // binaries import its library by name, and that is an import like any
+        // other. Same unique-or-skip discipline: an ambiguous leaf yields no
+        // edge.
         for pref in &f.parse.paths {
             let head = pref.segments.first().map(String::as_str).unwrap_or("");
             if PATH_BUILTINS.contains(&head) {
@@ -1141,9 +1144,6 @@ fn build_edges(
                 }
                 continue;
             };
-            if Some(dst_dir) == container_dir {
-                continue; // same container — already covered above
-            }
             // The resolvable symbol is the last segment that isn't a universal
             // method/constructor name: `ExtentResolver::new` -> `ExtentResolver`.
             let Some(sym) = pref.segments[1..]
@@ -1157,7 +1157,9 @@ fn build_edges(
             match cont_names.get(dst_dir).and_then(|m| m.get(sym)) {
                 Some(cands) if cands.len() == 1 => {
                     let (dst_key, dst_file) = cands[0];
-                    file_edges.insert((file.to_string(), dst_file.to_string()));
+                    if dst_file != file {
+                        file_edges.insert((file.to_string(), dst_file.to_string()));
+                    }
                     // Symbol edge from the enclosing function when the reference
                     // sits at a real call site (a `use` line is module-scoped, so
                     // `enclosing` returns None and only the file edge stands).
@@ -2956,6 +2958,62 @@ fn add_one(x: u32) -> u32 {
         );
     }
 
+    /// A crate's integration test imports the crate by its own name
+    /// (`use notes::store::Store` in `crates/notes/tests/x.rs`): that is an
+    /// import of the file defining `Store`, and of the module a bare module
+    /// path names.
+    #[test]
+    fn a_crates_own_tests_import_it_by_name() {
+        let files = vec![
+            ParsedFile {
+                rel_path: "crates/notes/src/store.rs".into(),
+                source: String::new(),
+                parse: FileParse {
+                    cs: None,
+                    test_blocks: vec![],
+                    defs: vec![def("Store", 1, 3)],
+                    idents: vec![],
+                    paths: vec![],
+                    imports: vec![],
+                },
+            },
+            ParsedFile {
+                rel_path: "crates/notes/src/draft.rs".into(),
+                source: String::new(),
+                parse: FileParse {
+                    cs: None,
+                    test_blocks: vec![],
+                    defs: vec![def("save", 1, 3)],
+                    idents: vec![],
+                    paths: vec![],
+                    imports: vec![],
+                },
+            },
+            ParsedFile {
+                rel_path: "crates/notes/tests/roundtrip.rs".into(),
+                source: String::new(),
+                parse: FileParse {
+                    cs: None,
+                    test_blocks: vec![],
+                    defs: vec![def("roundtrip", 3, 6)],
+                    idents: vec![],
+                    paths: vec![usepath(&["notes", "store", "Store"], 1), usepath(&["notes", "draft"], 2)],
+                    imports: vec![],
+                },
+            },
+        ];
+        let ctx = build_context("proj", &[container("crates/notes", "notes")], &files, &[]);
+        let from_test: Vec<&str> = ctx
+            .file_edges
+            .iter()
+            .filter(|e| e.src == "crates/notes/tests/roundtrip.rs")
+            .map(|e| e.dst.as_str())
+            .collect();
+        assert!(from_test.contains(&"crates/notes/src/store.rs"), "{from_test:?}");
+        assert!(from_test.contains(&"crates/notes/src/draft.rs"), "module path: {from_test:?}");
+        assert!(ctx.external_imports.iter().all(|e| e.package != "notes"), "its own crate is not external");
+    }
+
     /// A bare module import (`use dep::helpers;`) names a module, not a def, and
     /// still resolves to that module's file (file edge only — no symbol).
     #[test]
@@ -3000,8 +3058,8 @@ fn add_one(x: u32) -> u32 {
         );
     }
 
-    /// Same-crate qualified paths and stdlib paths must NOT produce edges: the
-    /// head is either the file's own container or an external crate we don't model.
+    /// A stdlib path, and an own-crate path that lands in the same file,
+    /// produce no edge.
     #[test]
     fn cross_container_ignores_self_and_external() {
         let files = vec![ParsedFile {
@@ -3014,7 +3072,7 @@ fn add_one(x: u32) -> u32 {
                 idents: vec![],
                 paths: vec![
                     pathref(&["std", "collections", "HashMap"], 1),
-                    pathref(&["app", "Helper"], 2), // own crate -> handled elsewhere
+                    pathref(&["app", "Helper"], 2), // own crate, this very file
                     pathref(&["crate", "Helper"], 3),
                 ],
                 imports: vec![],
@@ -3022,8 +3080,8 @@ fn add_one(x: u32) -> u32 {
         }];
         let containers = vec![container("crates/app", "app")];
         let ctx = build_context("proj", &containers, &files, &[]);
-        // No cross-container edges: std is external, app is self.
-        assert!(ctx.file_edges.is_empty(), "no cross-crate edges expected");
+        // No edges: std is external, and `app::Helper` names this file.
+        assert!(ctx.file_edges.is_empty(), "no file edges expected");
     }
 
     /// The audit's litmus case: `import { Button } from "@acme/ui"` across a

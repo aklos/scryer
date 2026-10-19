@@ -25,3 +25,4 @@ pub mod product_code;
 pub mod refusal;
 pub mod session;
 pub mod layers;
+pub mod agent_setup;

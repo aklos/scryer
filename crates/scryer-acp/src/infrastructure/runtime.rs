@@ -682,8 +682,8 @@ async fn start_acp_session(
             if !project_declares_scryer_mcp(cwd) {
                 return Err(format!(
                     "Copilot can only reach scryer through this project's own MCP config, and \
-                     {cwd}/.mcp.json doesn't declare it. Enable AI tool integration for this \
-                     project (or run `scryer-mcp init`), and make sure you've trusted the folder \
+                     {cwd}/.mcp.json doesn't declare it. Turn on Agent integration for this \
+                     project (or run `scryer-mcp setup on`), and make sure you've trusted the folder \
                      in Copilot — it skips project MCP servers in untrusted folders."
                 ));
             }

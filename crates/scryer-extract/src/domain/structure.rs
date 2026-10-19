@@ -12,6 +12,9 @@ pub use scryer_core::derived_tree::ClaimLevel;
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Structure {
+    /// `"all"` puts e2e tests in the test radius too; by default it holds
+    /// unit and integration tests only.
+    pub radius: Option<String>,
     #[serde(default)]
     pub system: SystemConfig,
     #[serde(default)]
@@ -87,6 +90,11 @@ impl Structure {
         self.levels.integration.is_some()
     }
 
+    /// Whether the test radius includes e2e tests (`radius = "all"`).
+    pub fn radius_includes_e2e(&self) -> bool {
+        self.radius.as_deref() == Some("all")
+    }
+
     /// The config for a container, looked up by directory, then by name
     /// (two packages may share a name; a directory is unambiguous).
     pub fn container(&self, name: &str, dir: &str) -> Option<&ContainerConfig> {
@@ -134,6 +142,8 @@ mod tests {
     fn parses_the_documented_shape() {
         let s = Structure::parse(
             r#"
+radius = "all"
+
 [system]
 name = "scryer"
 persons = ["developer", "agent"]
@@ -160,6 +170,7 @@ layers = ["domain", "application", "composition", "infrastructure"]
         assert_eq!(s.configured_level("tests/smoke.rs"), Some(ClaimLevel::Container));
         assert_eq!(s.configured_level("crates/scryer-core/src/model.rs"), None);
         assert!(s.integration_configured());
+        assert!(s.radius_includes_e2e());
     }
 
     /// When the file is absent, e2e and integration directories still sort
@@ -171,6 +182,7 @@ layers = ["domain", "application", "composition", "infrastructure"]
         assert_eq!(s.configured_level("src/api.integration.test.ts"), Some(ClaimLevel::Container));
         assert_eq!(s.configured_level("tests/Server.Tests/ChatTests.cs"), None);
         assert!(!s.integration_configured());
+        assert!(!s.radius_includes_e2e());
     }
 
     /// When a container is renamed, its section's name changes in place, a

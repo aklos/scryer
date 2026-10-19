@@ -51,6 +51,12 @@ pub mod scan {
     pub use crate::domain::product_code::*;
 }
 
+/// Agent integration: one switch per project.
+pub mod agent_setup {
+    pub use crate::composition::agent_setup::*;
+    pub use crate::domain::agent_setup::{EntryState, Part, Tool};
+}
+
 /// The developer's agent preferences.
 pub mod settings {
     pub use crate::composition::settings_store::*;

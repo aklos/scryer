@@ -219,11 +219,31 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         container_ids.insert(c.dir.as_str(), id);
     }
 
+    let cargo_dirs: HashSet<&str> = input
+        .containers
+        .iter()
+        .filter(|c| {
+            let manifest = if c.dir.is_empty() { "Cargo.toml".to_string() } else { format!("{}/Cargo.toml", c.dir) };
+            input.all_files.contains(&manifest)
+        })
+        .map(|c| c.dir.as_str())
+        .collect();
+    // A crate's `src/lib.rs` and `src/main.rs` are its composition root: the
+    // module list and the wiring, not a component. Their doc describes the
+    // container, their definitions and tests sit on it, and no style asks
+    // them for a layer.
+    let crate_root = |rel: &str| {
+        rel.ends_with(".rs")
+            && owner(rel).is_some_and(|c| {
+                cargo_dirs.contains(c.dir.as_str()) && matches!(inner_path(&c.dir, rel).1, "lib.rs" | "main.rs")
+            })
+    };
+
     // Components: every product file's module or top directory.
     let mut components: BTreeMap<String, Component> = BTreeMap::new();
     let mut file_component: HashMap<&str, String> = HashMap::new();
     for rel in input.lifts.keys() {
-        if is_test_file(rel) {
+        if is_test_file(rel) || crate_root(rel) {
             continue;
         }
         let Some(c) = owner(rel) else { continue };
@@ -249,15 +269,6 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
     for e in input.file_edges.iter().filter(|e| !e.guessed) {
         edges_from.entry(e.src.as_str()).or_default().push(e.dst.as_str());
     }
-    let cargo_dirs: HashSet<&str> = input
-        .containers
-        .iter()
-        .filter(|c| {
-            let manifest = if c.dir.is_empty() { "Cargo.toml".to_string() } else { format!("{}/Cargo.toml", c.dir) };
-            input.all_files.contains(&manifest)
-        })
-        .map(|c| c.dir.as_str())
-        .collect();
     let mut homes: Vec<(&String, &FileLift, ClaimLevel, Home)> = Vec::new();
     for (rel, lift) in input.lifts {
         if lift.tests.is_empty() {
@@ -283,6 +294,7 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         let home = match (level, target_container) {
             (ClaimLevel::System, _) | (_, None) => Home::System,
             (ClaimLevel::Container, Some(dir)) => Home::Container(dir),
+            (ClaimLevel::Component, Some(dir)) if crate_root(rel) => Home::Container(dir),
             (ClaimLevel::Component, Some(dir)) => {
                 unit_home(rel, &dir, &components, &file_component, &edges_from)
                     .unwrap_or_else(|| Home::TestStem(dir, tested_stem(file_name(rel))))
@@ -377,10 +389,17 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
             .push(Source { pattern: rel.to_string(), comment: None });
     }
 
-    // Symbols: outermost definitions of product files, test code left out.
+    // Symbols: outermost definitions of product files, test code left out;
+    // a crate root's sit on its container.
     for f in input.files {
-        let Some(path) = file_component.get(f.rel_path.as_str()) else { continue };
-        let parent = sub_ids.get(f.rel_path.as_str()).unwrap_or(&components[path].id).clone();
+        let parent = match file_component.get(f.rel_path.as_str()) {
+            Some(path) => sub_ids.get(f.rel_path.as_str()).unwrap_or(&components[path].id).clone(),
+            None if crate_root(&f.rel_path) => match owner(&f.rel_path).and_then(|c| container_ids.get(c.dir.as_str())) {
+                Some(id) => id.clone(),
+                None => continue,
+            },
+            None => continue,
+        };
         let lift = input.lifts.get(&f.rel_path);
         let in_test = |line: u32| {
             lift.is_some_and(|l| {
@@ -509,9 +528,15 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         n.responsibilities.retain(|r| !planned_ids.contains(r.id.as_str()));
     }
     committed.test_map.retain(|id, _| !planned_ids.contains(id.as_str()));
+    // A crate root maps to its crate, so code no test reaches there is dark
+    // like any other.
     let file_nodes: BTreeMap<String, String> = file_component
         .iter()
         .map(|(f, path)| (f.to_string(), sub_ids.get(f).unwrap_or(&components[path].id).clone()))
+        .chain(input.lifts.keys().filter(|f| crate_root(f)).filter_map(|f| {
+            let id = owner(f).and_then(|c| container_ids.get(c.dir.as_str()))?;
+            Some((f.clone(), id.clone()))
+        }))
         .collect();
     // Dark code: product files no test file reaches through the import graph.
     let mut reached: HashSet<&str> = homes.iter().map(|(rel, ..)| rel.as_str()).collect();
