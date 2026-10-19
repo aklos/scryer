@@ -1,5 +1,5 @@
 //! The command-line side of scryer-mcp: the status line, the CI gate, the
-//! claim lint, and agent-integration setup.
+//! claim lint, the derived-data export, and agent-integration setup.
 //!
 //! Everything reads the C4 tree derived from the code and each claim's
 //! derived status — never the authored model. The project is found by walking
@@ -221,6 +221,83 @@ pub(crate) fn run_lint(args: &[String]) -> Result<(), Box<dyn std::error::Error>
 pub(crate) struct Gates {
     pub stale: bool,
     pub mutants: bool,
+}
+
+/// `scryer-mcp export [--project dir]` — refresh the derivation and print it
+/// as one JSON document in the shapes the app's commands return: `tree`
+/// (the derived tree), `status` (each claim's derived status, rolled up),
+/// `structure` (structure.toml with its defaults), `sessions` (each session
+/// log, newest first) and `layout` (the diagram placements the tree's nodes
+/// carry, by node id). Exit 2 when there is no project or it cannot be
+/// derived. A session's prompt is never exported: a log may hold the
+/// developer's first prompt, and it is theirs, not data about the code.
+pub(crate) fn run_export(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    const USAGE: &str = "scryer-mcp export [--project dir]";
+    let mut start: Option<PathBuf> = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match (a.as_str(), it.len()) {
+            ("--project", n) if n > 0 && start.is_none() => start = it.next().map(PathBuf::from),
+            (other, _) => {
+                eprintln!("unknown argument '{other}'\nusage: {USAGE}");
+                std::process::exit(2);
+            }
+        }
+    }
+    let start = match start {
+        Some(p) => p,
+        None => std::env::current_dir()?,
+    };
+    let Some(project) = find_project(&start) else {
+        eprintln!("scryer export: no project (no .scryer/ at or above {})", start.display());
+        std::process::exit(2);
+    };
+    match export(&project) {
+        Ok(doc) => println!("{doc}"),
+        Err(e) => {
+            eprintln!("scryer export: {e}");
+            std::process::exit(2);
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn export(project: &Path) -> Result<serde_json::Value, String> {
+    use scryer_core::domain::session::SessionEvent;
+    use scryer_core::infrastructure::session_store;
+    let (tree, status) = derived_status(project)?;
+    let s = scryer_extract::infrastructure::derived_tree::read_structure(project)?;
+    let structure = serde_json::json!({
+        "system": { "name": s.system.name, "persons": s.system.persons, "externals": s.system.externals },
+        "levels": { "e2e": s.levels.e2e, "integration": s.levels.integration },
+        "containers": s.containers.iter().map(|(key, c)| {
+            (key.clone(), serde_json::json!({ "name": c.name, "style": c.style, "layers": c.layers }))
+        }).collect::<serde_json::Map<_, _>>(),
+    });
+    let r = ModelRef::ProjectLocal(project.to_path_buf());
+    let sessions: Vec<serde_json::Value> = session_store::list(&r)
+        .into_iter()
+        .map(|(id, _)| {
+            let entries: Vec<_> = session_store::read(&r, &id)
+                .into_iter()
+                .filter(|e| !matches!(e.event, SessionEvent::Prompt { .. }))
+                .collect();
+            serde_json::json!({ "id": id, "entries": entries })
+        })
+        .collect();
+    let layout: serde_json::Map<_, _> = tree
+        .planned
+        .nodes
+        .iter()
+        .filter_map(|n| n.position.as_ref().map(|p| (n.id.clone(), serde_json::json!({ "x": p.x, "y": p.y }))))
+        .collect();
+    Ok(serde_json::json!({
+        "tree": tree,
+        "status": status,
+        "structure": structure,
+        "sessions": sessions,
+        "layout": layout,
+    }))
 }
 
 /// `scryer-mcp check [--fail-on-stale] [--fail-on-mutants] [path]` — the CI
