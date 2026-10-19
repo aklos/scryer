@@ -107,21 +107,31 @@ pub fn merge_worktrees(since: u64, parts: Vec<(LandingWorktree, Landing)>) -> La
 }
 
 /// Take out of `sessions` the ones that worked in a nested worktree: every
-/// file they touched sits under `prefix` (that worktree's path relative to
-/// this checkout, with a trailing `/`). Their touches are rewritten
-/// relative to the worktree, so its own tree can read them.
+/// file they read, edited or stubbed sits under `prefix` (that worktree's
+/// path relative to this checkout, with a trailing `/`). Those paths are
+/// rewritten relative to the worktree, so its own tree can read them.
 pub fn take_prefixed(
     sessions: &mut Vec<(String, Vec<SessionEntry>)>,
     prefix: &str,
 ) -> Vec<(String, Vec<SessionEntry>)> {
     use crate::domain::session::SessionEvent;
+    fn file_of(event: &mut SessionEvent) -> Option<&mut String> {
+        match event {
+            SessionEvent::Touch { file } | SessionEvent::Overlay { file, .. } | SessionEvent::Stub { file, .. } => {
+                Some(file)
+            }
+            _ => None,
+        }
+    }
     let inside = |entries: &[SessionEntry]| {
-        let mut touches = entries.iter().filter_map(|e| match &e.event {
-            SessionEvent::Touch { file } => Some(file),
+        let mut files = entries.iter().filter_map(|e| match &e.event {
+            SessionEvent::Touch { file } | SessionEvent::Overlay { file, .. } | SessionEvent::Stub { file, .. } => {
+                Some(file)
+            }
             _ => None,
         });
-        let first = touches.next();
-        first.is_some_and(|f| f.starts_with(prefix)) && touches.all(|f| f.starts_with(prefix))
+        let first = files.next();
+        first.is_some_and(|f| f.starts_with(prefix)) && files.all(|f| f.starts_with(prefix))
     };
     let (taken, kept): (Vec<_>, Vec<_>) = std::mem::take(sessions).into_iter().partition(|(_, e)| inside(e));
     *sessions = kept;
@@ -131,7 +141,7 @@ pub fn take_prefixed(
             let entries = entries
                 .into_iter()
                 .map(|mut e| {
-                    if let SessionEvent::Touch { file } = &mut e.event {
+                    if let Some(file) = file_of(&mut e.event) {
                         *file = file[prefix.len()..].to_string();
                     }
                     e
@@ -380,19 +390,21 @@ mod tests {
         assert_eq!(l.shared, vec![SharedComponent { node_id: "comp-x".into(), sessions: vec!["a".into(), "b".into()] }]);
     }
 
-    /// When a session touched only files under a nested worktree's prefix,
-    /// it moves to that worktree with its touches made relative to it; a
-    /// session that touched anything else stays.
+    /// When a session read or touched only files under a nested worktree's
+    /// prefix, it moves to that worktree with those paths made relative to
+    /// it; a session that touched anything else stays.
     #[test]
     fn sessions_in_a_nested_worktree_move_to_it() {
         let mut sessions = vec![
             ("in".to_string(), vec![touch(1, ".claude/worktrees/x/src/a.rs"), touch(2, ".claude/worktrees/x/src/b.rs")]),
             ("mixed".to_string(), vec![touch(1, ".claude/worktrees/x/src/a.rs"), touch(2, "src/c.rs")]),
+            ("read".to_string(), vec![SessionEntry { at: 1, event: SessionEvent::Overlay { file: ".claude/worktrees/x/src/a.rs".into(), hash: 7 } }]),
             ("none".to_string(), vec![SessionEntry { at: 1, event: SessionEvent::Task { text: "t".into() } }]),
         ];
         let taken = take_prefixed(&mut sessions, ".claude/worktrees/x/");
-        assert_eq!(taken.len(), 1);
+        assert_eq!(taken.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec!["in", "read"]);
         assert_eq!(taken[0].1[0], touch(1, "src/a.rs"));
+        assert_eq!(taken[1].1[0].event, SessionEvent::Overlay { file: "src/a.rs".into(), hash: 7 });
         assert_eq!(sessions.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec!["mixed", "none"]);
     }
 }
