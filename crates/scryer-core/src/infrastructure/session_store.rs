@@ -97,7 +97,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
         append(&r, "s-1", SessionEvent::Touch { file: "a.rs".into() }).unwrap();
-        append(&r, "s-1", SessionEvent::ReconcileGate).unwrap();
+        append(&r, "s-1", SessionEvent::Stop).unwrap();
         // A torn line from a killed writer.
         let path = session_path(&r, "s-1").unwrap();
         let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();

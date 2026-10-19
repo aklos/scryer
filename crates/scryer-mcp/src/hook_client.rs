@@ -14,9 +14,7 @@
 //!                       until it changes)
 //! - PostToolUse edit… → record the touch, say nothing
 //! - Pre/PostToolUse shell → record the files the command modified
-//! - Stop              → block once each on planned work left without a note,
-//!                       an unprobed test and unreconciled claims; otherwise
-//!                       hand the user a one-line summary
+//! - Stop              → close the session's record, say nothing
 //!
 //! Where they differ is the tool vocabulary and the reply shape, and neither is
 //! discoverable from the event — so the install writes which harness it is
@@ -228,8 +226,8 @@ fn tool_use_id(event: &serde_json::Value) -> Option<&str> {
 }
 
 /// The first time the session reads `file` (or, on Codex, is about to patch
-/// it), note which of its anchors are already out of sync, so the close gate
-/// later blames the session only for drift it made.
+/// it), note which of its anchors are already out of sync — drift it found,
+/// not drift it made.
 fn first_sight(r: &ModelRef, event: &serde_json::Value, file: &str) {
     if let Some(session) = session_id(event) {
         let _ = scryer_core::session::record_first_sight(r, session, file, |f| {
@@ -536,27 +534,15 @@ fn parent_of(pid: u32) -> Option<u32> {
     stat.rsplit_once(')')?.1.split_whitespace().nth(1)?.parse().ok()
 }
 
+/// Close the session's record. Silent: a stop never blocks and never hands
+/// anyone a summary — the record is read where the user looks, not pushed.
 fn stop(r: &ModelRef, event: &serde_json::Value) {
     let Some(session) = session_id(event) else { return };
-    let out = scryer_core::session::stop(
-        r,
-        session,
-        |files| anchor_flags(r, files),
-        |log| {
-            let c = scryer_extract::test_status::probe_check(r, log);
-            (c.block, c.summary)
-        },
-    );
-    if let Some(reason) = out.block {
-        emit(&serde_json::json!({ "decision": "block", "reason": reason }));
-    } else if let Some(summary) = out.summary {
-        emit(&serde_json::json!({ "systemMessage": summary }));
-    }
+    let _ = scryer_core::session::stop(r, session);
 }
 
-/// Out-of-sync anchors in the session's touched files (may silently re-anchor
-/// moved symbols, exactly like get_health). No baseline yet → no flags → the
-/// gate stays silent rather than crying wolf on a fresh model.
+/// Out-of-sync anchors in `files` (may silently re-anchor moved symbols,
+/// exactly like get_health). No baseline yet → no flags.
 fn anchor_flags(r: &ModelRef, files: &[String]) -> Vec<scryer_core::session::AnchorFlag> {
     let files = files.iter().cloned().collect();
     let Ok(check) = scryer_extract::anchors::check_anchors_in(r, &files) else { return Vec::new() };

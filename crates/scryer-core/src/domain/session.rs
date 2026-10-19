@@ -27,21 +27,8 @@ pub enum SessionEvent {
     Touch { file: String },
     /// The read overlay for `file` was served with this payload hash.
     Overlay { file: String, hash: u64 },
-    /// The Stop gate blocked on unreconciled anchors — at most once per session.
-    ReconcileGate,
     /// The agent wrote these plan elements (change-map keys).
     ModelEdit { keys: Vec<String> },
-    /// The summary last shown to the user, so an unchanged one stays silent.
-    Summary { text: String },
-    /// The Stop gate blocked on these unfolded plan entries, which carried
-    /// no progress note. Each is blocked on at most once.
-    PendingGate {
-        #[serde(default)]
-        keys: Vec<String>,
-    },
-    /// The Stop gate blocked until this session's new tests were
-    /// mutation-probed — at most once per session.
-    ProbeGate,
     /// The task the agent oriented on, in its own words — the title the
     /// session's change takes. Only the first is kept.
     Task { text: String },
@@ -64,6 +51,8 @@ pub enum SessionEvent {
     /// off-limits to commands that discard uncommitted work.
     ProbeOpen,
     ProbeClose,
+    /// The agent stopped — the end of a turn, not necessarily of the session.
+    Stop,
 }
 
 /// The fold of a session's events.
@@ -73,19 +62,10 @@ pub struct SessionLog {
     pub touched: Vec<String>,
     /// The last overlay hash served per file.
     pub overlays: Vec<(String, u64)>,
-    /// Whether the reconcile gate already fired.
-    pub reconcile_gated: bool,
-    /// Unfolded plan entries the Stop gate already blocked on.
-    pub gated_pending: Vec<String>,
-    /// Whether the probe gate already fired.
-    pub probe_gated: bool,
     /// Whether the session has a probe open.
     pub probe_open: bool,
     /// Plan elements the agent wrote, first-write order, each once.
     pub model_edits: Vec<String>,
-    /// Plan elements a file edit followed — planned, then built on.
-    pub built_on: Vec<String>,
-    pub last_summary: Option<String>,
     /// Shell commands started, `(tool-call id, unix ns)`, in start order.
     pub shell_starts: Vec<(Option<String>, u64)>,
     /// The first task the agent oriented on.
@@ -110,11 +90,6 @@ impl SessionLog {
                 if !self.touched.contains(file) {
                     self.touched.push(file.clone());
                 }
-                for k in &self.model_edits {
-                    if !self.built_on.contains(k) {
-                        self.built_on.push(k.clone());
-                    }
-                }
             }
             SessionEvent::Overlay { file, hash } => {
                 match self.overlays.iter_mut().find(|(f, _)| f == file) {
@@ -122,7 +97,6 @@ impl SessionLog {
                     None => self.overlays.push((file.clone(), *hash)),
                 }
             }
-            SessionEvent::ReconcileGate => self.reconcile_gated = true,
             SessionEvent::ModelEdit { keys } => {
                 for k in keys {
                     if !self.model_edits.contains(k) {
@@ -130,11 +104,9 @@ impl SessionLog {
                     }
                 }
             }
-            SessionEvent::Summary { text } => self.last_summary = Some(text.clone()),
-            SessionEvent::PendingGate { keys } => self.gated_pending.extend(keys.iter().cloned()),
-            SessionEvent::ProbeGate => self.probe_gated = true,
             SessionEvent::ProbeOpen => self.probe_open = true,
             SessionEvent::ProbeClose => self.probe_open = false,
+            SessionEvent::Stop => {}
             SessionEvent::ShellStart { tool, ns } => self.shell_starts.push((tool.clone(), *ns)),
             SessionEvent::Task { text } => {
                 if self.task.is_none() {
@@ -146,24 +118,6 @@ impl SessionLog {
                     self.first_sight.push((file.clone(), stale.clone()));
                 }
             }
-        }
-    }
-
-    /// Whether anchor `key` was already in `state` when the session first
-    /// read `file`.
-    pub fn found_stale(&self, file: &str, key: &str, state: &str) -> bool {
-        self.first_sight
-            .iter()
-            .any(|(f, stale)| f == file && stale.iter().any(|(k, s)| k == key && s == state))
-    }
-
-    /// Whether the session edited a file after planning `key`. An entry the
-    /// log never saw planned counts any edit at all.
-    pub fn edited_since_planning(&self, key: &str) -> bool {
-        if self.model_edits.iter().any(|k| k == key) {
-            self.built_on.iter().any(|k| k == key)
-        } else {
-            !self.touched.is_empty()
         }
     }
 
@@ -226,8 +180,8 @@ mod tests {
         let line = serde_json::to_string(&e).unwrap();
         assert_eq!(line, r#"{"at":1,"event":"touch","file":"src/a.rs"}"#);
         assert_eq!(serde_json::from_str::<SessionEntry>(&line).unwrap(), e);
-        let gate = serde_json::to_string(&entry(SessionEvent::ReconcileGate)).unwrap();
-        assert_eq!(gate, r#"{"at":1,"event":"reconcileGate"}"#);
+        let stop = serde_json::to_string(&entry(SessionEvent::Stop)).unwrap();
+        assert_eq!(stop, r#"{"at":1,"event":"stop"}"#);
     }
 
     #[test]
@@ -244,7 +198,6 @@ mod tests {
         assert!(log.overlay_is_repeat("a.rs", 2));
         assert!(!log.overlay_is_repeat("a.rs", 1), "a changed payload re-fires");
         assert!(!log.overlay_is_repeat("b.rs", 2), "per file");
-        assert!(!log.reconcile_gated);
     }
 
     #[test]
