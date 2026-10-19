@@ -12,6 +12,12 @@ integration = ["crates/*/tests/**", "src-tauri/tests/**"]
 # everything else is unit
 
 # Display names and styles carried over from the authored model.
+#
+# A style is a claim about the code's shape. When a container's code does not
+# have the declared shape (scryer-mcp's flat modules under core-shell look like
+# a guessed style), fix it by declaring the shape the code actually has, not by
+# inventing directories. When the code has the shape, a violation is fixed by
+# moving the offending files.
 
 [containers.scryer]
 name = "Desktop App UI"
