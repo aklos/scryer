@@ -242,6 +242,34 @@ mod tests {
         assert_eq!(again.planned.nodes.iter().find(|n| n.name == "back").unwrap().layer, None);
     }
 
+    /// When a crate's root file imports another crate, the two containers
+    /// are linked, and the link is held to the other container's style like
+    /// a component's would be.
+    #[test]
+    fn a_crate_roots_imports_link_its_container() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n");
+        write(d, "crates/gateway/Cargo.toml", "[package]\nname = \"gateway\"\nversion = \"0.1.0\"\n[dependencies]\nledger = { path = \"../ledger\" }\n");
+        write(d, "crates/gateway/src/lib.rs", "use ledger::infrastructure::db::open;\npub fn handle() { open() }\n");
+        write(d, "crates/ledger/Cargo.toml", "[package]\nname = \"ledger\"\nversion = \"0.1.0\"\n");
+        write(d, "crates/ledger/src/lib.rs", "pub mod domain;\npub mod infrastructure;\n");
+        write(d, "crates/ledger/src/domain/mod.rs", "pub fn post() {}\n");
+        write(d, "crates/ledger/src/infrastructure/mod.rs", "pub mod db;\n");
+        write(d, "crates/ledger/src/infrastructure/db.rs", "pub fn open() {}\n");
+        write(d, ".scryer/structure.toml", "[containers.ledger]\nstyle = \"library\"\n");
+        let tree = derived_tree_uncached(d).unwrap();
+        let m = &tree.planned;
+        let id = |name: &str| m.nodes.iter().find(|n| n.name == name).unwrap().id.clone();
+        let (gateway, ledger) = (id("gateway"), id("ledger"));
+        assert!(m.links.iter().any(|l| l.src == gateway && l.dst == ledger), "{:?}", m.links);
+        assert!(
+            tree.style_violations.iter().any(|v| v.detail.contains("enters container") && v.detail.contains("infrastructure")),
+            "{:?}",
+            tree.style_violations
+        );
+    }
+
     /// When no file changed, the cached tree is returned; touching a file
     /// derives again.
     #[test]

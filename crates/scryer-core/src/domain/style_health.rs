@@ -472,7 +472,13 @@ pub fn check_code(
         if out.iter().any(|v| v.node == src && v.other.as_deref() == Some(dst.as_str())) {
             continue;
         }
-        let file = index.files_of(&src).and_then(|fs| fs.iter().next().cloned()).unwrap_or_default();
+        // A link from a container itself (its crate root's imports) has no
+        // component files; it is charged to the container's directory.
+        let file = index
+            .files_of(&src)
+            .and_then(|fs| fs.iter().next().cloned())
+            .or_else(|| style::container_prefix(model, &src))
+            .unwrap_or_default();
         out.push(StyleViolation {
             kind: ViolationKind::ForbiddenLink,
             node: src,

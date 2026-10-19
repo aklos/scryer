@@ -507,21 +507,35 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         }
     }
 
-    // Links: the import graph between components and between containers.
+    // Links: the import graph between components and between containers. A
+    // crate root (lib.rs, main.rs) is its container, not a component, but
+    // what it imports is the container's dependency all the same: its edges
+    // link the container itself, to the other side's component.
+    let endpoint = |f: &str| -> Option<(&str, Option<&String>)> {
+        match file_component.get(f) {
+            Some(path) => Some((components[path].container_dir.as_str(), Some(&components[path].id))),
+            None if crate_root(f) => owner(f).map(|c| (c.dir.as_str(), None)),
+            None => None,
+        }
+    };
     let mut seen: HashSet<(String, String)> = HashSet::new();
     for e in input.file_edges.iter().filter(|e| !e.guessed) {
-        let (Some(a), Some(b)) = (file_component.get(e.src.as_str()), file_component.get(e.dst.as_str())) else {
+        let (Some((da, ca)), Some((db, cb))) = (endpoint(e.src.as_str()), endpoint(e.dst.as_str())) else {
             continue;
         };
-        if a == b {
+        if da == db {
+            // Inside one container only components link; its root wiring
+            // its own modules is no dependency.
+            if let (Some(ca), Some(cb)) = (ca, cb) {
+                if ca != cb {
+                    push_link(&mut model, &mut seen, &mut taken, ca, cb, Some(LinkKind::Depends));
+                }
+            }
             continue;
         }
-        let (ca, cb) = (&components[a], &components[b]);
-        if ca.container_dir != cb.container_dir {
-            let (sa, sb) = (&container_ids[ca.container_dir.as_str()], &container_ids[cb.container_dir.as_str()]);
-            push_link(&mut model, &mut seen, &mut taken, sa, sb, None);
-        }
-        push_link(&mut model, &mut seen, &mut taken, &ca.id, &cb.id, Some(LinkKind::Depends));
+        let (sa, sb) = (&container_ids[da], &container_ids[db]);
+        push_link(&mut model, &mut seen, &mut taken, sa, sb, None);
+        push_link(&mut model, &mut seen, &mut taken, ca.unwrap_or(sa), cb.unwrap_or(sb), Some(LinkKind::Depends));
     }
 
     scryer_core::concerns::register_concerns(&mut model);
