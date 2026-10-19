@@ -72,9 +72,14 @@ pub fn lift_file(rel_path: &str, source: &str, parser: &mut Parser) -> FileLift 
         "cs" => cs_tests(root, bytes, &mut lift.tests),
         _ => {}
     }
+    // A `[manual]` test is a tool run by hand, not a claim.
+    lift.tests.retain(|t| !t.concerns.iter().any(|c| c == MANUAL_TAG));
     lift.tests.sort_by_key(|t| t.line);
     lift
 }
+
+/// The tag that keeps a test out of the claims: an ad-hoc tool, run by hand.
+pub const MANUAL_TAG: &str = "manual";
 
 /// Split trailing `[tag]`s off a description: `keeps the draft [persistence]`
 /// → (`keeps the draft`, [`persistence`]).
@@ -816,6 +821,20 @@ public class DockTests
             ]
         );
         assert_eq!(l.tests[1].concerns, vec!["docking"]);
+    }
+
+    /// When a test's description carries `[manual]`, it is no claim in any
+    /// language, while a bare skip stays planned.
+    #[test]
+    fn manual_tests_are_not_claims() {
+        let rust = "/// Dumps a repo [manual]\n#[test]\n#[ignore]\nfn dump() {}\n#[test]\n#[ignore]\nfn later() {}\n";
+        let l = lift("src/a.rs", rust);
+        assert_eq!(l.tests.iter().map(|t| t.identifier.as_str()).collect::<Vec<_>>(), vec!["later"]);
+        assert!(l.tests[0].planned);
+        assert!(lift("a.test.ts", "it.skip('dumps [manual]', () => {});\n").tests.is_empty());
+        assert!(lift("test_a.py", "def test_dump():\n    \"\"\"Dumps [manual]\"\"\"\n    pass\n").tests.is_empty());
+        let cs = "class T {\n    [Fact(DisplayName = \"Dumps [manual]\")]\n    public void Dump() { }\n}\n";
+        assert!(lift("ATests.cs", cs).tests.is_empty());
     }
 
     /// Identifiers read as lowercase words with acronyms kept.

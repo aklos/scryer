@@ -184,7 +184,8 @@ mod tests {
         assert_eq!(read_derived_tree_at(&r).unwrap().fingerprint, changed.fingerprint);
     }
 
-    /// Ad-hoc: summarise the derived tree of any repo without writing to it.
+    /// Ad-hoc: summarise the derived tree of any repo without writing to it [manual]
+    ///
     /// `REPO=/path cargo test -p scryer-extract dump_derived -- --ignored --nocapture`
     #[test]
     #[ignore]

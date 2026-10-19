@@ -81,7 +81,8 @@ mod tests {
         }
     }
 
-    /// Ad-hoc: dump the container/file/symbol/edge summary for an arbitrary repo.
+    /// Ad-hoc: dump the container/file/symbol/edge summary for an arbitrary repo [manual]
+    ///
     /// `REPO=/path cargo test -p scryer-extract dump_external -- --ignored --nocapture`
     #[test]
     #[ignore]

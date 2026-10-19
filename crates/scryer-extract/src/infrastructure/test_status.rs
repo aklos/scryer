@@ -1721,7 +1721,8 @@ mod tests {
     }
 
     /// Ad-hoc: the derived tree's status for a repo, after ingesting any
-    /// JUnit reports and mutation report given.
+    /// JUnit reports and mutation report given [manual]
+    ///
     /// `SCRYER_DERIVED_TREE=1 REPO=/path JUNIT=a.xml,b.xml MUTANTS=outcomes.json
     ///  cargo test -p scryer-extract dump_derived_status -- --ignored --nocapture`
     #[test]
