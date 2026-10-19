@@ -38,8 +38,8 @@ export const structure: Structure = {
   },
   levels: { e2e: ["e2e/**"], integration: ["*/tests/**", "*/integration/**"] },
   containers: {
-    ledger: { name: "Ledger", style: "hexagonal", layers: ["domain", "ports", "adapters"] },
-    dashboard: { name: "Dashboard", style: "layered", layers: ["pages", "features", "entities", "shared"] },
+    ledger: { name: "Ledger", style: "hexagonal" },
+    dashboard: { name: "Dashboard", style: "feature-sliced" },
     "api-gateway": { name: "API Gateway" },
     fraud: { name: "Fraud" },
     webhooks: { name: "Webhooks" },
@@ -72,8 +72,8 @@ const CONTAINERS: [string, string, string, string, [string, string, string?][]][
   ]],
   ["ledger", "Ledger", "Rust", "The double-entry record of every money movement.", [
     ["domain", "Accounts, entries and the rules that balance them.", "domain"],
-    ["ports", "What the domain asks of the outside world.", "ports"],
-    ["adapters", "Postgres and bank-file implementations of the ports.", "adapters"],
+    ["application", "Refunds, captures and payouts, and the ports they ask the world for.", "application"],
+    ["infrastructure", "Postgres and bank-file implementations of the ports.", "infrastructure"],
   ]],
   ["fraud", "Fraud", "Python", "Scores a payment before it is authorised.", [
     ["rules", "Hard limits merchants and risk set."],
@@ -118,8 +118,8 @@ const links: Link[] = [
   ["ledger", "payments-db", "stores entries in"],
   ["ledger", "webhooks", "publishes events to"],
   ["dashboard", "api-gateway", "calls"],
-  ["ledger.adapters", "ledger.ports", ""],
-  ["ledger.ports", "ledger.domain", ""],
+  ["ledger.infrastructure", "ledger.application", ""],
+  ["ledger.application", "ledger.domain", ""],
   ["dashboard.pages", "dashboard.features", ""],
   ["dashboard.features", "dashboard.entities", ""],
   ["dashboard.entities", "dashboard.shared", ""],
@@ -160,9 +160,9 @@ const ROWS: Row[] = [
   ["c-led-4", "ledger.domain", "component", "ledger/src/domain/account.rs", 51, "derives_balance", "domain::account::tests::derives_balance", "Derives an account's balance from its entries", null, "proven"],
   ["c-led-5", "ledger.domain", "component", "ledger/src/domain/capture.rs", 40, "captures_up_to_authorised", "domain::capture::tests::captures_up_to_authorised", "If a capture exceeds the authorised amount, then rejects it", null, "proven"],
   ["c-led-6", "ledger.domain", "component", "ledger/src/domain/payout.rs", 33, "nets_fees", "domain::payout::tests::nets_fees", "Nets fees out of each payout", null, "stale"],
-  ["c-led-7", "ledger.ports", "component", "ledger/src/ports/store.rs", 22, "appends_only", "ports::store::tests::appends_only", "Exposes entries as an append-only store", null, "proven"],
-  ["c-led-8", "ledger.adapters", "component", "ledger/src/adapters/postgres.rs", 88, "writes_in_one_transaction", "adapters::postgres::tests::writes_in_one_transaction", "Writes a posting's entries in one transaction", "persistence", "proven"],
-  ["c-led-9", "ledger.adapters", "component", "ledger/src/adapters/bank_file.rs", 45, "parses_settlement_files", "adapters::bank_file::tests::parses_settlement_files", "When a settlement file arrives, matches each line to a capture", null, "proven"],
+  ["c-led-7", "ledger.application", "component", "ledger/src/application/store.rs", 22, "appends_only", "application::store::tests::appends_only", "Exposes entries as an append-only store", null, "proven"],
+  ["c-led-8", "ledger.infrastructure", "component", "ledger/src/infrastructure/postgres.rs", 88, "writes_in_one_transaction", "infrastructure::postgres::tests::writes_in_one_transaction", "Writes a posting's entries in one transaction", "persistence", "proven"],
+  ["c-led-9", "ledger.infrastructure", "component", "ledger/src/infrastructure/bank_file.rs", 45, "parses_settlement_files", "infrastructure::bank_file::tests::parses_settlement_files", "When a settlement file arrives, matches each line to a capture", null, "proven"],
   ["c-led-10", "ledger.domain", "component", "ledger/src/domain/payout.rs", 71, "holds_disputed_funds", "domain::payout::tests::holds_disputed_funds", "While a dispute is open, holds the disputed amount back from payouts", null, "planned"],
 
   // Fraud
@@ -226,13 +226,37 @@ export const REFUND_STUBS: DerivedClaim[] = [
   planned: true,
 }));
 
-/** Act 2's misplaced file: a domain module importing an adapter. */
+/** Act 2's misplaced import: a domain module reaching into infrastructure. */
 export const REFUND_VIOLATION: DerivedViolation = {
   nodeId: "ledger.domain",
   file: "ledger/src/domain/refund.rs",
-  kind: "forbidden_import",
-  detail: "domain imports adapters (ledger/src/adapters/postgres.rs) — domain depends on nothing outside domain",
+  kind: "layer_violation",
+  detail: "domain imports infrastructure (ledger/src/infrastructure/postgres.rs) — domain depends on nothing outside domain",
 };
+
+/** The component the violating import reaches — the red edge's other end. */
+export const REFUND_VIOLATION_TARGET = "ledger.infrastructure";
+
+// --- Diagram placements ------------------------------------------------------------
+
+/** Placements of the context and container levels, so the diagram never
+ *  lays them out during a render. Inside a styled container the style's own
+ *  drawing places the components by layer. */
+export const layout: Layout = {
+  // Context
+  "person-cardholder": { x: 120, y: 120 },
+  "person-merchant": { x: 120, y: 420 },
+  [SYSTEM]: { x: 520, y: 270 },
+  "ext-bank": { x: 940, y: 120 },
+  "ext-networks": { x: 940, y: 420 },
+  // Containers, inside the system
+  "dashboard": { x: 80, y: 80 },
+  "api-gateway": { x: 420, y: 80 },
+  "fraud": { x: 760, y: 80 },
+  "ledger": { x: 420, y: 330 },
+  "webhooks": { x: 760, y: 330 },
+  "payments-db": { x: 420, y: 560 },
+  };
 
 // --- Assembly ------------------------------------------------------------------------
 
@@ -255,8 +279,10 @@ const nodes: Node[] = [...contextNodes, ...containerNodes, ...componentNodes];
 export function modelWith(claimList: DerivedClaim[], keep: (c: DerivedClaim) => boolean): ScryModel {
   return {
     version: "0.3",
+    groups: [],
     nodes: nodes.map((n) => ({
       ...n,
+      position: n.kind === "component" ? undefined : layout[n.id],
       responsibilities: claimList
         .filter((c) => c.nodeId === n.id && keep(c))
         .map((c) => ({ id: c.id, statement: c.description, concern: c.concerns?.[0] })),
@@ -293,17 +319,23 @@ const zero = (): DerivedCounts => ({
   darkFiles: 0,
 });
 
-/** Status for a claim list given each claim's state and probe mark, rolled up. */
+/** When the verdicts the fixture starts with were recorded: two days back. */
+const BASE_RECORDED = 1_792_400_000 - 2 * 86_400;
+
+/** Status for a claim list given each claim's state, probe mark and when its
+ *  verdict was recorded (default: two days back), rolled up. */
 export function statusOf(
   tree: DerivedTree,
   states: Record<string, ClaimState>,
   probes: Record<string, ProbeMark>,
+  recorded: Record<string, number> = {},
 ): DerivedStatus {
   const claimStatus: ClaimStatus[] = tree.claims.map((c) => ({
     respId: c.id,
     nodeId: c.nodeId,
     state: c.planned ? "planned" : (states[c.id] ?? "stale"),
     probe: probes[c.id],
+    recordedAt: c.planned ? undefined : (recorded[c.id] ?? BASE_RECORDED),
   }));
   const parent = new Map(tree.planned.nodes.map((n) => [n.id, n.parentId]));
   const nodesStatus: DerivedStatus["nodes"] = {};
@@ -338,6 +370,9 @@ export const BASE_CLAIMS = claims;
 
 // --- Sessions ------------------------------------------------------------------------
 
+/** The agent in the film's terminal: deliberately nobody's product. */
+export const AGENT_NAME = "your agent";
+
 /** The film's "now", and minutes before it, as unix seconds. */
 export const NOW = 1_792_400_000;
 const ago = (minutes: number) => NOW - minutes * 60;
@@ -369,34 +404,6 @@ export const sessions: SessionLog[] = [
     ],
   },
 ];
-
-// --- Diagram placements ------------------------------------------------------------
-
-/** Placements per level, so the diagram never lays out during a render. */
-export const layout: Layout = {
-  // Context
-  "person-cardholder": { x: 120, y: 120 },
-  "person-merchant": { x: 120, y: 420 },
-  [SYSTEM]: { x: 520, y: 270 },
-  "ext-bank": { x: 940, y: 120 },
-  "ext-networks": { x: 940, y: 420 },
-  // Containers, inside the system
-  "dashboard": { x: 80, y: 80 },
-  "api-gateway": { x: 420, y: 80 },
-  "fraud": { x: 760, y: 80 },
-  "ledger": { x: 420, y: 330 },
-  "webhooks": { x: 760, y: 330 },
-  "payments-db": { x: 420, y: 560 },
-  // Ledger, as a hexagon: domain at the core, ports around it, adapters outside
-  "ledger.domain": { x: 500, y: 300 },
-  "ledger.ports": { x: 500, y: 140 },
-  "ledger.adapters": { x: 500, y: 470 },
-  // Dashboard, as layers top to bottom
-  "dashboard.pages": { x: 420, y: 60 },
-  "dashboard.features": { x: 420, y: 200 },
-  "dashboard.entities": { x: 420, y: 340 },
-  "dashboard.shared": { x: 420, y: 480 },
-};
 
 // --- The fixture -------------------------------------------------------------------
 

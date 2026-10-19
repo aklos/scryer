@@ -1,65 +1,25 @@
 /**
- * The derived shapes the app reads, as scryer-core serialises them
- * (`derived_tree`, `derived_status`, the session log, structure.toml). They
- * live here, not in `src/entities`, because the app's own TS types for them
- * land with step 4; when they do, the demo imports those and this file goes.
- * Field names follow the Rust serde (camelCase); fields the film never reads
- * are left out.
+ * The fixture's shapes. The model and the claim status are the app's own
+ * types; what the app has no TS type for — the derived tree's claim list as
+ * the backend holds it, structure.toml, the session log — is mirrored here
+ * from the Rust serde (camelCase), fields the film never reads left out.
  */
 
-export type Kind = "person" | "system" | "container" | "component" | "symbol";
+import type { ScryModel } from "../src/entities/model/viewmodel";
+import type { DerivedStatus } from "../src/entities/model/derived";
 
-export interface Responsibility {
-  id: string;
-  statement: string;
-  concern?: string;
-}
-
-export interface Node {
-  id: string;
-  kind: Kind;
-  name: string;
-  parentId?: string;
-  external?: boolean;
-  technology?: string;
-  description?: string;
-  responsibilities: Responsibility[];
-  style?: string;
-  layer?: string;
-}
-
-export interface Link {
-  id: string;
-  src: string;
-  dst: string;
-  label: string;
-  kind?: "depends" | "uses" | "calls";
-}
-
-export interface SourceLocation {
-  pattern: string;
-  symbol?: string;
-  line?: number;
-  endLine?: number;
-}
-
-export interface ConcernDef {
-  slug: string;
-  description?: string;
-}
-
-export interface ScryModel {
-  version: string;
-  nodes: Node[];
-  links: Link[];
-  testMap?: Record<string, SourceLocation[]>;
-  boundaries?: Record<string, { pattern: string }[]>;
-  concerns?: ConcernDef[];
-}
+export type { Kind, Link, Node, ScryModel } from "../src/entities/model/viewmodel";
+export type {
+  ClaimState,
+  DerivedClaimStatus as ClaimStatus,
+  DerivedCounts,
+  DerivedStatus,
+  ProbeMark,
+} from "../src/entities/model/derived";
 
 export type ClaimLevel = "system" | "container" | "component";
 
-/** One behaviour test read as a claim. */
+/** One behaviour test read as a claim (Rust `DerivedClaim`). */
 export interface DerivedClaim {
   id: string;
   nodeId: string;
@@ -75,6 +35,7 @@ export interface DerivedClaim {
   planned?: boolean;
 }
 
+/** One style violation (Rust `DerivedViolation`). */
 export interface DerivedViolation {
   nodeId: string;
   file: string;
@@ -82,6 +43,7 @@ export interface DerivedViolation {
   detail: string;
 }
 
+/** The derived tree (Rust `DerivedTree`). */
 export interface DerivedTree {
   fingerprint: number;
   committed: ScryModel;
@@ -90,41 +52,6 @@ export interface DerivedTree {
   fileNodes: Record<string, string>;
   darkFiles: string[];
   styleViolations: DerivedViolation[];
-}
-
-export type ClaimState = "proven" | "stale" | "failing" | "planned";
-export type ProbeMark = "crosshair" | "doubleCheck";
-
-export interface ClaimStatus {
-  respId: string;
-  nodeId: string;
-  state: ClaimState;
-  probe?: ProbeMark;
-}
-
-export interface DerivedCounts {
-  claims: number;
-  proven: number;
-  stale: number;
-  failing: number;
-  planned: number;
-  untestedComponents: number;
-  survivingMutants: number;
-  styleViolations: number;
-  darkFiles: number;
-}
-
-export interface NodeStatus {
-  own: DerivedCounts;
-  subtree: DerivedCounts;
-  probe?: ProbeMark;
-  darkFiles?: string[];
-}
-
-export interface DerivedStatus {
-  claims: ClaimStatus[];
-  nodes: Record<string, NodeStatus>;
-  totals: DerivedCounts;
 }
 
 /** `.scryer/structure.toml`, as parsed. */
