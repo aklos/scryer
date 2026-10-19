@@ -5,6 +5,7 @@
 //! git probe or the settings file underneath. Each function here is that
 //! wiring — it picks the adapter and hands back what the caller asked for.
 
+pub mod agent_setup;
 pub mod change_ledger;
 pub mod codebase;
 pub mod coverage;

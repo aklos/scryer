@@ -421,64 +421,29 @@ fn kind_label(k: &scryer_core::diff::ElementKind) -> &'static str {
     }
 }
 
-/// Outcome of a statusline install attempt.
-pub(crate) enum StatuslineInstall {
-    /// Written (fresh, or an idempotent refresh of our own entry).
-    Installed(PathBuf),
-    /// A foreign statusline is configured — left untouched; the caller prints
-    /// how to compose instead.
-    ForeignExists(PathBuf),
-}
-
-/// Is this `statusLine` entry ours? Identified by the command invoking the
-/// scryer-mcp binary's `statusline` subcommand — the marker
-/// [`install_statusline`] writes (mirrors `is_scryer_hook_entry` in the app).
-fn is_scryer_statusline(entry: &serde_json::Value) -> bool {
-    entry["command"]
-        .as_str()
-        .is_some_and(|c| c.contains("scryer-mcp") && c.trim_end().ends_with(" statusline"))
-}
-
-/// Register `scryer-mcp statusline` as the Claude Code statusline for this
-/// project, in the personal settings file (same conventions as the app's hook
-/// install: absolute binary path, refuse to overwrite invalid JSON). Unlike
-/// hooks, `statusLine` is a SINGLE slot — a whole-line replacement — so a
-/// foreign entry is never clobbered: the caller tells the user how to append
-/// our segment to their own script instead.
-pub(crate) fn install_statusline(
-    project: &Path,
-    binary_path: &str,
-) -> Result<StatuslineInstall, String> {
-    let claude_dir = project.join(".claude");
-    let settings_path = claude_dir.join("settings.local.json");
-    let mut root: serde_json::Value = if settings_path.exists() {
-        let contents = std::fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
-        serde_json::from_str(&contents).map_err(|e| {
-            format!(
-                "{} is not valid JSON ({e}); refusing to overwrite it — fix the file and retry.",
-                settings_path.display()
-            )
-        })?
-    } else {
-        serde_json::json!({})
+/// `scryer-mcp setup [on|off]`: switch agent integration for the project on
+/// or off, or with no argument print what is installed. The project is the
+/// nearest directory holding `.scryer/` above the cwd, else the cwd itself.
+/// `on` registers this very binary.
+pub(crate) fn run_setup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    use scryer_core::agent_setup;
+    let cwd = std::env::current_dir()?;
+    let project = find_project(&cwd).unwrap_or(cwd);
+    let detected = agent_setup::detect_tools();
+    let status = match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+        [] => agent_setup::setup_status(&project, &detected),
+        ["on"] => {
+            let binary = std::env::current_exe()?.canonicalize()?.to_string_lossy().to_string();
+            agent_setup::setup_on(&project, &detected, &binary)?
+        }
+        ["off"] => agent_setup::setup_off(&project, &detected)?,
+        _ => {
+            eprintln!("usage: scryer-mcp setup [on|off]");
+            std::process::exit(2);
+        }
     };
-
-    let existing = root.get("statusLine");
-    if existing.is_some_and(|e| !e.is_null() && !is_scryer_statusline(e)) {
-        return Ok(StatuslineInstall::ForeignExists(settings_path));
-    }
-
-    root["statusLine"] = serde_json::json!({
-        "type": "command",
-        "command": format!("\"{binary_path}\" statusline"),
-    });
-    std::fs::create_dir_all(&claude_dir).map_err(|e| e.to_string())?;
-    std::fs::write(
-        &settings_path,
-        serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(StatuslineInstall::Installed(settings_path))
+    print!("{}", agent_setup::render_setup_status(&status));
+    Ok(())
 }
 
 pub(crate) fn status_line(c: &StatusCounts) -> String {
@@ -795,59 +760,6 @@ mod tests {
         assert_eq!(statusline_start_dir(&cwd_only), Some(PathBuf::from("/c")));
         assert_eq!(statusline_start_dir(""), None);
         assert_eq!(statusline_start_dir("not json"), None);
-    }
-
-    /// Install is idempotent on our own entry, preserves the rest of the
-    /// settings file, and never clobbers a foreign statusline — the single
-    /// slot belongs to the user.
-    #[test]
-    fn statusline_install_is_idempotent_and_never_clobbers() {
-        let dir = tempfile::tempdir().unwrap();
-        let project = dir.path();
-        let settings = project.join(".claude/settings.local.json");
-        std::fs::create_dir_all(project.join(".claude")).unwrap();
-        std::fs::write(
-            &settings,
-            serde_json::json!({ "permissions": { "allow": ["mcp__scryer"] } }).to_string(),
-        )
-        .unwrap();
-
-        // Fresh install, then a refresh from a moved binary: still one entry,
-        // pointing at the new path, other settings intact.
-        for path in ["/opt/scryer/scryer-mcp", "/usr/local/bin/scryer-mcp"] {
-            match install_statusline(project, path).unwrap() {
-                StatuslineInstall::Installed(p) => assert_eq!(p, settings),
-                StatuslineInstall::ForeignExists(_) => panic!("our own entry must refresh"),
-            }
-        }
-        let root: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
-        assert_eq!(
-            root["statusLine"]["command"],
-            "\"/usr/local/bin/scryer-mcp\" statusline"
-        );
-        assert_eq!(root["permissions"]["allow"][0], "mcp__scryer");
-
-        // A foreign statusline is reported, not replaced.
-        std::fs::write(
-            &settings,
-            serde_json::json!({
-                "statusLine": { "type": "command", "command": "my-fancy-prompt.sh" }
-            })
-            .to_string(),
-        )
-        .unwrap();
-        match install_statusline(project, "/opt/scryer/scryer-mcp").unwrap() {
-            StatuslineInstall::ForeignExists(p) => assert_eq!(p, settings),
-            StatuslineInstall::Installed(_) => panic!("foreign statusline was clobbered"),
-        }
-        let root: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
-        assert_eq!(root["statusLine"]["command"], "my-fancy-prompt.sh");
-
-        // Invalid JSON is refused, not overwritten.
-        std::fs::write(&settings, "{ not json").unwrap();
-        assert!(install_statusline(project, "/opt/scryer/scryer-mcp").is_err());
     }
 
     /// With a reconcile baseline in place, the line carries real drift and

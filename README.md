@@ -57,7 +57,7 @@ Works with <b>Claude Code</b>, <b>Codex</b> and <b>GitHub Copilot CLI</b> out of
 - **Build from a codebase** — Point an agent at a project and it scans the code to populate the model.
 - **Diagram view** — A diagram renders the model one level at a time for spatial navigation. Drag cards where you want them — placements persist, and auto-layout manages the rest.
 - **MCP server** — Agents connect to read, modify, and build from the model in real time.
-- **AI tool setup** — Detects Claude Code, Codex and Copilot CLI and writes MCP config and auto-approve permissions. Session hooks put the model in front of the agent as it works, per project and per tool. Optionally installs a Claude Code statusLine that reports the model's pending work and drift even while Scryer is closed.
+- **Agent integration** — One switch per project. On, it wires every detected agent CLI (Claude Code, Codex, Copilot CLI) to scryer: MCP config, auto-approve, silent session hooks and a Claude Code status line. Off removes exactly those entries.
 
 ## Getting started
 
@@ -65,7 +65,7 @@ Download the latest release for your platform from the [releases page](https://g
 
 ### Typical workflow
 
-1. Link your project directory in the app and enable AI tool integration when prompted (or run `scryer-mcp init`).
+1. Link your project directory in the app and turn on Agent integration in settings (or run `scryer-mcp setup on`).
 2. Tell your agent: *"Use scryer to model this project's architecture."* It scans the code and the model fills in, with nodes appearing in the tree and on their pages in real time.
 3. Review the model: read the node pages, rename, regroup, restructure, and refine responsibilities.
 4. To make a change, plan it in the model first: add or edit the responsibilities and links it implies. These land in the plan as pending work.
@@ -96,7 +96,7 @@ Scryer works with **Claude Code**, **Codex** and **GitHub Copilot CLI**.
 - **MCP** (Model Context Protocol) — how agents read and write architecture models. Required for any agent integration.
 - **CLI spawning** — how Scryer launches agents for automated model builds and drift sync. Claude Code is spawned via `claude -p` (uses your subscription), Codex via `codex exec` (uses your API key). Both get the Scryer MCP server attached automatically.
 - **ACP** (Agent Client Protocol) — Copilot CLI serves ACP from its own binary (`copilot --acp`), so that's how Scryer launches it; any other agent with a `{name}-acp` adapter on PATH is launched the same way.
-- **Session hooks** — an optional, per-project opt-in for all three: each prompt logged for the ask ledger, the claims governing a file as the agent works in it, and a Stop check that holds the agent to its open asks and to reconciling claims it touched. They run in-process with or without the Scryer app open, and log to `.scryer/sessions/` (untracked).
+- **Session hooks** — part of Agent integration, for all three: the claims governing a file as the agent reads it, and a record of the files the session touched. They never block and never speak at Stop. They run in-process with or without the Scryer app open, and log to `.scryer/sessions/` (untracked).
 
 When an agent connects via MCP, Scryer captures its identity from the protocol handshake. When a build or sync is triggered, Scryer resolves that identity to a binary and launches it with the right flags.
 
@@ -110,17 +110,21 @@ The MCP server lets AI agents read and modify your architecture models. It ships
 
 ### Setup
 
-Link a project directory in the app and click "Enable" on the prompt, or run `scryer-mcp init` from the command line. Both detect installed AI tools and write config:
+One switch per project, from the app (settings → Agent integration) or the command line:
 
-- **Claude Code** — `.mcp.json` + tool auto-approve in `.claude/settings.local.json`
-- **Codex** — `.codex/config.toml`
-- **Copilot CLI** — `.mcp.json`, the same file Claude Code reads (Copilot also accepts a committed `.github/mcp.json`, if you'd rather keep it there)
+```
+scryer-mcp setup        # what is installed, per tool, per file
+scryer-mcp setup on     # write every entry for each detected agent CLI
+scryer-mcp setup off    # remove exactly scryer's entries, nothing else
+```
 
-Existing config files are preserved — only the `scryer` entry is added or updated.
+`on` writes, for each agent CLI on PATH:
 
-Session hooks are a separate opt-in, per tool, from Subagent settings: `.claude/settings.local.json`, `.codex/hooks.json`, or `.github/hooks/scryer.json` for Copilot.
+- **Claude Code** — the scryer server in `.mcp.json`; auto-approve, session hooks and the status line in `.claude/settings.local.json`
+- **Codex** — the scryer server in `.codex/config.toml`; session hooks in `.codex/hooks.json`
+- **Copilot CLI** — the scryer server in `.mcp.json` (the file Claude Code reads); session hooks in `.github/hooks/scryer.json`
 
-For Claude Code you can also install a **statusLine** (from the app, or `scryer-mcp init --statusline`): a one-line model status — pending work, drift scopes, and changes in flight — in every Claude Code session. It reads the model straight off disk, so it keeps reporting while Scryer is closed.
+and `.scryer/.gitignore`, so only what a teammate needs is committed. Both commands are idempotent. Everything else in those files is left alone, and a status line of your own is never replaced. An entry from an earlier scryer, or one naming a binary that has moved, reads as off with a note; `on` rewrites it.
 
 ### Manual setup
 
@@ -203,7 +207,7 @@ When drift is detected:
 3. Undescribed behavior is proposed into the plan as a **vagrant** claim for you to adopt or reject; a **stale** claim is flagged on the committed model where the code regressed from what was claimed.
 4. Model changes appear in the editor in real time. When every scope has been examined, the drift anchor advances so the same changes stop surfacing.
 
-For Claude Code, the MCP server config is passed inline via `--mcp-config`. For Codex, the project must have MCP already configured (via `scryer-mcp init` or the app's setup flow), since Codex reads MCP config from `.codex/config.toml`.
+For Claude Code, the MCP server config is passed inline via `--mcp-config`. For Codex, the project must have MCP already configured (via `scryer-mcp setup on` or the app's Agent integration switch), since Codex reads MCP config from `.codex/config.toml`.
 
 ## Tech
 
