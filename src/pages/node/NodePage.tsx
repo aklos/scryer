@@ -69,8 +69,6 @@ import { PreviewSection } from "../../widgets/node-page-sections/PreviewSection"
 import { previewEntryFor } from "../../features/preview-client/usePreviewServer";
 import { allowedImports, governingStyleDef, layerOf, styleTable } from "../../entities/model/styles";
 
-export type { SpecialPage, Selected } from "../../widgets/node-page-sections/types";
-
 export function NodePage(props: PageProps) {
   const { model, selected } = props;
   if (selected.kind === "special") return null; // routed by App, never here

@@ -58,7 +58,7 @@ import { InlineText } from "../../shared/ui/InlineText";
 import { ContextMenu, type ContextMenuItem } from "../../features/search/ContextMenu";
 import { ConfirmPopover } from "../../shared/feedback/ConfirmPopover";
 import { Select } from "../../shared/ui/Select";
-import type { Selected } from "../../pages/node/NodePage";
+import type { Selected } from "../../entities/model/navigation";
 import { requestAddClaim } from "../../features/derived-tree/addClaim";
 
 const INDENT = 14;
