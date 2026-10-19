@@ -6,7 +6,7 @@ use crate::application::hooks::{AnchorFlag, Unfolded};
 use crate::application::locate::LocateReport;
 use crate::composition::locate::locate_at;
 use crate::composition::model_store::{read_model_at, read_planned_at};
-use crate::domain::session::{fnv1a64, relativize, SessionLog};
+use crate::domain::session::{fnv1a64, relativize, test_key, SessionLog};
 use serde::Serialize;
 use std::collections::HashSet;
 use crate::infrastructure::session_store;
@@ -209,10 +209,49 @@ pub fn session_view(r: &ModelRef, session: &str) -> SessionView {
     }
 }
 
-/// The session stopped: close its record. Nothing is said to the agent or the
-/// user — what the session did is read off the record, never pushed at the
-/// stop, and a probe finding is a status on its claim, never a block.
-pub fn stop(r: &ModelRef, session: &str) -> Result<(), String> {
+/// The session is starting: the first time, record the todo tests already in
+/// the project (`(file, junit_name)`, computed only then), so its first stop
+/// can tell the stubs it wrote from ones that were there.
+pub fn begin(
+    r: &ModelRef,
+    session: &str,
+    planned: impl FnOnce() -> Vec<(String, String)>,
+) -> Result<(), String> {
+    if session_log(r, session).planned_seen.is_some() {
+        return Ok(());
+    }
+    let tests = planned().iter().map(|(f, t)| test_key(f, t)).collect();
+    session_store::append(r, session, SessionEvent::Planned { tests })
+}
+
+/// The session stopped: close its record. Given the project's todo tests
+/// (`None` when they could not be read), the ones it wrote since its last
+/// record — new, in a file it touched, not already another session's —
+/// become its stubs, and the claims its edits reach are noted. Nothing is
+/// said to the agent or the user: the record is read where they look.
+pub fn stop(
+    r: &ModelRef,
+    session: &str,
+    planned: Option<&[(String, String)]>,
+    reached: Vec<String>,
+) -> Result<(), String> {
+    let Some(planned) = planned else {
+        return session_store::append(r, session, SessionEvent::Stop);
+    };
+    let log = session_log(r, session);
+    let theirs: HashSet<(String, String)> = session_store::list(r)
+        .into_iter()
+        .filter(|(id, _)| id != session)
+        .flat_map(|(id, _)| session_log(r, &id).stubs)
+        .collect();
+    for (file, test) in log.new_stubs(planned).into_iter().filter(|s| !theirs.contains(s)) {
+        session_store::append(r, session, SessionEvent::Stub { file: file.clone(), test: test.clone() })?;
+    }
+    let tests = planned.iter().map(|(f, t)| test_key(f, t)).collect();
+    session_store::append(r, session, SessionEvent::Planned { tests })?;
+    if !log.touched.is_empty() || !log.reached.is_empty() {
+        session_store::append(r, session, SessionEvent::Reached { ids: reached })?;
+    }
     session_store::append(r, session, SessionEvent::Stop)
 }
 
@@ -326,11 +365,44 @@ mod tests {
         record_model_edit(&r, "s", vec!["resp:r-3".to_string()]).unwrap();
         record_touch(&r, "s", "src/auth.rs").unwrap();
 
-        stop(&r, "s").unwrap();
-        stop(&r, "s").unwrap();
+        stop(&r, "s", Some(&[]), Vec::new()).unwrap();
+        stop(&r, "s", None, Vec::new()).unwrap();
         let stops = session_store::read(&r, "s").into_iter().filter(|e| e.event == SessionEvent::Stop).count();
         assert_eq!(stops, 2);
         assert_eq!(session_view(&r, "s").unfolded.len(), 1, "the unbuilt plan stays on the record");
+    }
+
+    /// At a stop, the todo tests the session wrote since its start in files
+    /// it touched become its stubs — not ones that were already there, not
+    /// ones in files it never touched, not another session's — and the
+    /// claims its edits reach are recorded.
+    #[test]
+    fn a_stop_records_the_sessions_new_stubs_and_what_it_reached() {
+        let (_dir, r) = project();
+        let t = |f: &str, n: &str| (f.to_string(), n.to_string());
+        begin(&r, "s", || vec![t("src/a.rs", "old")]).unwrap();
+        begin(&r, "s", || panic!("the start is recorded once")).unwrap();
+        record_touch(&r, "s", "src/a.rs").unwrap();
+        record_touch(&r, "other", "src/a.rs").unwrap();
+        crate::infrastructure::session_store::append(
+            &r,
+            "other",
+            SessionEvent::Stub { file: "src/a.rs".into(), test: "theirs".into() },
+        )
+        .unwrap();
+
+        let planned = [t("src/a.rs", "old"), t("src/a.rs", "mine"), t("src/a.rs", "theirs"), t("src/b.rs", "untouched")];
+        stop(&r, "s", Some(&planned), vec!["resp-1".into()]).unwrap();
+        let log = session_log(&r, "s");
+        assert_eq!(log.stubs, vec![t("src/a.rs", "mine")]);
+        assert_eq!(log.reached, vec!["resp-1"]);
+
+        // A later stop with a new stub adds only that one.
+        let planned = [planned.as_slice(), &[t("src/a.rs", "later")]].concat();
+        stop(&r, "s", Some(&planned), vec!["resp-1".into(), "resp-2".into()]).unwrap();
+        let log = session_log(&r, "s");
+        assert_eq!(log.stubs, vec![t("src/a.rs", "mine"), t("src/a.rs", "later")]);
+        assert_eq!(log.reached.len(), 2);
     }
 
     /// The first read of a file records which of its anchors were already out

@@ -4,7 +4,7 @@ mod helpers;
 mod hook_client;
 mod instructions;
 mod server;
-mod tools;
+pub(crate) mod tools;
 mod types;
 
 use rmcp::ServiceExt;

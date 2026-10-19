@@ -59,6 +59,51 @@ pub(crate) fn load(r: &ModelRef) -> Result<Loaded, String> {
     Ok(Loaded { tree, status })
 }
 
+/// The derived tree alone, without the status reads.
+pub(crate) fn load_tree(r: &ModelRef) -> Result<DerivedTree, String> {
+    scryer_extract::derived_tree::derived_tree(r.project_path())
+}
+
+/// The project's todo tests, `(file, junit_name)`.
+pub(crate) fn planned_tests(tree: &DerivedTree) -> Vec<(String, String)> {
+    tree.claims.iter().filter(|c| c.planned).map(|c| (c.file.clone(), c.junit_name.clone())).collect()
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct EdgeCache {
+    fingerprint: u64,
+    edges: Vec<(String, String)>,
+}
+
+/// The project's file-level import graph, `(importer, imported)`, without
+/// guessed edges. Cached beside the derived tree under the same fingerprint,
+/// so it is re-extracted only when a file changed.
+pub(crate) fn import_edges(r: &ModelRef, tree: &DerivedTree) -> Result<Vec<(String, String)>, String> {
+    let path = r.dir().join(".import_edges.json");
+    let cached = std::fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str::<EdgeCache>(&s).ok());
+    if let Some(c) = cached.filter(|c| c.fingerprint == tree.fingerprint) {
+        return Ok(c.edges);
+    }
+    let ctx = scryer_extract::extract_context(r.project_path())?;
+    let edges: Vec<(String, String)> =
+        ctx.file_edges.into_iter().filter(|e| !e.guessed).map(|e| (e.src, e.dst)).collect();
+    let cache = EdgeCache { fingerprint: tree.fingerprint, edges };
+    // A failed cache write only costs the next read an extraction.
+    if let Ok(json) = serde_json::to_string(&cache) {
+        let _ = std::fs::create_dir_all(r.dir()).and_then(|_| std::fs::write(&path, json));
+    }
+    Ok(cache.edges)
+}
+
+/// The claims a change to `files` reaches, at every level.
+pub(crate) fn reached_claims(r: &ModelRef, tree: &DerivedTree, files: &[String]) -> Vec<String> {
+    if files.is_empty() {
+        return Vec::new();
+    }
+    let edges = import_edges(r, tree).unwrap_or_default();
+    radius(tree, &edges, files, true).into_iter().map(|h| h.claim.id.clone()).collect()
+}
+
 /// The test level that carries a claim at this C4 level.
 pub(crate) fn test_level(level: ClaimLevel) -> &'static str {
     match level {

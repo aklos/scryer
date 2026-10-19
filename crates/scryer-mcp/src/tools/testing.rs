@@ -35,13 +35,6 @@ fn load(model_ref: &ModelRef) -> Result<derived::Loaded, String> {
     derived::load(model_ref).map_err(|e| format!("Could not derive the tree for {model_ref}: {e}"))
 }
 
-/// The project's file-level import graph, `(importer, imported)`, without
-/// guessed edges.
-fn file_edges(model_ref: &ModelRef) -> Result<Vec<(String, String)>, String> {
-    let ctx = scryer_extract::extract_context(model_ref.project_path())?;
-    Ok(ctx.file_edges.into_iter().filter(|e| !e.guessed).map(|e| (e.src, e.dst)).collect())
-}
-
 /// The product files a probe of `claim`'s test breaks: what the test file
 /// imports, test files left out — or the test file itself when its tests sit
 /// beside the code (Rust's `#[cfg(test)]` modules).
@@ -206,7 +199,7 @@ A survivor is a finding: locate the files it names and strengthen their tests.")
             Ok(l) => l.tree,
             Err(e) => return error(e),
         };
-        let edges = match file_edges(&model_ref) {
+        let edges = match derived::import_edges(&model_ref, &tree) {
             Ok(e) => e,
             Err(e) => return error(format!("Could not read the import graph: {e}")),
         };
@@ -300,7 +293,7 @@ A survivor is a finding: locate the files it names and strengthen their tests.")
                 ))
             }
         }
-        let edges = file_edges(&model_ref).unwrap_or_default();
+        let edges = derived::import_edges(&model_ref, tree).unwrap_or_default();
         let targets = probe_targets(tree, &edges, &claim);
         // Sync BEFORE answering: the path handed back has to already hold the
         // developer's current code, or a break would land on a stale copy.
@@ -354,7 +347,7 @@ A survivor is a finding: locate the files it names and strengthen their tests.")
         let tree = load(&model_ref).map(|l| l.tree);
         let claim = tree.as_ref().ok().and_then(|t| derived::claim_for_test(t, &req.test).ok().cloned());
         let targets = match (&tree, &claim) {
-            (Ok(t), Some(c)) => probe_targets(t, &file_edges(&model_ref).unwrap_or_default(), c),
+            (Ok(t), Some(c)) => probe_targets(t, &derived::import_edges(&model_ref, t).unwrap_or_default(), c),
             _ => Vec::new(),
         };
         // Read before the reset wipes it: the last break must still be in the
