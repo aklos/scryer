@@ -4,7 +4,8 @@
  * durations are targets — retime an act by moving its start.
  */
 
-import { NOW, REFUND_STUBS, REFUND_VIOLATION, SESSION_REFUNDS, SESSION_WEBHOOKS } from "../fixture";
+import { REFUND_STUBS, REFUND_VIOLATION } from "../fixture";
+import { NOW, SESSION_REFUNDS, SESSION_WEBHOOKS } from "../story";
 import type { SessionEntry, SessionEvent } from "../types";
 import type { Camera, FilmEvent, TermLine, TestResult } from "./state";
 

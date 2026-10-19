@@ -11,7 +11,7 @@ import { continueRender, delayRender, staticFile } from "remotion";
 import App from "../../src/app/App";
 import "../../src/app/index.css";
 import { applyTheme, loadTheme } from "../../src/shared/theme/theme";
-import { NOW } from "../fixture";
+import { NOW } from "../story";
 import { PROJECT, sync, waitForApp, type Navigate } from "../stub/backend";
 import type { Fixture } from "../types";
 import type { View } from "./state";

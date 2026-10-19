@@ -13,7 +13,7 @@
  * render tab starting at frame 1800 — catches up to the frame's state.
  */
 
-import { NOW } from "../fixture";
+import { NOW } from "../story";
 import { systemOf } from "../shapes";
 import type { DerivedClaim, Fixture, ScryModel, SessionLog } from "../types";
 import type { ModelHealthReport, NodeHealth, HealthCounts, ClaimTestStatus, ClaimProbeStatus } from "../../src/entities/model/health";

@@ -11,7 +11,7 @@
  */
 
 import { interpolate, useCurrentFrame } from "remotion";
-import { AGENT_NAME } from "../fixture";
+import { AGENT_NAME } from "../story";
 import type { TermLine, TerminalState } from "./state";
 import "./terminal.css";
 

@@ -13,7 +13,8 @@
 
 import { Easing, interpolate } from "remotion";
 import base from "@film/base";
-import { NOW, REFUND_STUBS, REFUND_VIOLATION } from "../fixture";
+import { REFUND_STUBS, REFUND_VIOLATION } from "../fixture";
+import { NOW } from "../story";
 import { resolveNode, statusOf, systemOf, treeWith } from "../shapes";
 import type {
   ClaimState,

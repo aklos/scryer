@@ -1,27 +1,26 @@
 /**
  * Aperture Pay — the fictional payments platform the film is shot on, as the
- * derived shapes the app reads after step 4: a DerivedTree, a DerivedStatus,
- * structure.toml as parsed, two session logs and the diagram placements. No
- * real repo and no derivation: this is a snapshot of what a real run over
- * such a codebase would produce, written by hand.
+ * derived shapes the app reads: a DerivedTree, a DerivedStatus and
+ * structure.toml as parsed, with the story (story.ts) laid over them. No real
+ * repo and no derivation: the film's fallback until demo/derive.mjs writes
+ * demo/fixture.json from a real one.
  *
- * Claim ids are stable — the script (film/events.ts) refers to them. Every
- * claim text is an EARS sentence that passes `scryer-mcp lint`.
+ * Every claim text is an EARS sentence that passes `scryer-mcp lint`; the
+ * script and the story name claims by it.
  */
 
 import { statusOf, treeWith } from "./shapes";
+import { STORY_FILES, tell } from "./story";
 import type {
   ClaimLevel,
   ClaimState,
   DerivedClaim,
   DerivedViolation,
   Fixture,
-  Layout,
   Link,
   Node,
   ProbeMark,
   ScryModel,
-  SessionLog,
   Structure,
 } from "./types";
 
@@ -234,25 +233,6 @@ export const REFUND_VIOLATION: DerivedViolation = {
 
 // --- Diagram placements ------------------------------------------------------------
 
-/** Placements of the context and container levels by node name, so the
- *  diagram never lays them out during a render. Inside a styled container the
- *  style's own drawing places the components by layer. */
-export const layout: Layout = {
-  // Context
-  Cardholder: { x: 120, y: 120 },
-  Merchant: { x: 120, y: 420 },
-  "Aperture Pay": { x: 520, y: 270 },
-  "Acquiring Bank": { x: 940, y: 120 },
-  "Card Networks": { x: 940, y: 420 },
-  // Containers, inside the system
-  Dashboard: { x: 80, y: 80 },
-  "API Gateway": { x: 420, y: 80 },
-  Fraud: { x: 760, y: 80 },
-  Ledger: { x: 420, y: 330 },
-  Webhooks: { x: 760, y: 330 },
-  "Payments DB": { x: 420, y: 560 },
-};
-
 // --- Assembly ------------------------------------------------------------------------
 
 const claims: DerivedClaim[] = ROWS.map(([id, nodeId, level, file, line, identifier, junitName, description, concern, state]) => ({
@@ -280,6 +260,7 @@ const skeleton: ScryModel = {
 /** Every source file the film names, for the tree's file map. */
 const SOURCE_FILES = [
   ...ROWS.map((r) => r[3]),
+  ...STORY_FILES,
   "fraud/scoring/legacy.py",
   "ledger/src/application/refunds.rs",
   "ledger/src/application/store.rs",
@@ -306,46 +287,6 @@ function nodeOfFile(file: string): string | undefined {
   return ids.has(parts[0]) ? parts[0] : undefined;
 }
 
-/** When the verdicts the fixture starts with were recorded: two days back. */
-const BASE_RECORDED = 1_792_400_000 - 2 * 86_400;
-
-// --- Sessions ------------------------------------------------------------------------
-
-/** The agent in the film's terminal: deliberately nobody's product. */
-export const AGENT_NAME = "your agent";
-
-/** The film's "now", and minutes before it, as unix seconds. */
-export const NOW = 1_792_400_000;
-const ago = (minutes: number) => NOW - minutes * 60;
-
-/** Two sessions ran since the user last looked; act 1 starts a third. */
-export const SESSION_DISPUTES = "a41f9c02-disputes";
-export const SESSION_WEBHOOKS = "7be2d510-webhooks";
-export const SESSION_REFUNDS = "c3d8e1f7-refunds";
-
-export const sessions: SessionLog[] = [
-  {
-    id: SESSION_DISPUTES,
-    entries: [
-      { at: ago(95), event: "task", text: "hold disputed funds back from payouts" },
-      { at: ago(94), event: "touch", file: "ledger/src/domain/payout.rs" },
-      { at: ago(94), event: "stub", file: "ledger/src/domain/payout.rs", test: "domain::payout::tests::holds_disputed_funds" },
-      { at: ago(93), event: "reached", ids: ["c-led-6", "c-led-10", "c-e2e-4"] },
-      { at: ago(93), event: "stop" },
-    ],
-  },
-  {
-    id: SESSION_WEBHOOKS,
-    entries: [
-      { at: ago(14), event: "task", text: "retry failed ledger webhooks first" },
-      { at: ago(13), event: "touch", file: "webhooks/delivery/retry.go" },
-      { at: ago(12), event: "stub", file: "webhooks/delivery/retry_test.go", test: "TestRetriesLedgerEvents" },
-      { at: ago(12), event: "reached", ids: ["c-wh-3", "c-wh-4", "c-wh-8"] },
-      { at: ago(11), event: "stop" },
-    ],
-  },
-];
-
 // --- The fixture -------------------------------------------------------------------
 
 const tree = treeWith(
@@ -362,18 +303,19 @@ const tree = treeWith(
   [],
 );
 
-/** The poster frame's world: mostly proven, a few planned, one stale, one crosshair. */
-export const fixture: Fixture = {
+/** The poster frame's world: mostly proven, a few planned, one stale, one
+ *  crosshair, and the sessions that left it so. */
+export const fixture: Fixture = tell({
   tree,
   status: statusOf(
     tree,
     Object.fromEntries(ROWS.map((r) => [r[0], r[9]])),
     Object.fromEntries(ROWS.filter((r) => r[10]).map((r) => [r[0], r[10] as ProbeMark])),
-    Object.fromEntries(ROWS.map((r) => [r[0], BASE_RECORDED])),
+    {},
   ),
   structure,
-  sessions,
-  layout,
-};
+  sessions: [],
+  layout: {},
+}).fixture;
 
 export default fixture;
