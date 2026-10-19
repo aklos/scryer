@@ -7,3 +7,5 @@
 hook.json
 preview/
 build-logs/
+.derived_tree.json
+.mutations.json
