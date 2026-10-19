@@ -307,10 +307,26 @@ fn js_string(node: Node, bytes: &[u8]) -> Option<String> {
     match node.kind() {
         "string" | "template_string" => {
             let t = text(node, bytes);
-            Some(t[1..t.len().saturating_sub(1)].to_string())
+            Some(js_unescape(&t[1..t.len().saturating_sub(1)]))
         }
         _ => None,
     }
+}
+
+/// A literal's text as the runner sees it: `\'` → `'`, `\\` → `\`.
+fn js_unescape(raw: &str) -> String {
+    let mut out = String::new();
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        match (c, chars.clone().next()) {
+            ('\\', Some(n @ ('\\' | '\'' | '"' | '`' | '$'))) => {
+                out.push(n);
+                chars.next();
+            }
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 fn js_tests(
@@ -327,9 +343,8 @@ fn js_tests(
                 .child_by_field_name("function")
                 .and_then(|f| js_call_shape(f, bytes));
             let args = child.child_by_field_name("arguments");
-            let name = args
-                .and_then(|a| a.named_child(0))
-                .and_then(|n| js_string(n, bytes));
+            let name_node = args.and_then(|a| a.named_child(0));
+            let name = name_node.and_then(|n| js_string(n, bytes));
             if let (Some(shape), Some(name)) = (shape, name) {
                 let skip_here = shape.modifiers.iter().any(|m| matches!(*m, "skip" | "todo"))
                     || shape.base.starts_with('x');
@@ -351,7 +366,14 @@ fn js_tests(
                             .collect::<Vec<_>>()
                             .join(" > ");
                         let planned = skipped || skip_here;
-                        out.push(make_test(child, name.clone(), Some(name), junit, planned));
+                        // The identifier is the literal as written: anchors
+                        // find the test block by it.
+                        let raw = name_node.map(|n| {
+                            let t = text(n, bytes);
+                            t[1..t.len().saturating_sub(1)].to_string()
+                        });
+                        let identifier = raw.unwrap_or_else(|| name.clone());
+                        out.push(make_test(child, identifier, Some(name), junit, planned));
                         continue;
                     }
                     _ => {}

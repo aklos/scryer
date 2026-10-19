@@ -1,4 +1,5 @@
 pub mod anchors;
+pub mod claim_edit;
 pub mod claims;
 pub mod context;
 pub mod derive;

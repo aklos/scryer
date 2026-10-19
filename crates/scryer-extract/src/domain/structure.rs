@@ -94,6 +94,33 @@ impl Structure {
     }
 }
 
+/// `structure.toml` text with one container's display name set, comments and
+/// everything else left as written. The section is keyed by directory and
+/// added when missing.
+pub fn set_container_name(text: &str, dir: &str, name: &str) -> String {
+    let quoted_name = format!("\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\""));
+    let headers = [format!("[containers.\"{dir}\"]"), format!("[containers.{dir}]")];
+    let lines: Vec<&str> = text.lines().collect();
+    let Some(start) = lines.iter().position(|l| headers.iter().any(|h| l.trim() == h)) else {
+        let sep = if text.is_empty() || text.ends_with("\n\n") { "" } else if text.ends_with('\n') { "\n" } else { "\n\n" };
+        return format!("{text}{sep}[containers.\"{dir}\"]\nname = {quoted_name}\n");
+    };
+    let end = lines[start + 1..]
+        .iter()
+        .position(|l| l.trim_start().starts_with('['))
+        .map_or(lines.len(), |i| start + 1 + i);
+    let mut out: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+    match (start + 1..end).find(|&i| lines[i].trim_start().starts_with("name") && lines[i].contains('=')) {
+        Some(i) => out[i] = format!("name = {quoted_name}"),
+        None => out.insert(start + 1, format!("name = {quoted_name}")),
+    }
+    let mut joined = out.join("\n");
+    if text.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
+}
+
 fn glob_match(glob: &str, path: &str) -> bool {
     Pattern::new(glob).is_ok_and(|p| p.matches_with(path, GLOB_OPTS))
 }
@@ -144,6 +171,23 @@ layers = ["domain", "application", "composition", "infrastructure"]
         assert_eq!(s.configured_level("src/api.integration.test.ts"), Some(ClaimLevel::Container));
         assert_eq!(s.configured_level("tests/Server.Tests/ChatTests.cs"), None);
         assert!(!s.integration_configured());
+    }
+
+    /// When a container is renamed, its section's name changes in place, a
+    /// missing name or section is added, and comments survive.
+    #[test]
+    fn renames_a_container_in_place() {
+        let text = "# shape\n[containers.\"crates/core\"]\nname = \"Core\"\nstyle = \"library\"\n\n[containers.web]\nstyle = \"feature-sliced\"\n";
+        let out = set_container_name(text, "crates/core", "Model \"Core\"");
+        assert!(out.starts_with("# shape\n[containers.\"crates/core\"]\nname = \"Model \\\"Core\\\"\"\nstyle"), "{out}");
+        let out = set_container_name(&out, "web", "Web UI");
+        assert!(out.contains("[containers.web]\nname = \"Web UI\"\nstyle = \"feature-sliced\""), "{out}");
+        let out = set_container_name(&out, "docs", "Docs");
+        let s = Structure::parse(&out).unwrap();
+        assert_eq!(s.container("x", "crates/core").unwrap().name.as_deref(), Some("Model \"Core\""));
+        assert_eq!(s.container("x", "web").unwrap().name.as_deref(), Some("Web UI"));
+        assert_eq!(s.container("x", "docs").unwrap().name.as_deref(), Some("Docs"));
+        assert_eq!(s.container("x", "web").unwrap().style.as_deref(), Some("feature-sliced"));
     }
 
     /// A misspelt key is an error, not a silent default.
