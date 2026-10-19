@@ -1,6 +1,7 @@
 pub mod build_edges;
 pub mod changes;
 pub mod concerns;
+pub mod derived_tree;
 pub mod diff;
 pub mod ears;
 pub mod health;

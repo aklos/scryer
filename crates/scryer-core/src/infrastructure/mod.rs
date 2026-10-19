@@ -6,4 +6,5 @@ pub mod settings;
 pub mod storage;
 pub mod worktree;
 pub mod edges_cache;
+pub mod derived_tree_cache;
 pub mod session_store;

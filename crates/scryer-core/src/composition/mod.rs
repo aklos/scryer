@@ -8,6 +8,7 @@
 pub mod change_ledger;
 pub mod codebase;
 pub mod coverage;
+pub mod derived_store;
 pub mod drift_verdicts;
 pub mod fold;
 pub mod edges;
@@ -23,6 +24,7 @@ pub mod sync;
 pub use change_ledger::*;
 pub use codebase::*;
 pub use coverage::*;
+pub use derived_store::*;
 pub use fold::*;
 pub use locate::*;
 pub use edges::*;
