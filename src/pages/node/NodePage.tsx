@@ -1,29 +1,19 @@
 /**
- * The main panel: a read-first wiki page for the selected node or group,
- * following Wikipedia's anatomy:
+ * The main panel: a read-first wiki page for the selected node or group
+ * (groups render through GroupPage), following Wikipedia's anatomy:
  *
- *  - header: breadcrumb trail, title, type line, page-level actions
- *  - maintenance banners (ambox): drift, stale claims, undescribed behaviour,
- *    empty symbols — each stating the problem with its verdict actions inline
+ *  - header: breadcrumb trail, title, page-level actions
+ *  - type line under the title: kind, technology, style and layer, the
+ *    defining file, and the subtree's test and completeness gauges —
+ *    structured metadata surfaced inline rather than in a separate column
+ *  - maintenance banners (ambox): structural style violations, each
+ *    expandable to where it is, and empty symbols
  *  - lede: the description paragraph, no heading
- *  - type line under the title: kind, technology, status — structured metadata
- *    surfaced inline rather than in a separate column
- *  - sections with per-section [edit] links, swapped to edit mode in place
- *  - Source: the read-through-to-code section. Claims cite source hunks like
- *    footnotes ([n] jumps down); hunks stack the claims they discharge and
- *    link back. Ranges shared by several claims render once.
+ *  - sections with per-section [edit] links, swapped to edit mode in place:
+ *    preview, responsibilities with their test verdicts, properties,
+ *    connections and implied connections
  *
- * New items land as `proposed`. Mutations flow through the Editor intents.
- *
- * Routes a selection to the right page body (node, group, or nothing for special pages)
- *
- * Renders a group's page — name, description, claims, and its member list
- *
- * Routes a selection to the right page body — node, group, or nothing for a special page
- *
- * Renders one node's full page — header, description, kind-specific hero, connections, properties, and source
- *
- * Renders one node's full wiki page — header, description, kind-specific hero section, connections, properties, and source
+ * Mutations flow through the Editor intents.
  */
 
 import { useMemo, useRef, useState } from "react";

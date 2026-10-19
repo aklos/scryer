@@ -1,5 +1,8 @@
 /**
- * Catches rendering errors anywhere below it and shows a fallback instead of a blank window
+ * Catches rendering errors anywhere below it and shows a fallback with the
+ * error and a retry button instead of a blank window. The fallback carries its
+ * own window controls, since the frameless window has no others once the top
+ * bar is gone.
  */
 
 import { Component } from "react";
