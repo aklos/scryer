@@ -1,23 +1,8 @@
 //! The app's side of agent integration: thin commands over
-//! `scryer_core::agent_setup`, the same code path `scryer-mcp setup` runs.
-//!
-//! Registers scryer's status one-liner as the project's Claude Code statusLine, refusing to clobber a foreign statusLine already occupying that single slot.
-//!
-//! Writes idempotent, foreign-config-preserving installs of the MCP entry, session hooks, and statusline into each tool's own config format (Claude Code, Codex, Copilot).
-//!
-//! Idempotently installs scryer's session-hook registrations into a settings file's hooks block, stripping any prior scryer entries first so foreign hooks and re-installs never duplicate.
-//!
-//! Recognizes a hook entry as scryer's own across both the nested (Claude/Codex) and flat (Copilot) schemas.
-//!
-//! Detects which AI coding CLIs are installed and whether each already has scryer's MCP server, session hooks, and statusline configured for the project.
-//!
-//! Writes Copilot's own hook registration file wholesale in Copilot's flat entry schema, since scryer owns that file outright.
-//!
-//! Locates the scryer-mcp binary beside the running app or on PATH, to reference in every config it writes.
-//!
-//! Aggregates every per-tool detection check (binary presence, MCP entry, approval, hooks, statusline) into the one payload the setup UI reads.
-//!
-//! Writes the scryer MCP server entry into the target tool's config file (.mcp.json or .codex/config.toml), preserving whatever else the file already holds.
+//! `scryer_core::agent_setup`, the same code path `scryer-mcp setup` runs —
+//! detecting which agent CLIs are installed, reporting the project's
+//! integration status and switching it on or off with the scryer-mcp binary
+//! found beside the app or on PATH.
 
 use scryer_core::agent_setup::{self, SetupStatus};
 use std::path::Path;

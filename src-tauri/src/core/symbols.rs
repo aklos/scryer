@@ -1,13 +1,13 @@
 //! In-process symbol resolution for the code inspector.
 //!
-//! Given a file + an identifier the agent recorded (`SourceLocation.symbol`),
-//! resolve the definition's line range by parsing with tree-sitter. Grammars
-//! are compiled into the binary, so this needs no external tool. Languages
-//! without a bundled grammar fall back to the caller's text search.
-//!
-//! Walks a tree-sitter parse tree for the node whose name matches the symbol, preferring definition-shaped kinds nearest a given line hint, across every bundled grammar plus Vue SFCs.
-//!
-//! Resolve a symbol name to its line span in a source file, preferring the definition nearest a remembered position.
+//! Given a file and an identifier (`SourceLocation.symbol`), resolve the
+//! definition's line range by parsing with tree-sitter, preferring a
+//! definition over a mere name match and, among equals, the one nearest a line
+//! hint. A test named by its string (`it("…")`) resolves to the whole call, a
+//! Vue SFC is one symbol spanning the file, and Clojure goes through
+//! scryer-extract's definition list. Grammars are compiled into the binary, so
+//! this needs no external tool. Languages without a bundled grammar fall back
+//! to the caller's text search.
 
 use std::path::Path;
 use tree_sitter::{Language, Parser};

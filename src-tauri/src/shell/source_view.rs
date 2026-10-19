@@ -1,18 +1,8 @@
-//! Reads a source span constrained to within the project directory, returning the whole enclosing symbol body with the claim's focus lines flagged.
-//!
-//! Resolves a symbol name to its precise 1-based source line range via tree-sitter, falling back to a text search for languages without a bundled grammar.
-//!
-//! Renders a bounded, syntax-highlighted span of source around a claim's focus lines for the inspector, expanding to the whole enclosing symbol body.
-//!
-//! Reports whether a model source anchor currently resolves to real code, distinguishing a missing file from a missing symbol from an out-of-range line.
-//!
-//! Resolves the absolute file path and landing line for an anchor, then hands it to $VISUAL or $EDITOR, skipping TUI editors it can't spawn as a GUI app.
-//!
-//! Jumps to a claim's anchor line in the user's configured GUI editor, skipping known TUI editors since the app can't spawn them.
-//!
-//! Pre-flight-checks whether one source anchor resolves to real code, without rendering anything, so the inspector can pick the right anchor icon.
-//!
-//! Language-agnostic fallback: finds the first line that defines a symbol by a word-boundary match next to a definition cue, for files with no bundled grammar.
+//! The code inspector's source reads: a highlighted span around an anchor's
+//! focus lines (the whole enclosing symbol, reads confined to the project), a
+//! cheap check of whether an anchor still resolves to real code, and opening an
+//! anchor in the user's GUI editor. Symbols resolve via tree-sitter, with a
+//! text-search fallback for files no bundled grammar covers.
 
 use std::path::PathBuf;
 
