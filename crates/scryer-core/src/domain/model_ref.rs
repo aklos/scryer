@@ -88,6 +88,14 @@ impl ModelRef {
         }
     }
 
+    /// The derived C4 tree (see `scryer_extract::derived_tree`), keyed on the
+    /// mtimes it was derived from. Regenerable, never hand-authored.
+    pub fn derived_tree_path(&self) -> PathBuf {
+        match self {
+            ModelRef::ProjectLocal(path) => path.join(".scryer").join(".derived_tree.json"),
+        }
+    }
+
     /// The anchor fingerprint baseline — what every sourceMap anchor's span
     /// contained at the last reconcile (see `scryer_extract::anchors`).
     /// Regenerable, git-free, never hand-authored.

@@ -63,6 +63,12 @@ pub mod settings {
     pub use crate::domain::agent_settings::*;
 }
 
+/// The C4 tree derived from packaging and tests: its shape and its cache.
+pub mod derived_tree {
+    pub use crate::composition::derived_store::*;
+    pub use crate::domain::derived_tree::*;
+}
+
 /// The build's dependency graph: its shape, its derivation, and its cache.
 pub mod build_edges {
     pub use crate::composition::edges::*;
