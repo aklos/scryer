@@ -26,5 +26,5 @@ pub use domain::context::{
 };
 pub use domain::facts::{Container, TsAliases};
 pub use domain::{context, lang};
-pub use composition::{anchors, test_status};
+pub use composition::{anchors, derived_tree, test_status};
 pub use infrastructure::{manifest, tsconfig};

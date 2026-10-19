@@ -1,0 +1,601 @@
+//! The C4 tree, derived. Containers are the packages the manifests declare,
+//! components the modules or directories inside them, symbols the extracted
+//! definitions, links the import graph between them. Claims are the lifted
+//! test descriptions, placed by test level: e2e under the system, integration
+//! under its container, unit under its component. Nothing here is authored
+//! except the little `structure.toml` adds.
+
+use crate::domain::claims::FileLift;
+use crate::domain::context::{ContainerFacts, Edge, FileContext};
+use crate::domain::structure::{ClaimLevel, Structure};
+use scryer_core::derived_tree::{DerivedClaim, DerivedTree};
+use scryer_core::style::Styles;
+use scryer_core::{
+    Kind, Link, LinkKind, Node, Responsibility, SchemaProperty, ScryModel, Source, SourceLocation,
+};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+
+/// Everything the tree is derived from.
+pub struct DeriveInput<'a> {
+    pub project_name: &'a str,
+    pub containers: &'a [ContainerFacts],
+    /// Parsed product files with their symbols.
+    pub files: &'a [FileContext],
+    pub file_edges: &'a [Edge],
+    /// Every product source file's lifted claims and module doc.
+    pub lifts: &'a BTreeMap<String, FileLift>,
+    /// Every file in the project, for manifest conventions.
+    pub all_files: &'a BTreeSet<String>,
+    pub structure: &'a Structure,
+    pub fingerprint: u64,
+}
+
+const ALPHABET: &[u8; 32] = b"0123456789abcdefghjkmnpqrstvwxyz";
+
+/// A deterministic id in the model's `<prefix>-<suffix>` shape, so the same
+/// code always derives the same ids.
+fn stable_id(prefix: &str, key: &str, taken: &mut HashSet<String>) -> String {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for b in key.bytes() {
+        hash = (hash ^ b as u64).wrapping_mul(0x100000001b3);
+    }
+    loop {
+        let suffix: String = (0..8)
+            .map(|i| ALPHABET[((hash >> (i * 5)) & 31) as usize] as char)
+            .collect();
+        let id = format!("{prefix}-{suffix}");
+        if taken.insert(id.clone()) {
+            return id;
+        }
+        hash = hash.wrapping_mul(0x100000001b3).wrapping_add(1);
+    }
+}
+
+/// Test code by path: test directories and the runners' file conventions.
+pub fn is_test_path(rel: &str) -> bool {
+    let (dirs, file) = rel.rsplit_once('/').unwrap_or(("", rel));
+    if dirs
+        .split('/')
+        .any(|d| matches!(d, "tests" | "test" | "__tests__" | "spec" | "e2e"))
+    {
+        return true;
+    }
+    let stem = file.split('.').next().unwrap_or(file);
+    file.contains(".test.")
+        || file.contains(".spec.")
+        || file == "conftest.py"
+        || (file.ends_with(".py") && (stem.starts_with("test_") || stem.ends_with("_test")))
+        || file.ends_with("_test.go")
+        || ((file.ends_with(".cs") || file.ends_with(".java"))
+            && (stem.ends_with("Tests") || stem.ends_with("Test")))
+}
+
+/// A test file's stem with its runner markers dropped: `tree.test.ts`,
+/// `test_tree.py` and `TreeTests.cs` all name `tree`/`Tree`.
+fn tested_stem(file: &str) -> String {
+    let stem = file.split('.').next().unwrap_or(file);
+    let stem = stem.strip_prefix("test_").unwrap_or(stem);
+    let stem = stem.strip_suffix("_test").unwrap_or(stem);
+    let stem = stem.strip_suffix("Tests").or_else(|| stem.strip_suffix("Test")).unwrap_or(stem);
+    stem.to_string()
+}
+
+fn file_name(rel: &str) -> &str {
+    rel.rsplit('/').next().unwrap_or(rel)
+}
+
+fn file_stem(rel: &str) -> &str {
+    let name = file_name(rel);
+    name.split('.').next().unwrap_or(name)
+}
+
+const ENTRY_FILES: &[&str] = &[
+    "lib.rs", "main.rs", "mod.rs", "index.ts", "index.tsx", "index.js", "index.jsx", "index.mjs",
+    "__init__.py", "main.py", "Program.cs",
+];
+
+fn is_test_container(c: &ContainerFacts) -> bool {
+    let base = c.dir.rsplit('/').next().unwrap_or(&c.dir).to_lowercase();
+    let name = c.name.to_lowercase();
+    [base, name].iter().any(|n| {
+        n.ends_with(".tests") || n.ends_with("-tests") || n.ends_with("_tests") || n.ends_with(".test")
+            || n == "tests"
+    })
+}
+
+/// Where a file sits inside its container, the source root stripped:
+/// `crates/x/src/domain/model.rs` reads (`crates/x/src`, `domain/model.rs`).
+fn inner_path<'p>(container_dir: &str, rel: &'p str) -> (&'p str, &'p str) {
+    let inner = if container_dir.is_empty() {
+        rel
+    } else {
+        rel.strip_prefix(container_dir).and_then(|r| r.strip_prefix('/')).unwrap_or(rel)
+    };
+    let inner = inner.strip_prefix("src/").unwrap_or(inner);
+    (rel[..rel.len() - inner.len()].trim_end_matches('/'), inner)
+}
+
+/// The component a product file belongs to: the first directory under the
+/// source root, or the file's own module when it sits at the root.
+/// Returns (component path, display name).
+fn component_of(container_dir: &str, rel: &str) -> (String, String) {
+    let (root, inner) = inner_path(container_dir, rel);
+    let join = |seg: &str| if root.is_empty() { seg.to_string() } else { format!("{root}/{seg}") };
+    match inner.split_once('/') {
+        Some((dir, _)) => (join(dir), dir.to_string()),
+        None => {
+            let stem = file_stem(inner);
+            (join(stem), stem.to_string())
+        }
+    }
+}
+
+struct Component {
+    id: String,
+    name: String,
+    container_dir: String,
+    files: Vec<String>,
+    patterns: BTreeSet<String>,
+}
+
+pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
+    let s = input.structure;
+    let styles = Styles::builtin();
+    let mut taken = HashSet::new();
+    let mut model = ScryModel::new();
+
+    // Containers, deepest first so a nested package owns its files.
+    let mut by_depth: Vec<&ContainerFacts> = input.containers.iter().collect();
+    by_depth.sort_by_key(|c| std::cmp::Reverse(c.dir.len()));
+    let owner = |rel: &str| -> Option<&ContainerFacts> {
+        by_depth.iter().copied().find(|c| {
+            c.dir.is_empty() || rel.strip_prefix(c.dir.as_str()).is_some_and(|r| r.starts_with('/'))
+        })
+    };
+    let mut test_containers: HashSet<&str> = input
+        .containers
+        .iter()
+        .filter(|c| is_test_container(c))
+        .map(|c| c.dir.as_str())
+        .collect();
+    // A package holding nothing but test code is a test project too.
+    let mut has_product: HashSet<&str> = HashSet::new();
+    let mut has_any: HashSet<&str> = HashSet::new();
+    for rel in input.lifts.keys() {
+        if let Some(c) = owner(rel) {
+            has_any.insert(c.dir.as_str());
+            if !is_test_path(rel) {
+                has_product.insert(c.dir.as_str());
+            }
+        }
+    }
+    for dir in has_any.difference(&has_product) {
+        test_containers.insert(dir);
+    }
+    let is_test_file = |rel: &str| {
+        is_test_path(rel) || owner(rel).is_some_and(|c| test_containers.contains(c.dir.as_str()))
+    };
+
+    let system_name = s.system.name.clone().unwrap_or_else(|| input.project_name.to_string());
+    let system_id = stable_id("node", "system", &mut taken);
+    model.nodes.push(node(&system_id, Kind::System, &system_name, None));
+    for person in &s.system.persons {
+        let id = stable_id("node", &format!("person:{person}"), &mut taken);
+        model.nodes.push(node(&id, Kind::Person, person, None));
+    }
+    for external in &s.system.externals {
+        let id = stable_id("node", &format!("external:{external}"), &mut taken);
+        let mut n = node(&id, Kind::System, external, None);
+        n.external = Some(true);
+        model.nodes.push(n);
+    }
+
+    let mut container_ids: HashMap<&str, String> = HashMap::new();
+    let mut containers_sorted: Vec<&ContainerFacts> = input
+        .containers
+        .iter()
+        .filter(|c| !test_containers.contains(c.dir.as_str()))
+        .collect();
+    containers_sorted.sort_by(|a, b| a.dir.cmp(&b.dir));
+    for c in &containers_sorted {
+        let id = stable_id("node", &format!("container:{}", c.dir), &mut taken);
+        let config = s.container(&c.name, &c.dir);
+        let name = config.and_then(|k| k.name.clone()).unwrap_or_else(|| c.name.clone());
+        let mut n = node(&id, Kind::Container, &name, Some(&system_id));
+        n.technology = c.technology.clone();
+        n.style = config.and_then(|k| k.style.clone());
+        n.description = input
+            .lifts
+            .iter()
+            .filter(|(rel, _)| owner(rel).is_some_and(|o| o.dir == c.dir))
+            .filter(|(rel, _)| {
+                let (_, inner) = inner_path(&c.dir, rel);
+                ENTRY_FILES.contains(&inner)
+            })
+            .find_map(|(_, lift)| lift.module_description.clone());
+        let glob = if c.dir.is_empty() { "**".to_string() } else { format!("{}/**", c.dir) };
+        model.boundaries.insert(id.clone(), vec![Source { pattern: glob, comment: None }]);
+        model.nodes.push(n);
+        container_ids.insert(c.dir.as_str(), id);
+    }
+
+    // Components: every product file's module or top directory.
+    let mut components: BTreeMap<String, Component> = BTreeMap::new();
+    let mut file_component: HashMap<&str, String> = HashMap::new();
+    for rel in input.lifts.keys() {
+        if is_test_file(rel) {
+            continue;
+        }
+        let Some(c) = owner(rel) else { continue };
+        if !container_ids.contains_key(c.dir.as_str()) {
+            continue;
+        }
+        let (path, name) = component_of(&c.dir, rel);
+        let comp = components.entry(path.clone()).or_insert_with(|| Component {
+            id: String::new(),
+            name,
+            container_dir: c.dir.clone(),
+            files: Vec::new(),
+            patterns: BTreeSet::new(),
+        });
+        comp.files.push(rel.clone());
+        let (_, inner) = inner_path(&c.dir, rel);
+        comp.patterns.insert(if inner.contains('/') { format!("{path}/**") } else { rel.clone() });
+        file_component.insert(rel.as_str(), path);
+    }
+    for (path, comp) in components.iter_mut() {
+        comp.id = stable_id("node", &format!("component:{path}"), &mut taken);
+        let container = &container_ids[comp.container_dir.as_str()];
+        let mut n = node(&comp.id, Kind::Component, &comp.name, Some(container));
+        let config = input
+            .containers
+            .iter()
+            .find(|c| c.dir == comp.container_dir)
+            .and_then(|c| s.container(&c.name, &c.dir));
+        let layers: Vec<String> = match config {
+            Some(k) if !k.layers.is_empty() => k.layers.clone(),
+            Some(k) => k
+                .style
+                .as_deref()
+                .and_then(|st| styles.get(st))
+                .map(|d| d.layer_names().iter().map(|l| l.to_string()).collect())
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
+        if layers.contains(&comp.name) {
+            n.layer = Some(comp.name.clone());
+        }
+        // The module doc of the component's entry: `domain/mod.rs`,
+        // `domain.rs`, `index.ts`, `__init__.py`, or a one-file module.
+        n.description = comp
+            .files
+            .iter()
+            .filter(|rel| {
+                let (_, inner) = inner_path(&comp.container_dir, rel);
+                let name = file_name(rel);
+                let depth = inner.matches('/').count();
+                (depth == 1 && ENTRY_FILES.contains(&name))
+                    || (depth == 0 && !ENTRY_FILES.contains(&name))
+            })
+            .find_map(|rel| input.lifts[rel].module_description.clone());
+        model.boundaries.insert(
+            comp.id.clone(),
+            comp.patterns.iter().map(|p| Source { pattern: p.clone(), comment: None }).collect(),
+        );
+        model.nodes.push(n);
+    }
+
+    // Symbols: outermost definitions of product files, test code left out.
+    for f in input.files {
+        let Some(path) = file_component.get(f.rel_path.as_str()) else { continue };
+        let comp = &components[path];
+        let lift = input.lifts.get(&f.rel_path);
+        let in_test = |line: u32| {
+            lift.is_some_and(|l| {
+                l.test_spans.iter().any(|&(a, b)| a <= line && line <= b)
+                    || l.tests.iter().any(|t| t.line <= line && line <= t.end_line)
+            })
+        };
+        let mut open_end = 0u32;
+        for sym in &f.symbols {
+            if sym.start_line <= open_end {
+                continue;
+            }
+            open_end = sym.end_line;
+            if in_test(sym.start_line) {
+                continue;
+            }
+            let id = stable_id("node", &format!("symbol:{}#{}", f.rel_path, sym.name), &mut taken);
+            let mut n = node(&id, Kind::Symbol, &sym.name, Some(&comp.id));
+            if sym.is_data_shape {
+                n.properties = sym
+                    .fields
+                    .iter()
+                    .map(|label| SchemaProperty {
+                        label: label.clone(),
+                        description: String::new(),
+                        vagrant: None,
+                        stale: None,
+                        last_touched_at: None,
+                    })
+                    .collect();
+            }
+            model.source_map.insert(
+                id.clone(),
+                vec![SourceLocation {
+                    pattern: f.rel_path.clone(),
+                    symbol: Some(sym.name.clone()),
+                    line: Some(sym.start_line),
+                    end_line: Some(sym.end_line),
+                }],
+            );
+            model.nodes.push(n);
+        }
+    }
+
+    // Claims, placed by level.
+    let mut edges_from: HashMap<&str, Vec<&str>> = HashMap::new();
+    for e in input.file_edges.iter().filter(|e| !e.guessed) {
+        edges_from.entry(e.src.as_str()).or_default().push(e.dst.as_str());
+    }
+    let cargo_dirs: HashSet<&str> = input
+        .containers
+        .iter()
+        .filter(|c| {
+            let manifest = if c.dir.is_empty() { "Cargo.toml".to_string() } else { format!("{}/Cargo.toml", c.dir) };
+            input.all_files.contains(&manifest)
+        })
+        .map(|c| c.dir.as_str())
+        .collect();
+    let mut claims = Vec::new();
+    let node_index: HashMap<String, usize> =
+        model.nodes.iter().enumerate().map(|(i, n)| (n.id.clone(), i)).collect();
+    for (rel, lift) in input.lifts {
+        if lift.tests.is_empty() {
+            continue;
+        }
+        let own = owner(rel);
+        let level = s.configured_level(rel).unwrap_or_else(|| {
+            // Cargo's convention: a crate's `tests/` directory is integration.
+            let cargo_tests = !s.integration_configured()
+                && rel.ends_with(".rs")
+                && own.is_some_and(|c| {
+                    cargo_dirs.contains(c.dir.as_str()) && {
+                        let prefix = if c.dir.is_empty() { "tests/".to_string() } else { format!("{}/tests/", c.dir) };
+                        rel.starts_with(&prefix)
+                    }
+                });
+            if cargo_tests { ClaimLevel::Container } else { ClaimLevel::Component }
+        });
+        let target_container = own
+            .filter(|c| container_ids.contains_key(c.dir.as_str()))
+            .map(|c| c.dir.clone())
+            .or_else(|| own.and_then(|c| tested_container(c, input, &container_ids, &edges_from, rel, &owner)));
+        let node_id = match level {
+            ClaimLevel::System => system_id.clone(),
+            ClaimLevel::Container | ClaimLevel::Component => {
+                let comp = (level == ClaimLevel::Component)
+                    .then(|| {
+                        target_container.as_deref().and_then(|dir| {
+                            unit_component(rel, dir, &components, &file_component, &edges_from)
+                        })
+                    })
+                    .flatten();
+                match (comp, &target_container) {
+                    (Some(path), _) => components[&path].id.clone(),
+                    (None, Some(dir)) => container_ids[dir.as_str()].clone(),
+                    (None, None) => system_id.clone(),
+                }
+            }
+        };
+        for t in &lift.tests {
+            let id = stable_id("resp", &format!("claim:{rel}#{}", t.junit_name), &mut taken);
+            let concern = t.concerns.iter().find(|c| !c.contains(':')).cloned();
+            let idx = node_index[&node_id];
+            model.nodes[idx].responsibilities.push(Responsibility {
+                id: id.clone(),
+                statement: t.description.clone(),
+                concern,
+                vagrant: None,
+                stale: None,
+                stale_proposal: None,
+                directives: Vec::new(),
+                last_touched_at: None,
+            });
+            model.test_map.insert(
+                id.clone(),
+                vec![SourceLocation {
+                    pattern: rel.clone(),
+                    symbol: Some(t.identifier.clone()),
+                    line: Some(t.line),
+                    end_line: Some(t.end_line),
+                }],
+            );
+            claims.push(DerivedClaim {
+                id,
+                node_id: node_id.clone(),
+                level,
+                file: rel.clone(),
+                line: t.line,
+                identifier: t.identifier.clone(),
+                description: t.description.clone(),
+                concerns: t.concerns.clone(),
+                junit_name: t.junit_name.clone(),
+                planned: t.planned,
+            });
+        }
+    }
+
+    // Links: the import graph between components and between containers.
+    let mut seen: HashSet<(String, String)> = HashSet::new();
+    for e in input.file_edges.iter().filter(|e| !e.guessed) {
+        let (Some(a), Some(b)) = (file_component.get(e.src.as_str()), file_component.get(e.dst.as_str())) else {
+            continue;
+        };
+        if a == b {
+            continue;
+        }
+        let (ca, cb) = (&components[a], &components[b]);
+        if ca.container_dir != cb.container_dir {
+            let (sa, sb) = (&container_ids[ca.container_dir.as_str()], &container_ids[cb.container_dir.as_str()]);
+            push_link(&mut model, &mut seen, &mut taken, sa, sb, None);
+        }
+        push_link(&mut model, &mut seen, &mut taken, &ca.id, &cb.id, Some(LinkKind::Depends));
+    }
+
+    scryer_core::concerns::register_concerns(&mut model);
+    let planned_ids: HashSet<&str> = claims.iter().filter(|c| c.planned).map(|c| c.id.as_str()).collect();
+    let mut committed = model.clone();
+    for n in committed.nodes.iter_mut() {
+        n.responsibilities.retain(|r| !planned_ids.contains(r.id.as_str()));
+    }
+    committed.test_map.retain(|id, _| !planned_ids.contains(id.as_str()));
+    DerivedTree { fingerprint: input.fingerprint, committed, planned: model, claims }
+}
+
+/// The product container a test project exercises: the one its name drops
+/// the test suffix to, else its only declared project reference, else the
+/// referenced one its imports reach most, else its first reference.
+fn tested_container<'a>(
+    test_container: &ContainerFacts,
+    input: &DeriveInput,
+    container_ids: &HashMap<&str, String>,
+    edges_from: &HashMap<&str, Vec<&str>>,
+    rel: &str,
+    owner: &dyn Fn(&str) -> Option<&'a ContainerFacts>,
+) -> Option<String> {
+    let lower = test_container.name.to_lowercase();
+    let bare = [".tests", "-tests", "_tests", ".test", "tests"]
+        .iter()
+        .find_map(|suf| lower.strip_suffix(suf))
+        .unwrap_or(&lower)
+        .to_string();
+    if let Some(c) = input
+        .containers
+        .iter()
+        .find(|c| container_ids.contains_key(c.dir.as_str()) && c.name.to_lowercase() == bare)
+    {
+        return Some(c.dir.clone());
+    }
+    // Only what the test project declares it references, when it declares.
+    let deps: Vec<&String> =
+        test_container.dep_dirs.iter().filter(|d| container_ids.contains_key(d.as_str())).collect();
+    if let [only] = deps.as_slice() {
+        return Some(only.to_string());
+    }
+    let allowed = |dir: &str| deps.is_empty() || deps.iter().any(|d| d.as_str() == dir);
+    // The test file's own imports, else those of its whole test project.
+    let reached = |sources: &mut dyn Iterator<Item = &str>| -> Option<String> {
+        let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+        for src in sources {
+            for dst in edges_from.get(src).into_iter().flatten() {
+                if let Some(c) = owner(dst)
+                    .filter(|c| container_ids.contains_key(c.dir.as_str()) && allowed(&c.dir))
+                {
+                    *counts.entry(c.dir.as_str()).or_default() += 1;
+                }
+            }
+        }
+        counts
+            .into_iter()
+            .max_by_key(|&(dir, n)| (n, std::cmp::Reverse(dir)))
+            .map(|(dir, _)| dir.to_string())
+    };
+    let siblings = input
+        .lifts
+        .keys()
+        .map(String::as_str)
+        .filter(|f| owner(f).is_some_and(|c| c.dir == test_container.dir));
+    if let Some(dir) = reached(&mut std::iter::once(rel)).or_else(|| reached(&mut { siblings })) {
+        return Some(dir);
+    }
+    test_container
+        .dep_dirs
+        .iter()
+        .find(|d| container_ids.contains_key(d.as_str()))
+        .cloned()
+}
+
+/// The component a unit test exercises: its own when it lives in one, else
+/// the module its file name mirrors, else the one its imports reach most.
+fn unit_component(
+    rel: &str,
+    container_dir: &str,
+    components: &BTreeMap<String, Component>,
+    file_component: &HashMap<&str, String>,
+    edges_from: &HashMap<&str, Vec<&str>>,
+) -> Option<String> {
+    if let Some(path) = file_component.get(rel) {
+        return Some(path.clone());
+    }
+    let in_container = |path: &&String| components[*path].container_dir == container_dir;
+    // A colocated test file sits in its component's directory.
+    let (own_path, _) = component_of(container_dir, rel);
+    if inner_path(container_dir, rel).1.contains('/') && components.contains_key(&own_path) {
+        return Some(own_path);
+    }
+    let stem = tested_stem(file_name(rel));
+    let mirrored: Option<&String> = file_component
+        .iter()
+        .filter(|(f, _)| file_stem(f) == stem)
+        .map(|(_, p)| p)
+        .filter(in_container)
+        .min();
+    if let Some(path) = mirrored {
+        return Some(path.clone());
+    }
+    let mut counts: BTreeMap<&String, usize> = BTreeMap::new();
+    for dst in edges_from.get(rel).into_iter().flatten() {
+        if let Some(path) = file_component.get(dst).filter(in_container) {
+            *counts.entry(path).or_default() += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .max_by_key(|&(path, n)| (n, std::cmp::Reverse(path)))
+        .map(|(p, _)| p.clone())
+}
+
+fn push_link(
+    model: &mut ScryModel,
+    seen: &mut HashSet<(String, String)>,
+    taken: &mut HashSet<String>,
+    src: &str,
+    dst: &str,
+    kind: Option<LinkKind>,
+) {
+    if !seen.insert((src.to_string(), dst.to_string())) {
+        return;
+    }
+    let id = stable_id("link", &format!("{src}->{dst}"), taken);
+    model.links.push(Link {
+        id,
+        src: src.to_string(),
+        dst: dst.to_string(),
+        label: String::new(),
+        method: None,
+        kind,
+    });
+}
+
+fn node(id: &str, kind: Kind, name: &str, parent: Option<&str>) -> Node {
+    Node {
+        id: id.to_string(),
+        kind,
+        name: name.to_string(),
+        parent_id: parent.map(str::to_string),
+        external: None,
+        technology: None,
+        description: None,
+        vagrant: None,
+        stale: None,
+        responsibilities: Vec::new(),
+        properties: Vec::new(),
+        icon: None,
+        notes: None,
+        position: None,
+        directives: Vec::new(),
+        style: None,
+        layer: None,
+    }
+}
