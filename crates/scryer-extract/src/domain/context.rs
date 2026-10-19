@@ -99,7 +99,7 @@ struct ContextIndex {
     file_edges_by_container: HashMap<String, Vec<usize>>,
 }
 
-/// A declared build/deploy unit — a 1:1 projection of [`manifest::Container`]
+/// A declared build/deploy unit — a 1:1 projection of [`crate::domain::facts::Container`]
 /// onto the wire, carrying only the literal declared facts.
 #[derive(Debug, Clone, Serialize)]
 pub struct ContainerFacts {
@@ -137,7 +137,7 @@ pub struct FileContext {
     pub symbols: Vec<SymbolContext>,
 }
 
-/// One addressable symbol: a [`lang::Def`] plus a synthetic, source-anchored key.
+/// One addressable symbol: a [`crate::domain::lang::Def`] plus a synthetic, source-anchored key.
 #[derive(Debug, Clone, Serialize)]
 pub struct SymbolContext {
     /// Stable in-payload identity: `rel_path#name@start_line`. NOT a `node-N`

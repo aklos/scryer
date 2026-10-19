@@ -57,9 +57,8 @@ pub fn normalize_slug(raw: &str) -> String {
 
 /// Normalize every responsibility's concern slug and make sure each used slug
 /// has a registry entry — the single choke point that keeps tags and registry
-/// coherent. Runs on both model write paths ([`crate::write_committed_file`] /
-/// [`crate::write_planned_file`]), so agent writes can never leave a dangling or
-/// misspelled-case slug. New entries seed description/icon from
+/// coherent. Runs when the tree is derived, so no claim can leave a dangling
+/// or misspelled-case slug. New entries seed description/icon from
 /// [`STANDARD_CONCERNS`] when the slug matches; existing entries are never
 /// touched and unused entries are never pruned. The registry is kept sorted by
 /// slug for stable serialization. Mirrored in the frontend mutation helpers
@@ -111,9 +110,7 @@ pub fn register_concerns(model: &mut ScryModel) {
 /// Instead, every plan write syncs the tag onto the committed copy of any
 /// claim that exists there (matched by id), and copies the registry wholesale
 /// — the plan is the authoring surface for curation (renames, descriptions,
-/// icons). Returns whether `committed` changed and needs writing. Runs inside
-/// [`crate::write_planned_raw_file`], the choke point both the canvas and the
-/// MCP write path go through.
+/// icons). Returns whether `committed` changed and needs writing.
 pub fn sync_concern_metadata(committed: &mut ScryModel, planned: &ScryModel) -> bool {
     let mut changed = false;
     let planned_by_id: std::collections::HashMap<&str, Option<&str>> = planned

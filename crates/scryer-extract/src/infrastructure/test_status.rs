@@ -228,7 +228,7 @@ fn provably_fresh(model: &ScryModel, rec: &ClaimRecord, project: &Path) -> Optio
 /// — content changed, an anchor now unresolvable, an attachment added or
 /// removed since — reads as stale. A record with no fingerprints at all is
 /// stale by construction. Claims whose anchor files are provably untouched
-/// since the record skip the re-hash entirely ([`provably_fresh`]), so this
+/// since the record skip the re-hash entirely (`provably_fresh`), so this
 /// is cheap enough to ride every response. Claims that have left the model
 /// are omitted, not reported as ghosts.
 pub fn read_test_statuses(r: &ModelRef) -> Result<Vec<ClaimTestStatus>, String> {
