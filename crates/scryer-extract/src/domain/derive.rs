@@ -502,7 +502,15 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         n.responsibilities.retain(|r| !planned_ids.contains(r.id.as_str()));
     }
     committed.test_map.retain(|id, _| !planned_ids.contains(id.as_str()));
-    DerivedTree { fingerprint: input.fingerprint, committed, planned: model, claims }
+    DerivedTree {
+        fingerprint: input.fingerprint,
+        committed,
+        planned: model,
+        claims,
+        file_nodes: Default::default(),
+        dark_files: Vec::new(),
+        style_violations: Vec::new(),
+    }
 }
 
 /// The product container a test project exercises: the one its name drops

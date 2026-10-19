@@ -3,9 +3,12 @@
 //! derivation back. Behind `SCRYER_DERIVED_TREE=1` so the authored model stays
 //! the default until the derived one replaces it.
 
+use crate::domain::derived_status::{compute_derived_status, DerivedStatus};
 use crate::domain::derived_tree::DerivedTree;
-use crate::infrastructure::derived_tree_cache;
+use crate::domain::verdicts::MutationCache;
+use crate::infrastructure::{derived_tree_cache, verdict_store};
 use crate::{ModelRef, ScryModel};
+use std::path::Path;
 
 /// The environment switch that shows the derived tree beside the authored one.
 pub const DERIVED_TREE_ENV: &str = "SCRYER_DERIVED_TREE";
@@ -38,6 +41,34 @@ pub fn read_derived_committed_at(r: &ModelRef) -> Result<ScryModel, String> {
 /// Store a derived tree for later reads.
 pub fn write_derived_tree_at(r: &ModelRef, tree: &DerivedTree) -> Result<(), String> {
     derived_tree_cache::write_derived_file(&r.derived_tree_path(), tree)
+}
+
+/// The derived tree with every claim's status and the health counts, from
+/// what is on disk: the last derived tree, the last ingested verdicts, probes
+/// and mutation report. Freshness is judged by file mtimes alone, so a file
+/// touched without changing reads stale here until
+/// `scryer_extract::test_status::derived_status` re-hashes it.
+pub fn derived_status(project: &Path) -> Result<(DerivedTree, DerivedStatus), String> {
+    let r = ModelRef::ProjectLocal(project.to_path_buf());
+    let tree = read_derived_tree_at(&r)
+        .ok_or_else(|| format!("no derived tree for '{}' yet", r.display_name()))?;
+    let verdicts = verdict_store::read_verdicts(&r.test_results_path());
+    let mutations = read_mutations_at(&r);
+    let mut fresh = |id: &str, fp: &std::collections::BTreeMap<String, String>, at: u64| {
+        verdict_store::anchors_untouched_since(&tree.planned, project, id, fp, at)
+    };
+    let status = compute_derived_status(&tree, &verdicts, &mutations, &mut fresh);
+    Ok((tree, status))
+}
+
+/// The last ingested mutation results.
+pub fn read_mutations_at(r: &ModelRef) -> MutationCache {
+    verdict_store::read_mutations(&r.mutations_path())
+}
+
+/// Replace the stored mutation results.
+pub fn write_mutations_at(r: &ModelRef, cache: &MutationCache) -> Result<(), String> {
+    verdict_store::write_mutations(&r.mutations_path(), cache)
 }
 
 #[cfg(test)]
@@ -77,10 +108,75 @@ mod tests {
             committed: ScryModel::new(),
             planned,
             claims: Vec::new(),
+            file_nodes: Default::default(),
+            dark_files: Vec::new(),
+            style_violations: Vec::new(),
         };
         write_derived_tree_at(&r, &tree).unwrap();
         assert_eq!(read_derived_tree_at(&r).unwrap().fingerprint, 7);
         assert_eq!(read_derived_planned_at(&r).unwrap().nodes.len(), 1);
         assert!(read_derived_committed_at(&r).unwrap().nodes.is_empty());
+    }
+
+    /// When a claim's test file is older than its green verdict and its
+    /// anchors match the record, the claim reads proven; once the file is
+    /// modified after the verdict it reads stale.
+    #[test]
+    fn status_from_disk_ages_with_file_mtimes() {
+        use crate::domain::derived_status::ClaimState;
+        use crate::domain::derived_tree::{ClaimLevel, DerivedClaim};
+        use crate::domain::verdicts::{ClaimRecord, TestStatusCache};
+        use crate::SourceLocation;
+
+        let dir = tempfile::tempdir().unwrap();
+        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        std::fs::write(dir.path().join("t.rs"), "#[test] fn ok() {}").unwrap();
+        let mut planned = ScryModel::new();
+        planned.test_map.insert(
+            "resp-1".into(),
+            vec![SourceLocation { pattern: "t.rs".into(), symbol: Some("ok".into()), line: Some(1), end_line: Some(1) }],
+        );
+        let tree = DerivedTree {
+            fingerprint: 1,
+            committed: planned.clone(),
+            planned,
+            claims: vec![DerivedClaim {
+                id: "resp-1".into(),
+                node_id: "n".into(),
+                level: ClaimLevel::Component,
+                file: "t.rs".into(),
+                line: 1,
+                identifier: "ok".into(),
+                description: "ok".into(),
+                concerns: Vec::new(),
+                junit_name: "ok".into(),
+                planned: false,
+            }],
+            file_nodes: Default::default(),
+            dark_files: Vec::new(),
+            style_violations: Vec::new(),
+        };
+        write_derived_tree_at(&r, &tree).unwrap();
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let cache = TestStatusCache {
+            results: vec![ClaimRecord {
+                resp_id: "resp-1".into(),
+                outcome: crate::test_results::TestOutcome::Passed,
+                cases: 1,
+                recorded_at: now + 2,
+                fingerprints: [("test:resp-1|t.rs|ok".to_string(), "h".to_string())].into(),
+                millis: Default::default(),
+            }],
+            ..Default::default()
+        };
+        std::fs::write(r.test_results_path(), serde_json::to_string(&cache).unwrap()).unwrap();
+        let (_, status) = derived_status(dir.path()).unwrap();
+        assert_eq!(status.claims[0].state, ClaimState::Proven);
+
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(10);
+        let file = std::fs::File::options().write(true).open(dir.path().join("t.rs")).unwrap();
+        file.set_modified(later).unwrap();
+        let (_, status) = derived_status(dir.path()).unwrap();
+        assert_eq!(status.claims[0].state, ClaimState::Stale);
     }
 }
