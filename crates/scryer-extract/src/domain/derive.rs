@@ -27,6 +27,9 @@ pub struct DeriveInput<'a> {
     /// Every file in the project, for manifest conventions.
     pub all_files: &'a BTreeSet<String>,
     pub structure: &'a Structure,
+    /// The style table: the built-ins plus the project's own styles, which
+    /// name the layers a styled container's components can take.
+    pub styles: &'a Styles,
     pub fingerprint: u64,
 }
 
@@ -140,7 +143,7 @@ struct Component {
 
 pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
     let s = input.structure;
-    let styles = Styles::builtin();
+    let styles = input.styles;
     let mut taken = HashSet::new();
     let mut model = ScryModel::new();
 

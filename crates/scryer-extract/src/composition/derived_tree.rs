@@ -209,6 +209,39 @@ mod tests {
         assert_eq!(exempt, BTreeSet::from(["build".to_string(), "examples".to_string()]));
     }
 
+    /// When a container declares a project style from `.scryer/styles/`, its
+    /// components take that style's layers by name, and a later change to
+    /// the style file derives the tree again.
+    #[test]
+    fn a_project_style_gives_components_its_layers() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "Cargo.toml", "[package]\nname = \"tool\"\nversion = \"0.1.0\"\n");
+        write(d, "src/lib.rs", "pub mod front;\npub mod back;\n");
+        write(d, "src/front/mod.rs", "pub fn a() { crate::back::b() }\n");
+        write(d, "src/back/mod.rs", "pub fn b() {}\n");
+        write(d, ".scryer/structure.toml", "[containers.\"\"]\nstyle = \"two-tier\"\n");
+        let mut style = scryer_core::style::core_shell();
+        style.name = "two-tier".into();
+        style.layers[0].name = "front".into();
+        style.layers[1].name = "back".into();
+        style.matrix = [("front".to_string(), vec!["front".to_string(), "back".to_string()]), ("back".to_string(), vec!["back".to_string()])]
+            .into_iter()
+            .collect();
+        write(d, ".scryer/styles/two-tier.json", &serde_json::to_string(&style).unwrap());
+        let tree = derived_tree(d).unwrap();
+        let layer = |name: &str| tree.planned.nodes.iter().find(|n| n.name == name).unwrap().layer.clone();
+        assert_eq!(layer("front").as_deref(), Some("front"));
+        assert_eq!(layer("back").as_deref(), Some("back"));
+        assert!(tree.style_violations.iter().all(|v| v.kind != "layerless"), "{:?}", tree.style_violations);
+
+        // A different length, so the file's size changes whatever the clock.
+        style.layers[1].name = "backend".into();
+        write(d, ".scryer/styles/two-tier.json", &serde_json::to_string(&style).unwrap());
+        let again = derived_tree(d).unwrap();
+        assert_eq!(again.planned.nodes.iter().find(|n| n.name == "back").unwrap().layer, None);
+    }
+
     /// When no file changed, the cached tree is returned; touching a file
     /// derives again.
     #[test]

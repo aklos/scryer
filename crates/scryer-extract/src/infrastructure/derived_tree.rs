@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 /// Bumped whenever derivation changes, so a cache from an older binary is
 /// never mistaken for current.
-const DERIVE_VERSION: u32 = 4;
+const DERIVE_VERSION: u32 = 5;
 
 thread_local! {
     static PARSER: RefCell<tree_sitter::Parser> = RefCell::new(tree_sitter::Parser::new());
@@ -38,11 +38,16 @@ pub fn read_structure(project: &Path) -> Result<Structure, String> {
     }
 }
 
-/// Hash of every walked file's path, mtime and size, plus `structure.toml`.
+/// Hash of every walked file's path, mtime and size, plus `structure.toml`
+/// and the project's style files (`.scryer/` is not walked).
 fn fingerprint(project: &Path, files: &[PathBuf]) -> u64 {
+    let style_files: Vec<PathBuf> = std::fs::read_dir(project.join(".scryer").join("styles"))
+        .map(|entries| entries.flatten().map(|e| e.path()).collect())
+        .unwrap_or_default();
     let mut stamps: Vec<(String, u128, u64)> = files
         .iter()
         .chain(std::iter::once(&structure_path(project)))
+        .chain(&style_files)
         .filter_map(|path| {
             let meta = std::fs::metadata(path).ok()?;
             let mtime = meta
@@ -111,6 +116,7 @@ fn derive_uncached(project: &Path, files: &[PathBuf], print: u64) -> Result<Deri
             Some((rel.clone(), lift))
         })
         .collect();
+    let styles = scryer_core::load_styles(project);
     let mut tree = derive_tree(&DeriveInput {
         project_name: &ctx.project_name,
         containers: &ctx.containers,
@@ -119,6 +125,7 @@ fn derive_uncached(project: &Path, files: &[PathBuf], print: u64) -> Result<Deri
         lifts: &lifts,
         all_files: &all_files,
         structure: &structure,
+        styles: &styles,
         fingerprint: print,
     });
     // The styles structure.toml declares, checked against the real imports.
@@ -126,7 +133,7 @@ fn derive_uncached(project: &Path, files: &[PathBuf], print: u64) -> Result<Deri
     let graph = scryer_core::build_edges::derive_graph(&tree.planned, &edges);
     let report = scryer_core::style_health::check_code(
         &tree.planned,
-        &scryer_core::load_styles(project),
+        &styles,
         &graph,
         &edges,
         Some(&all_files),
