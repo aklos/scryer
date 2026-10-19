@@ -59,7 +59,7 @@ describe("discoverVueComponents", () => {
     expect(discoverVueComponents(root)).toEqual([]);
   });
 
-  it("reports files relative to the project root when the package is nested", () => {
+  it("When the package is nested, reports files relative to the project root", () => {
     write("apps/web/package.json", JSON.stringify({ dependencies: { vue: "^3" } }));
     write("apps/web/src/Page.vue");
     expect(discoverVueComponents(root, path.join(root, "apps/web")).map((c) => c.file)).toEqual([

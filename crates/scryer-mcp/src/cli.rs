@@ -408,8 +408,7 @@ mod tests {
         assert_eq!(statusline_start_dir("not json"), None);
     }
 
-    /// The line counts claims by status, and names surviving mutants only
-    /// when there are some.
+    /// When the status line is printed, counts claims by status, and names surviving mutants only if there are some.
     #[test]
     fn the_status_line_counts_claims_by_status() {
         let mut t = DerivedCounts { proven: 3, stale: 2, failing: 1, planned: 4, ..Default::default() };

@@ -236,9 +236,7 @@ mod tests {
         assert!(!log.overlay_is_repeat("b.rs", 2), "per file");
     }
 
-    /// A stub is the session's when it appeared since the last record, in a
-    /// file the session touched; with no record yet, every stub in a touched
-    /// file counts as new.
+    /// When a stub appeared since the last record in a file the session touched, counts it as the session's, and with no record yet, every stub in a touched file.
     #[test]
     fn new_stubs_are_the_ones_since_the_last_record_in_touched_files() {
         let planned = |tests: &[(&str, &str)]| -> Vec<(String, String)> {

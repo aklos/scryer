@@ -589,8 +589,7 @@ mod tests {
         );
     }
 
-    /// When a .NET claim is reworded, a DisplayName changes if present, else
-    /// the XML summary, else a summary is added above the attributes.
+    /// When a .NET claim is reworded, writes it to the DisplayName, the XML summary or a new summary above the attributes, the first that applies.
     #[test]
     fn rewords_dotnet_display_names_and_summaries() {
         let src = "public class T\n{\n    [Fact(DisplayName = \"Old\")]\n    public void A() { }\n\n    /// <summary>Old</summary>\n    /// <remarks>keep</remarks>\n    [Fact]\n    public void B() { }\n\n    [Fact]\n    public void C() { }\n}\n";

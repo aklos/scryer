@@ -382,8 +382,7 @@ mod tests {
         assert!(record_shell_edits(&r, "other", None).unwrap().is_empty(), "no start, no touches");
     }
 
-    /// Sessions sharing a checkout: a file another session logged editing
-    /// while this one's command ran is left to that session.
+    /// When another session logged editing a file while this one's command ran, leaves the file to that session.
     #[test]
     fn a_file_another_session_edited_meanwhile_is_not_this_sessions() {
         let (dir, r) = project();
@@ -398,8 +397,7 @@ mod tests {
         assert!(!session_log(&r, "a").touched.contains(&"src/theirs.rs".to_string()));
     }
 
-    /// A session is live while a process bound to it runs or it touched a
-    /// file in the last hour; the caller is never its own peer.
+    /// While a process bound to a session runs or it touched a file in the last hour, counts the session as live, never the caller itself.
     #[test]
     fn live_sessions_are_running_or_recently_touching() {
         let (_dir, r) = project();

@@ -170,8 +170,7 @@ mod tests {
         }
     }
 
-    /// Every other tool is auto-approved — allow-always preferred, allow-once
-    /// when that's all the agent offers.
+    /// When any other tool asks permission, approves it with allow-always, or allow-once where that is all the agent offers.
     #[tokio::test]
     async fn any_other_tool_is_auto_approved() {
         let (client, _rx) = client();

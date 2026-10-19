@@ -291,9 +291,7 @@ mod tests {
         assert!(slug_for(Path::new("/a/my proj")).starts_with("my-proj-"));
     }
 
-    /// resp-763: a non-repo is refused outright. The fallback a probe would
-    /// otherwise need — mutating the developer's own files — is the thing the
-    /// worktree exists to prevent.
+    /// If the project is not a git repository, then refuses the probe rather than mutate the developer's own files.
     #[test]
     fn a_project_without_git_is_refused_not_downgraded() {
         isolate_probes_root();

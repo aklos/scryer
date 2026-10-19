@@ -1026,9 +1026,7 @@ mod tests {
         assert_eq!(r.violations[0].node, "app");
     }
 
-    /// Two symbols of ONE component referencing each other is not a layer
-    /// relationship — under a style that isolates a layer it would otherwise
-    /// report every internal reference as a violation.
+    /// When two symbols of one component reference each other, reports no layer relationship between them.
     #[test]
     fn a_components_own_internals_are_not_checked_against_the_matrix() {
         let mut m = hex_service();

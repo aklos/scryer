@@ -1214,6 +1214,7 @@ mod tests {
         assert_eq!(compute_health(&m, None, None).disconnected, vec!["worker".to_string()]);
     }
 
+    /// When there is nothing to connect to, reports no disconnected nodes.
     #[test]
     fn disconnected_is_empty_when_nothing_to_connect_to() {
         let mut m = ScryModel::new();

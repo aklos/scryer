@@ -113,9 +113,7 @@ fn workspace_root() -> PathBuf {
 mod tests {
     use super::*;
 
-    /// The resolved triple must agree with rustc's own authoritative `host:`
-    /// line — the fallback source the function parses when `--print
-    /// host-tuple` is unavailable.
+    /// When `--print host-tuple` is unavailable, resolves the same triple as rustc's own `host:` line.
     #[test]
     fn target_triple_matches_the_rustc_host() {
         let out = Command::new("rustc").arg("-vV").output().expect("rustc runs");

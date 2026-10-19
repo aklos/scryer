@@ -2145,10 +2145,7 @@ mod tests {
         parse.defs.iter().map(|d| d.name.as_str()).collect()
     }
 
-    /// A `.vue` SFC is one definition named after its file, spanning the whole
-    /// file — its template and style blocks never mint symbols — while the
-    /// script block's imports and identifiers are read in place, so the lines
-    /// they report are lines of the `.vue` file.
+    /// When a `.vue` single-file component is parsed, makes it one definition named after its file, reading its script block's imports and identifiers at their lines in the `.vue` file.
     #[test]
     fn vue_sfc_is_one_component_named_after_its_file() {
         let src = "<template>\n  <div>{{ title }}<Avatar :user=\"user\" /></div>\n</template>\n\n<script setup lang=\"ts\">\nimport Avatar from \"./Avatar.vue\";\nimport { formatName } from \"../lib/names\";\ndefineProps<{ title: string }>();\n</script>\n\n<style scoped>\n.x { color: red; }\n</style>\n";

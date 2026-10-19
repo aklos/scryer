@@ -551,6 +551,7 @@ mod tests {
         read_test_statuses(r).unwrap()
     }
 
+    /// While nothing changed, a recorded outcome reads fresh.
     #[test]
     fn a_recorded_outcome_reads_fresh_while_nothing_changed() {
         let (_dir, r) = project();

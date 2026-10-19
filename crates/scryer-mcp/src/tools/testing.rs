@@ -443,9 +443,7 @@ mod tests {
         )
     }
 
-    /// A change reaches the unit tests beside the code that imports it and
-    /// the integration tests that import it through the crate's name; e2e
-    /// only when structure.toml says `radius = "all"`; a todo test never.
+    /// When code changes, reaches the unit tests beside it and the integration tests that import it through the crate's name, e2e only under `radius = "all"`, and never a todo test.
     #[test]
     fn the_radius_holds_tests_by_import_and_level() {
         let dir = project();

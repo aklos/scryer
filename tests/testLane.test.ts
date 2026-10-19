@@ -36,7 +36,7 @@ describe("testLaneTone", () => {
     expect(testLaneTone(verdict({ outcome: "skipped" }))).toBe("quiet");
   });
 
-  it("is failing only while the red verdict is current", () => {
+  it("While the red verdict is current, reads failing, and only then", () => {
     expect(testLaneTone(verdict({ outcome: "failed" }))).toBe("failing");
     expect(testLaneTone(verdict({ outcome: "errored" }))).toBe("failing");
   });
@@ -93,7 +93,7 @@ describe("subtreeTestTone", () => {
     expect(subtreeTestTone(model, "root", { "r-mid": verdict({ stale: true }) })).toBe("stale");
   });
 
-  it("reports passing on a green subtree, quiet only when nothing was recorded", () => {
+  it("When a subtree is green, reports passing, and quiet only if nothing was recorded", () => {
     expect(subtreeTestTone(model, "root", { "r-leaf": verdict({}) })).toBe("passing");
     expect(subtreeTestTone(model, "root", {})).toBe("quiet");
     // Verdicts outside the scope neither green it nor alarm it.
@@ -112,7 +112,7 @@ describe("testLaneTitle", () => {
     );
   });
 
-  it("says stale in words when the code moved past the verdict", () => {
+  it("When the code moved past the verdict, says stale in words", () => {
     expect(testLaneTitle(2, verdict({ outcome: "failed", stale: true }))).toContain("STALE");
   });
 });
@@ -165,7 +165,7 @@ describe("probeTitle", () => {
     expect(probeTitle(probe({}))).toContain("A sample, not a proof");
   });
 
-  it("says nothing when there is nothing measured", () => {
+  it("When nothing is measured, says nothing", () => {
     expect(probeTitle(undefined)).toBe("");
   });
 });
@@ -191,7 +191,7 @@ describe("testLaneGlyph", () => {
     expect(testLaneGlyph(verdict({}), probe({ survived: 1, survivors: ["x"] }))).toBe("hollow");
   });
 
-  it("keeps the verdict's own glyph when it is stale or failing, whatever the probe said", () => {
+  it("When the verdict is stale or failing, keeps its own glyph whatever the probe said", () => {
     expect(testLaneGlyph(verdict({ stale: true }), probe({}))).toBe("stale");
     expect(testLaneGlyph(verdict({ outcome: "failed" }), probe({ survived: 1 }))).toBe("failing");
     expect(testLaneGlyph(undefined, probe({}))).toBe("none");

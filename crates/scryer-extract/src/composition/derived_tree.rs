@@ -164,9 +164,7 @@ mod tests {
         assert_eq!((parent.kind, parent.name.as_str()), (Kind::Container, "web"));
     }
 
-    /// What sits outside a styled crate's source root (a build script, an
-    /// example) is asked for no layer, while a module inside it that matches
-    /// no declared layer stays a violation.
+    /// When a styled crate has files outside its source root, asks them for no layer, and still flags a source module that matches no declared layer.
     #[test]
     fn only_source_modules_are_asked_for_a_layer() {
         let dir = tempfile::tempdir().unwrap();
@@ -297,10 +295,7 @@ mod tests {
         }
     }
 
-    /// A crate's lib.rs and main.rs are its root, not a component: their doc
-    /// describes the crate, their definitions and unit tests sit on it, and
-    /// a declared style asks no layer of them — while their imports stay in
-    /// the import graph.
+    /// When a crate has a lib.rs or main.rs, makes it the crate's root rather than a component, with its claims on the crate and its imports kept in the graph.
     #[test]
     fn a_crates_root_file_belongs_to_the_crate() {
         let dir = tempfile::tempdir().unwrap();

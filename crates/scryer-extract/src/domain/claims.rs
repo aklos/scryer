@@ -688,8 +688,7 @@ mod tests {
         assert_eq!(l.test_spans.len(), 1, "the cfg(test) module is test code");
     }
 
-    /// If a Rust test is `#[ignore]`d or its body is only `todo!()` or
-    /// `unimplemented!()`, it is planned.
+    /// If a Rust test is `#[ignore]`d or its body is only `todo!()` or `unimplemented!()`, then it is planned.
     #[test]
     fn rust_stubs_are_planned() {
         let src = r#"
@@ -804,9 +803,7 @@ def helper():
         assert_eq!(l.tests[1].junit_name, "test_scales_linearly");
     }
 
-    /// When a .NET test has a DisplayName it is the claim, else its XML doc
-    /// summary, else its de-snaked name; Skip and NotImplementedException
-    /// bodies are planned.
+    /// When a .NET test is lifted, takes its DisplayName, its XML summary or its de-snaked name as the claim, the first present, and reads a Skip or NotImplementedException body as planned.
     #[test]
     fn dotnet_display_name_or_xml_doc_is_the_claim() {
         let src = r#"

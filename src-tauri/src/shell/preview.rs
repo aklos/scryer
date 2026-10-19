@@ -315,8 +315,7 @@ mod tests {
         );
     }
 
-    /// A node's source file comes from its own source-map entry first, then
-    /// its first anchored responsibility; empty when nothing anchors.
+    /// When a node's source file is resolved, takes its own source-map entry, then its first anchored claim, and is empty if nothing anchors.
     #[test]
     fn node_source_resolves_own_anchor_then_first_responsibility() {
         let mut m = scryer_core::ScryModel::new();

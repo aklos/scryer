@@ -541,8 +541,7 @@ mod tests {
         assert_eq!(root["mcpServers"]["scryer"]["command"], "docker");
     }
 
-    /// The gitignore is scryer's when it carries the marker or is the model
-    /// store's old default; any other file is the user's.
+    /// When the gitignore carries the marker or is the model store's old default, treats it as scryer's, and any other file as the user's.
     #[test]
     fn the_gitignore_is_scryers_by_its_marker() {
         assert_eq!(gitignore_state(None), EntryState::Missing);
