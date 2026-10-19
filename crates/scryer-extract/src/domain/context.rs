@@ -1,29 +1,16 @@
 //! Per-scope codebase CONTEXT: manifest facts + a per-file symbol index + a
-//! dependency graph, all parser-only. This is the MAP a modeling agent reads
-//! FROM to build a C4 model fast and correctly — it is never a model itself,
-//! and it is never persisted to disk. [`build_context`] assembles the full
-//! project context; [`slice_scope`] returns exactly the slice one subagent
-//! needs to model a directory subtree (its files, their symbols, the symbol
-//! edges internal to the scope, and the file edges crossing its boundary).
+//! dependency graph, all parser-only. [`build_context`] assembles the full
+//! project context, resolving imports through Go module paths, tsconfig
+//! aliases, Python package roots and manifest-declared names; [`slice_scope`]
+//! and [`slice_container`] return exactly the slice of one directory subtree
+//! or container (its files, their symbols, the symbol edges internal to it,
+//! and the file edges crossing its boundary); [`compact_scope`] turns a slice
+//! into a token-budgeted payload. The context is never persisted to disk.
 //!
-//! Where a `ScryModel` mints `node-N` ids and freezes a component/symbol tree,
-//! this layer deliberately does neither: symbols are addressed by a synthetic
-//! `rel_path#name@line` key that anchors them to source without implying any C4
-//! structure. Choosing components (clustering from cohesion + the dependency
-//! graph) and writing responsibilities is the agent's job — we precompute the
-//! map, not the model.
-//!
-//! Maps a Go import path to a repo directory via the longest-matching declared go.mod module path.
-//!
-//! Slices the context to exactly the files owned by one container, for per-container modeling.
-//!
-//! Resolves a bare TS/JS import spec through the governing tsconfig's `paths`/`baseUrl` table.
-//!
-//! Resolves a Python import spec (relative or absolute) to its module file and base path across container/src-layout roots.
-//!
-//! Converts a scope into the token-budgeted agent wire format, stepping down the per-symbol evidence cap until the scope's total evidence fits.
-//!
-//! Assembles the full ProjectContext — per-file symbol index plus the resolved dependency graph — from discovered containers and parsed files.
+//! This layer chooses no components: symbols are addressed by a synthetic
+//! `rel_path#name@line` key that anchors them to source without implying any
+//! C4 structure. It is the map the derived tree and the import graph are
+//! built from, not the tree itself.
 
 use crate::domain::lang::{CsScope, Def, FileParse, ImportRef};
 use crate::domain::facts::TsAliases;

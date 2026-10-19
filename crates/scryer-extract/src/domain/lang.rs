@@ -4,37 +4,12 @@
 //! declares (functions, types, methods, module-level bindings) with their exact
 //! line ranges and — for data shapes (structs, enums, interfaces, type-object
 //! literals, classes with fields) — their declared field names. It also returns
-//! every identifier occurrence, which the model builder resolves into a
-//! reference graph. Everything here is grammar-derived: no name tables, no
-//! regex heuristics on contents.
-//!
-//! Collects C/C++ function, struct/union/class, and enum definitions from their grammar-specific declarator shapes.
-//!
-//! Extends parsing to Vue single-file components (script-in-place) and to string-named test blocks (`it("...")`) for test-anchor resolution.
-//!
-//! Collects Rust top-level definitions (functions, structs, enums, traits, impl/mod-nested items) with struct/enum field shapes.
-//!
-//! Collects Go functions, methods, structs, and interfaces, including grouped type declarations.
-//!
-//! Treats a `.vue` file as one component definition spanning the whole file, parsing its script block in place so line numbers stay file-accurate.
-//!
-//! Classifies each supported extension's import-following strength as `full` (real declared imports) or `nameHeuristic` (bare-identifier coincidence only).
-//!
-//! Collects Python function and class definitions, descending into class bodies for methods.
-//!
-//! Captures TS/JS import forms — ESM imports/re-exports, `require`, and dynamic `import()` — with their bound local names.
-//!
-//! Reports which languages get real declared-import resolution versus name-heuristic fallback.
-//!
-//! Collects TS/JS module-level definitions (functions, classes, interfaces, type aliases, enums) with their declared member shapes.
-//!
-//! Captures Go import declarations and their qualifier bindings (alias, dot, or blank import).
-//!
-//! Captures Python `import`/`from...import` statements anywhere in a file, including function-local imports.
-//!
-//! Parses source files with per-language tree-sitter grammars into addressable definitions (functions, types, data shapes) and identifier/import/path reference occurrences.
-//!
-//! Dispatches a source file to its language family's definition/identifier/import collectors, or to the Vue SFC path.
+//! every identifier occurrence, import and qualified path, which the context
+//! resolves into a reference graph, and string-named test blocks (`it("…")`)
+//! so a test can be found by its name. A `.vue` file is one component spanning
+//! the whole file, its script block parsed in place so line numbers stay
+//! file-accurate. Everything here is grammar-derived: no name tables, no regex
+//! heuristics on contents.
 
 use std::path::Path;
 use tree_sitter::{Language, Node, Parser};

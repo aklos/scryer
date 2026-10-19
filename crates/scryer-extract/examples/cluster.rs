@@ -3,17 +3,13 @@
 //! Per container, clusters owned files three ways and prints the results
 //! side by side so a human can judge them against "what components would I
 //! actually draw":
-//!   A. directory  — files grouped by immediate parent dir (the naive prior)
-//!   B. louvain    — community detection on the symbol-edge call graph alone
-//!   C. hybrid     — louvain on call graph + weak same-dir affinity edges
+//!   A. directory  — files grouped by parent dir below the container's source
+//!                   root (the naive prior)
+//!   B. louvain    — greedy modularity community detection on the file
+//!                   import graph alone
+//!   C. hybrid     — louvain on the import graph + weak same-dir affinity edges
 //!
 //! Run: cargo run -p scryer-extract --example cluster -- /path/to/repo
-//!
-//! Ad-hoc CLI tools that exercise the extractor against a real repository to inspect clustering quality, dependency-edge density, and compact-payload compression, outside the modeling pipeline.
-//!
-//! Runs greedy modularity-based community detection over a weighted file/symbol graph, used to evaluate an alternative clustering strategy against directory-based grouping.
-//!
-//! Groups files by their first path segment below a container's source root, the baseline clustering the Louvain experiment is compared against.
 
 use scryer_extract::{extract_context, slice_container};
 use std::collections::HashMap;

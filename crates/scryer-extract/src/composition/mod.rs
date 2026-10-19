@@ -1,6 +1,5 @@
-//! Walks a project's file tree and turns it into a deterministic ProjectContext, reusing unchanged files' cached parses across calls.
-//!
-//! Enumerates every project file, including non-source ones, for boundary/territory checks used elsewhere in the system.
+//! The entry points other containers call: extraction, the derived C4 tree,
+//! writing claims back into the code, and test evidence.
 
 pub mod claim_files;
 pub mod derived_tree;

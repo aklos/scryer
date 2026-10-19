@@ -1,9 +1,8 @@
-//! The extraction entry points another container calls: walk the project,
-//! read what its manifests declare, parse its sources, and hand back the map.
-//!
-//! Walks the project (skipping vendor/build dirs), parses each source file or reuses its cached parse when unchanged, and assembles the full ProjectContext with parse-cache instrumentation.
-//!
-//! Lists every file under the project, skipping only vendor/build directories, so territory claims (e.g. a style's boundary glob) can be checked against real files.
+//! The extraction entry points another container calls: walk the project
+//! (skipping vendor and build directories), read what its manifests declare,
+//! parse its sources — reusing the cached parse of any unchanged file — and
+//! hand back the map. A parse-free listing of every project file serves
+//! checks that resolve boundary globs against real files.
 
 use crate::domain::context::{self, ProjectContext};
 use crate::infrastructure::{manifest, tsconfig, walk};
