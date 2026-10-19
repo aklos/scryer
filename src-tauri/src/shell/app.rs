@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use tauri::Manager;
 
 use crate::shell::state::{AcpState, PreviewState, WatcherState};
-use crate::shell::{build, mcp_setup, observability, preview, project, source_view, verdicts};
+use crate::shell::{build, derived, mcp_setup, observability, preview, project, source_view, verdicts};
 
 /// macOS GUI apps launched via Spotlight, Dock, or Finder inherit a minimal
 /// PATH (`/usr/bin:/bin:/usr/sbin:/sbin`) that excludes user-installed tools.
@@ -94,6 +94,12 @@ pub fn run() {
             verdicts::drop_node,
             verdicts::reimplement_node,
             preview::cancel_agent_session,
+            derived::set_derived_tree,
+            derived::get_derived_status,
+            derived::get_landing,
+            derived::edit_claim_text,
+            derived::add_claim_stub,
+            derived::rename_container,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

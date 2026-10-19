@@ -1,5 +1,6 @@
 pub mod app;
 pub mod build;
+pub mod derived;
 pub mod mcp_setup;
 pub mod observability;
 pub mod preview;

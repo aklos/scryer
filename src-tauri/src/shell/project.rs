@@ -111,6 +111,12 @@ pub(crate) fn watch_project(
 #[tauri::command]
 pub(crate) async fn read_model(ref_str: String) -> Result<String, String> {
     let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
+    if crate::shell::derived::enabled() {
+        let project = model_ref.project_path().to_path_buf();
+        return tauri::async_runtime::spawn_blocking(move || crate::shell::derived::layer_json(&project, false))
+            .await
+            .map_err(|e| e.to_string())?;
+    }
     scryer_core::read_model_raw_at(&model_ref)
 }
 
@@ -120,6 +126,12 @@ pub(crate) async fn read_model(ref_str: String) -> Result<String, String> {
 #[tauri::command]
 pub(crate) async fn read_planned(ref_str: String) -> Result<String, String> {
     let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
+    if crate::shell::derived::enabled() {
+        let project = model_ref.project_path().to_path_buf();
+        return tauri::async_runtime::spawn_blocking(move || crate::shell::derived::layer_json(&project, true))
+            .await
+            .map_err(|e| e.to_string())?;
+    }
     // Heal legacy shadow drafts before the canvas loads one: whatever the
     // frontend loads it echoes back on save, so a pre-seeding draft would keep
     // re-minting its shadow anchors forever. No-op (and lock-free) when clean.
@@ -133,6 +145,9 @@ pub(crate) async fn read_planned(ref_str: String) -> Result<String, String> {
 /// the committed-model write.
 #[tauri::command]
 pub(crate) fn write_planned(ref_str: String, data: String) -> Result<(), String> {
+    if crate::shell::derived::enabled() {
+        return Err("the derived tree is read from the code; edit the code".into());
+    }
     let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
     let _lock = scryer_core::lock_model(&model_ref)?;
     scryer_core::write_hand_edited_plan_at(&model_ref, &data)

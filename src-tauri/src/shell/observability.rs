@@ -13,6 +13,10 @@ pub(crate) async fn get_drift_status(cwd: String) -> Result<Vec<scryer_core::dri
 }
 
 fn drift_status(cwd: &str) -> Result<Vec<scryer_core::drift::DriftScope>, String> {
+    // The derived tree is read from the code, so it cannot drift from it.
+    if crate::shell::derived::enabled() {
+        return Ok(Vec::new());
+    }
     let project = std::path::Path::new(cwd);
     let model_ref = scryer_core::ModelRef::ProjectLocal(project.to_path_buf());
 
@@ -62,6 +66,9 @@ pub(crate) struct ModelHealthReport {
     /// The project's style table (built-ins plus `.scryer/styles/*.json`), so
     /// the diagram draws custom styles with their own layers.
     styles: Vec<scryer_core::style::StyleDef>,
+    /// The derived tree's claim states and health counts, when it is on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    derived_status: Option<scryer_core::derived_tree::DerivedStatus>,
 }
 
 #[tauri::command]
@@ -71,6 +78,9 @@ pub(crate) async fn get_model_health(cwd: String) -> Result<ModelHealthReport, S
     tauri::async_runtime::spawn_blocking(move || {
         let project = std::path::Path::new(&cwd);
         let model_ref = scryer_core::ModelRef::ProjectLocal(project.to_path_buf());
+        if crate::shell::derived::enabled() {
+            return derived_health(project, &model_ref);
+        }
 
         // Check (and self-heal) anchors first: re-anchoring may update sourceMap
         // line ranges, and the health/evidence below should see the healed model.
@@ -122,10 +132,51 @@ pub(crate) async fn get_model_health(cwd: String) -> Result<ModelHealthReport, S
             derived,
             structural,
             styles,
+            derived_status: None,
         })
     })
     .await
     .map_err(|e| format!("health task failed: {e}"))?
+}
+
+/// The health report over the derived tree: no anchors to check (claims are
+/// tests, located by construction), dark files are the ones no test reaches
+/// by import, and the derived status rides along.
+fn derived_health(
+    project: &std::path::Path,
+    model_ref: &scryer_core::ModelRef,
+) -> Result<ModelHealthReport, String> {
+    let (tree, status) = scryer_extract::test_status::derived_status(model_ref)?;
+    let (ctx, _) = scryer_extract::extract_context_with_stats(project)?;
+    let edges = ctx.build_edges();
+    let all_files = scryer_extract::list_project_files(project);
+    let derived = scryer_core::build_edges::derive_graph(&tree.committed, &edges);
+    let styles = scryer_core::load_styles(project);
+    let structural = scryer_core::style_health::check_code(&tree.committed, &styles, &derived, &edges, Some(&all_files));
+    let mut health = scryer_core::health::compute_health(&tree.committed, Some(&tree.planned), Some(&all_files));
+    // Darkness is test reach, not anchor reach.
+    for (id, node) in health.nodes.iter_mut() {
+        if let Some(b) = node.boundary.as_mut() {
+            b.dark_files = status.nodes.get(id).map(|n| n.dark_files.clone()).unwrap_or_default();
+            b.anchored_files = b.total_files.saturating_sub(b.dark_files.len() as u32);
+        }
+    }
+    let completeness = scryer_core::health::resolve_completeness(
+        &tree.committed,
+        &tree.planned,
+        &all_files,
+        &std::collections::HashSet::new(),
+    );
+    Ok(ModelHealthReport {
+        health,
+        completeness,
+        anchors: Vec::new(),
+        reanchored: 0,
+        derived,
+        structural,
+        styles: styles.iter().cloned().collect(),
+        derived_status: Some(status),
+    })
 }
 
 /// Per-claim test verdicts from the status cache, each re-verified against the
@@ -141,6 +192,9 @@ pub(crate) async fn get_test_statuses(
     // thread like the health report.
     tauri::async_runtime::spawn_blocking(move || {
         let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
+        if crate::shell::derived::enabled() {
+            return scryer_extract::test_status::derived_status(&model_ref).map(|(_, s)| s.tests);
+        }
         scryer_extract::test_status::test_statuses(&model_ref)
     })
     .await
@@ -158,6 +212,9 @@ pub(crate) async fn get_probe_statuses(
 ) -> Result<Vec<scryer_extract::test_status::ClaimProbeStatus>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
+        if crate::shell::derived::enabled() {
+            return scryer_extract::test_status::derived_status(&model_ref).map(|(_, s)| s.probes);
+        }
         scryer_extract::test_status::probe_statuses(&model_ref)
     })
     .await
