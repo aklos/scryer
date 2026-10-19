@@ -15,6 +15,9 @@
 //! Syncing copies the working tree — uncommitted and untracked edits included —
 //! not the last commit: mid-session the interesting code is uncommitted almost
 //! by definition.
+//!
+//! It also lists the project's live git worktrees, the checkouts several
+//! agents may be working in at once.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -90,6 +93,38 @@ pub fn is_git_repo(project: &Path) -> bool {
 /// The worktree path for a project, whether or not it exists yet.
 pub fn worktree_path(project: &Path) -> PathBuf {
     probes_root().join(slug_for(project))
+}
+
+/// One of the project's git worktrees.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitWorktree {
+    pub path: PathBuf,
+    /// `None` for a detached HEAD.
+    pub branch: Option<String>,
+}
+
+/// The project's live git worktrees, its main checkout first: every one
+/// whose directory still exists, leaving out scryer's own probe trees.
+/// Empty when the project is not a git repository.
+pub fn list_worktrees(project: &Path) -> Vec<GitWorktree> {
+    let Ok(out) = git(project, &["worktree", "list", "--porcelain"]) else { return Vec::new() };
+    let probes = probes_root();
+    let mut found = Vec::new();
+    for block in out.split("\n\n") {
+        let mut path = None;
+        let mut branch = None;
+        for line in block.lines() {
+            if let Some(p) = line.strip_prefix("worktree ") {
+                path = Some(PathBuf::from(p));
+            } else if let Some(b) = line.strip_prefix("branch ") {
+                branch = Some(b.strip_prefix("refs/heads/").unwrap_or(b).to_string());
+            }
+        }
+        if let Some(path) = path.filter(|p| p.is_dir() && !p.starts_with(&probes)) {
+            found.push(GitWorktree { path, branch });
+        }
+    }
+    found
 }
 
 /// Hand back a worktree synced to the project's CURRENT state — commits plus
@@ -336,5 +371,29 @@ mod tests {
         let again = ensure_synced(p).unwrap();
         assert!(again.join("m.rs").exists(), "rebuilt after the directory vanished");
         fs::remove_dir_all(&again).ok();
+    }
+
+    /// When a repository has a second worktree, both are listed with their
+    /// branches, the main checkout first; a removed worktree's directory is
+    /// not live.
+    #[test]
+    fn lists_the_projects_live_worktrees() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let run = |args: &[&str]| git(&repo, args).unwrap();
+        run(&["init", "-q", "-b", "main"]);
+        run(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"]);
+        let side = dir.path().join("side");
+        run(&["worktree", "add", "-q", "-b", "feature", side.to_str().unwrap()]);
+        let listed = list_worktrees(&repo);
+        let names: Vec<(String, Option<String>)> = listed
+            .iter()
+            .map(|w| (w.path.file_name().unwrap().to_string_lossy().to_string(), w.branch.clone()))
+            .collect();
+        assert_eq!(names, vec![("repo".into(), Some("main".into())), ("side".into(), Some("feature".into()))]);
+        std::fs::remove_dir_all(&side).unwrap();
+        assert_eq!(list_worktrees(&repo).len(), 1);
+        assert!(list_worktrees(dir.path()).is_empty(), "not a repository");
     }
 }

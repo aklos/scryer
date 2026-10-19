@@ -72,16 +72,20 @@ pub fn landing_at(
     status: &DerivedStatus,
     since: u64,
 ) -> crate::domain::landing::Landing {
-    let sessions: Vec<(String, Vec<crate::domain::session::SessionEntry>)> =
-        crate::infrastructure::session_store::list(r)
-            .into_iter()
-            .filter(|(_, updated)| *updated >= since)
-            .map(|(id, _)| {
-                let entries = crate::infrastructure::session_store::read(r, &id);
-                (id, entries)
-            })
-            .collect();
+    let sessions = sessions_since(r, since);
     crate::domain::landing::landing(&sessions, tree, status, since)
+}
+
+/// This checkout's session logs written to since `since`, with their entries.
+pub fn sessions_since(r: &ModelRef, since: u64) -> Vec<(String, Vec<crate::domain::session::SessionEntry>)> {
+    crate::infrastructure::session_store::list(r)
+        .into_iter()
+        .filter(|(_, updated)| *updated >= since)
+        .map(|(id, _)| {
+            let entries = crate::infrastructure::session_store::read(r, &id);
+            (id, entries)
+        })
+        .collect()
 }
 
 /// Take the project's exclusive lock for a read-modify-write of its caches.
