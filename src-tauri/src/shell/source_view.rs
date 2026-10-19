@@ -4,7 +4,7 @@
 //! anchor in the user's GUI editor. Symbols resolve via tree-sitter, with a
 //! text-search fallback for files no bundled grammar covers.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::core::{highlight, symbols};
 
@@ -38,7 +38,7 @@ pub(crate) fn open_in_editor(
     let line = line.or_else(|| {
         let sym = symbol.as_deref().filter(|s| !s.is_empty())?;
         let source = std::fs::read_to_string(&path).ok()?;
-        crate::core::symbols::resolve(&path, &source, sym, None).map(|(start, _)| start)
+        resolve_symbol(&path, &source, sym, None).map(|(start, _)| start)
     });
 
     let path_str = path.to_string_lossy();
@@ -234,7 +234,7 @@ pub(crate) fn read_source_span(
     // language-agnostic text search (start line + a default window).
     let sym_range: Option<(u32, u32)> =
         symbol.as_deref().filter(|s| !s.is_empty()).and_then(|s| {
-            symbols::resolve(&canon, &contents, s, line)
+            resolve_symbol(&canon, &contents, s, line)
                 .or_else(|| text_search_symbol(&all, s).map(|st| (st, (st + DEFAULT_SPAN).min(total))))
         });
 
@@ -341,7 +341,7 @@ pub(crate) fn verify_anchor(
     // does (tree-sitter, then text search). Otherwise fall back to the line.
     if let Some(sym) = symbol.as_deref().filter(|s| !s.is_empty()) {
         let lines: Vec<&str> = contents.lines().collect();
-        let found = symbols::resolve(&canon, &contents, sym, line).is_some()
+        let found = resolve_symbol(&canon, &contents, sym, line).is_some()
             || text_search_symbol(&lines, sym).is_some();
         return if found {
             AnchorStatus::Resolved
@@ -364,8 +364,64 @@ pub(crate) fn verify_anchor(
     }
 }
 
+/// A symbol's line range in `source`. Clojure has no definition node to look
+/// for (`defn` is a macro in `clojure.core`, not syntax), so it goes through
+/// the extractor's structural collector, which is also what anchors are
+/// fingerprinted against; every other language resolves in `core::symbols`.
+fn resolve_symbol(path: &Path, source: &str, symbol: &str, line_hint: Option<u32>) -> Option<(u32, u32)> {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("clj" | "cljs" | "cljc" | "cljr") => resolve_clojure(path, source, symbol, line_hint),
+        _ => symbols::resolve(path, source, symbol, line_hint),
+    }
+}
+
+/// Resolve `symbol` through `scryer-extract`'s grammar-derived definition
+/// list, preferring the definition nearest `line_hint`. Identifier defs are
+/// tried before string-named blocks, matching the priority the tree walk above
+/// applies.
+fn resolve_clojure(
+    path: &Path,
+    source: &str,
+    symbol: &str,
+    line_hint: Option<u32>,
+) -> Option<(u32, u32)> {
+    let parse = scryer_extract::lang::parse_file(path, source)?;
+    parse
+        .defs
+        .iter()
+        .chain(parse.test_blocks.iter())
+        .filter(|d| d.name == symbol)
+        .min_by_key(|d| line_hint.map_or(0, |h| d.start_line.abs_diff(h)))
+        .map(|d| (d.start_line, d.end_line.max(d.start_line)))
+}
+
 #[cfg(test)]
 mod tests {
+    /// Clojure resolves through the extractor's structural collector, so the
+    /// inspector agrees with the anchor checker by construction. `defn` has no
+    /// grammar node and no `name` field, so the tree walk above finds nothing
+    /// here.
+    #[test]
+    fn clojure_defn() {
+        let src = "(ns app.core)\n\n(defn fetch-user\n  [id]\n  (inc id))\n\n(defn helper [x] x)\n";
+        assert_eq!(
+            super::resolve_symbol(Path::new("core.clj"), src, "fetch-user", None),
+            Some((3, 5))
+        );
+        assert_eq!(super::resolve_symbol(Path::new("core.clj"), src, "helper", None), Some((7, 7)));
+        assert_eq!(super::resolve_symbol(Path::new("core.clj"), src, "nope", None), None);
+    }
+
+    /// `defmethod` siblings share a name; the line hint picks the intended one.
+    #[test]
+    fn clojure_line_hint_disambiguates_siblings() {
+        let src = "(defmethod render :html\n  [x]\n  x)\n\n(defmethod render :text\n  [x]\n  x)\n";
+        assert_eq!(
+            super::resolve_symbol(Path::new("r.cljc"), src, "render", Some(5)),
+            Some((5, 7))
+        );
+    }
+
     use super::*;
 
     const RS: &str = "fn other() {}\n\nfn target() {\n    let a = 1;\n    let b = 2;\n}\n";
