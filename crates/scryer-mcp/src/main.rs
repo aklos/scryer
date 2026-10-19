@@ -36,6 +36,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Claude Code statusline command: session JSON on stdin, one line out.
         // Prints nothing when no model is found.
         Some("statusline") => return cli::run_statusline(),
+        // EARS lint of every test description: exit 0 clean, 1 findings.
+        Some("lint") => {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            return cli::run_lint(&args);
+        }
         // Opt-in CI gate: exit 0 clean, 1 findings, 2 unusable.
         Some("check") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
