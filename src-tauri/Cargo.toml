@@ -30,7 +30,6 @@ notify = "6"
 tokio = { version = "1", features = ["rt-multi-thread", "process", "sync", "time"] }
 which = "7"
 dirs = "6.0.0"
-toml_edit = "0.22"
 tauri-plugin-dialog = "2"
 
 # In-process symbol resolution + syntax highlighting for the code inspector.

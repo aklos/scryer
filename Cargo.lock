@@ -3575,7 +3575,6 @@ dependencies = [
  "tauri-plugin-opener",
  "tempfile",
  "tokio",
- "toml_edit 0.22.27",
  "tree-sitter",
  "tree-sitter-c",
  "tree-sitter-c-sharp",
