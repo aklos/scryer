@@ -1,121 +1,16 @@
-//! The derived C4 tree's entry point: walk the project, lift every source
-//! file's claims, derive the tree, and cache it keyed on file mtimes so an
-//! unchanged project reads it back without parsing.
+//! The derived C4 tree's entry points: the project's tree, cached on file
+//! mtimes, or derived without touching the cache.
 
-use crate::domain::claims::{self, FileLift};
-use crate::domain::derive::{derive_tree, DeriveInput};
-use crate::domain::structure::Structure;
-use crate::infrastructure::walk;
-use rayon::prelude::*;
-use scryer_core::derived_tree::{read_derived_tree_at, write_derived_tree_at, DerivedTree};
-use scryer_core::{scan, ModelRef};
-use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
-use std::hash::{DefaultHasher, Hash, Hasher};
-use std::path::{Path, PathBuf};
-
-/// Bumped whenever derivation changes, so a cache from an older binary is
-/// never mistaken for current.
-const DERIVE_VERSION: u32 = 1;
-
-thread_local! {
-    static PARSER: RefCell<tree_sitter::Parser> = RefCell::new(tree_sitter::Parser::new());
-}
-
-fn structure_path(project: &Path) -> PathBuf {
-    project.join(".scryer").join("structure.toml")
-}
-
-/// The project's `structure.toml`, or defaults when there is none.
-pub fn read_structure(project: &Path) -> Result<Structure, String> {
-    match std::fs::read_to_string(structure_path(project)) {
-        Ok(text) => Structure::parse(&text),
-        Err(_) => Ok(Structure::default()),
-    }
-}
-
-/// Hash of every walked file's path, mtime and size, plus `structure.toml`.
-fn fingerprint(project: &Path, files: &[PathBuf]) -> u64 {
-    let mut stamps: Vec<(String, u128, u64)> = files
-        .iter()
-        .chain(std::iter::once(&structure_path(project)))
-        .filter_map(|path| {
-            let meta = std::fs::metadata(path).ok()?;
-            let mtime = meta
-                .modified()
-                .ok()?
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0);
-            Some((path.to_string_lossy().to_string(), mtime, meta.len()))
-        })
-        .collect();
-    stamps.sort();
-    let mut hasher = DefaultHasher::new();
-    DERIVE_VERSION.hash(&mut hasher);
-    stamps.hash(&mut hasher);
-    hasher.finish()
-}
-
-/// The project's derived tree: the cached one when no file changed since,
-/// otherwise derived afresh and cached.
-pub fn derived_tree(project: &Path) -> Result<DerivedTree, String> {
-    if !project.is_dir() {
-        return Err(format!("'{}' is not a directory", project.display()));
-    }
-    let r = ModelRef::ProjectLocal(project.to_path_buf());
-    let files = walk::walk_files(project);
-    let print = fingerprint(project, &files);
-    if let Some(cached) = read_derived_tree_at(&r).filter(|t| t.fingerprint == print) {
-        return Ok(cached);
-    }
-    let tree = derive_uncached(project, &files, print)?;
-    // A failed cache write only costs the next read a derivation.
-    let _ = write_derived_tree_at(&r, &tree);
-    Ok(tree)
-}
-
-/// Derive the tree without touching the cache — for reading a project that
-/// must not be written to.
-pub fn derived_tree_uncached(project: &Path) -> Result<DerivedTree, String> {
-    let files = walk::walk_files(project);
-    let print = fingerprint(project, &files);
-    derive_uncached(project, &files, print)
-}
-
-fn derive_uncached(project: &Path, files: &[PathBuf], print: u64) -> Result<DerivedTree, String> {
-    let structure = read_structure(project)?;
-    let ctx = crate::extract_context(project)?;
-    let all_files: BTreeSet<String> = files
-        .iter()
-        .filter_map(|p| p.strip_prefix(project).ok())
-        .map(|rel| rel.to_string_lossy().replace('\\', "/"))
-        .collect();
-    let lifts: BTreeMap<String, FileLift> = all_files
-        .par_iter()
-        .filter(|rel| scan::is_product_code(rel))
-        .filter_map(|rel| {
-            let source = std::fs::read_to_string(project.join(rel)).ok()?;
-            let lift = PARSER.with(|p| claims::lift_file(rel, &source, &mut p.borrow_mut()));
-            Some((rel.clone(), lift))
-        })
-        .collect();
-    Ok(derive_tree(&DeriveInput {
-        project_name: &ctx.project_name,
-        containers: &ctx.containers,
-        files: &ctx.files,
-        file_edges: &ctx.file_edges,
-        lifts: &lifts,
-        all_files: &all_files,
-        structure: &structure,
-        fingerprint: print,
-    }))
-}
+pub use crate::infrastructure::derived_tree::{derived_tree, derived_tree_uncached, read_structure};
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scryer_core::derived_tree::ClaimLevel;
+    use crate::domain::claims;
+    use scryer_core::derived_tree::{read_derived_tree_at, ClaimLevel};
+    use scryer_core::{scan, ModelRef};
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::path::{Path, PathBuf};
     use scryer_core::Kind;
 
     fn write(dir: &Path, rel: &str, text: &str) {
@@ -214,6 +109,13 @@ mod tests {
         // The import draft -> store becomes a component link.
         let store = by_name("store");
         assert!(m.links.iter().any(|l| l.src == draft.id && l.dst == store.id), "links: {:?}", m.links);
+
+        // A unit claim anchors the file it exercises; files no test reaches
+        // by import are dark.
+        let keeps = tree.claims.iter().find(|c| c.identifier == "keeps_draft").unwrap();
+        assert_eq!(m.source_map[&keeps.id][0].pattern, "crates/core/src/draft.rs");
+        assert_eq!(tree.file_nodes["crates/core/src/store/mod.rs"], store.id);
+        assert_eq!(tree.dark_files, vec!["crates/core/src/lib.rs".to_string()]);
     }
 
     /// When a file inside a directory component has a module doc and claims

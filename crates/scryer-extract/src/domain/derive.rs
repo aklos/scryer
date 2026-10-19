@@ -463,6 +463,13 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
                     end_line: Some(t.end_line),
                 }],
             );
+            // The file the test exercises: an edit there ages its verdict.
+            if let Home::File(f) = home {
+                model.source_map.insert(
+                    id.clone(),
+                    vec![SourceLocation { pattern: f.clone(), symbol: None, line: None, end_line: None }],
+                );
+            }
             claims.push(DerivedClaim {
                 id,
                 node_id: node_id.clone(),
@@ -502,13 +509,29 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         n.responsibilities.retain(|r| !planned_ids.contains(r.id.as_str()));
     }
     committed.test_map.retain(|id, _| !planned_ids.contains(id.as_str()));
+    let file_nodes: BTreeMap<String, String> = file_component
+        .iter()
+        .map(|(f, path)| (f.to_string(), sub_ids.get(f).unwrap_or(&components[path].id).clone()))
+        .collect();
+    // Dark code: product files no test file reaches through the import graph.
+    let mut reached: HashSet<&str> = homes.iter().map(|(rel, ..)| rel.as_str()).collect();
+    let mut queue: Vec<&str> = reached.iter().copied().collect();
+    while let Some(f) = queue.pop() {
+        for dst in edges_from.get(f).into_iter().flatten() {
+            if reached.insert(dst) {
+                queue.push(dst);
+            }
+        }
+    }
+    let dark_files: Vec<String> =
+        file_nodes.keys().filter(|f| !reached.contains(f.as_str())).cloned().collect();
     DerivedTree {
         fingerprint: input.fingerprint,
         committed,
         planned: model,
         claims,
-        file_nodes: Default::default(),
-        dark_files: Vec::new(),
+        file_nodes,
+        dark_files,
         style_violations: Vec::new(),
     }
 }
