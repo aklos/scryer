@@ -34,8 +34,8 @@ mod tests {
     use super::*;
     use crate::domain::style::core_shell;
 
-    /// Loads the project's own style files beside the built-ins; if a file
-    /// cannot be read, then skips it and reports why.
+    /// If a project style file cannot be read, then loads the rest beside the
+    /// built-ins and reports the one it skipped.
     #[test]
     fn project_styles_load_beside_the_builtins() {
         let dir = tempfile::tempdir().unwrap();
