@@ -269,27 +269,40 @@ pub fn migrate(project: &Path) -> Result<MigrationReport, String> {
         }
     }
 
-    // 4. Containers' display names and styles.
+    // 4. Containers' display names and styles, onto the derived container
+    // that holds each authored container's directory.
     let structure_path = dir.join("structure.toml");
     let mut structure = std::fs::read_to_string(&structure_path).unwrap_or_default();
-    let parsed = crate::domain::structure::Structure::parse(&structure).unwrap_or_default();
+    let derived: Vec<(String, &Node)> = tree
+        .planned
+        .nodes
+        .iter()
+        .filter(|n| n.kind == Kind::Container)
+        .filter_map(|n| {
+            let b = tree.planned.boundaries.get(&n.id)?.first()?;
+            Some((dir_of(&b.pattern).to_string(), n))
+        })
+        .collect();
     for n in nodes.values().filter(|n| n.kind == Kind::Container && n.external != Some(true)) {
-        let Some(cdir) = boundaries
-            .get(&n.id)
-            .and_then(|b| b.first())
-            .map(|s| s.pattern.trim_end_matches("**").trim_end_matches('/').to_string())
-        else {
+        let Some(adir) = boundaries.get(&n.id).and_then(|b| b.first()).map(|s| dir_of(&s.pattern).to_string()) else {
             report.skipped.push(format!("container {} — no boundary to locate it", n.name));
             continue;
         };
-        let current = parsed.containers.get(&cdir);
-        if current.and_then(|c| c.name.as_deref()) != Some(n.name.as_str()) {
-            structure = set_container_field(&structure, &cdir, "name", &n.name);
+        let holder = derived
+            .iter()
+            .filter(|(d, _)| d.is_empty() || adir == *d || adir.starts_with(&format!("{d}/")))
+            .max_by_key(|(d, _)| d.len());
+        let Some((cdir, current)) = holder else {
+            report.skipped.push(format!("container {} — no package holds {adir}", n.name));
+            continue;
+        };
+        if current.name != n.name {
+            structure = set_container_field(&structure, cdir, "name", &n.name);
             report.structure.push(format!("{cdir}: name = {}", n.name));
         }
         if let Some(style) = &n.style {
-            if current.and_then(|c| c.style.as_deref()) != Some(style.as_str()) {
-                structure = set_container_field(&structure, &cdir, "style", style);
+            if current.style.as_deref() != Some(style.as_str()) {
+                structure = set_container_field(&structure, cdir, "style", style);
                 report.structure.push(format!("{cdir}: style = {style}"));
             }
         }
