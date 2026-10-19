@@ -1,3 +1,8 @@
+//! Ids for model elements: `<prefix>-<6 random chars>`, re-drawn until no id
+//! the caller can see holds it, so independent minters over one snapshot never
+//! collide. [`is_minted_id`] tells a real id — this shape or the older
+//! sequential one — from an invented placeholder.
+
 use crate::domain::model::{Responsibility, ScryModel};
 use std::collections::HashSet;
 use std::hash::{BuildHasher, Hasher};

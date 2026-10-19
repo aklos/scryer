@@ -3,13 +3,15 @@
 //!
 //! Scryer still never runs tests: a run (by the dev, an agent, or CI) leaves a
 //! JUnit report behind, and this module reads the receipt. JUnit is the one
-//! format every supported ecosystem can emit natively or with one flag, but
-//! its conventions vary per emitter — vitest puts file paths in `classname`
-//! and joins suites into `name` with `" > "`; pytest puts dotted module paths
-//! in `classname` and parametrizes names with `[…]` suffixes. Matching is
+//! format every supported ecosystem can emit natively or with one flag, but its
+//! conventions vary per emitter — vitest puts file paths in `classname` and
+//! joins suites into `name` with `" > "`; pytest puts dotted module paths in
+//! `classname` and parametrizes names with `[…]` suffixes. Matching is
 //! therefore name-first (normalized leaf test name), with the attachment's
-//! stored file path as tie-breaker only — reports are rooted at the
-//! invocation directory, so paths never compare exactly.
+//! stored file path as tie-breaker only — reports are rooted at the invocation
+//! directory, so paths never compare exactly. Each claim takes the worst
+//! outcome among its matched cases; attachments the report never mentions, and
+//! ties the path can't break, are reported rather than guessed.
 
 use std::collections::{BTreeMap, HashMap};
 

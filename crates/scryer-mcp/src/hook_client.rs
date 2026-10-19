@@ -5,18 +5,20 @@
 //! All three name the event fields the same way — `hook_event_name`,
 //! `session_id`, `cwd`, `tool_name`, `tool_input` — so one client serves them
 //! all, dispatching on the event and tool names. Everything runs in-process
-//! against the project's model and the session's log
+//! against the project's derived tree and the session's log
 //! (`.scryer/sessions/<session_id>.jsonl`); the desktop app need not be open.
 //!
-//! - UserPromptSubmit  → bind the harness process to the session, say nothing
-//!                       (the prompt itself is never read)
-//! - PostToolUse read  → inject the file's governing intent (once per session
-//!                       until it changes)
+//! - UserPromptSubmit  → bind the harness process to the session; the prompt
+//!                       is never read; say nothing
+//! - PostToolUse read  → inject what the tree says about the file — its node,
+//!                       description and claims (once per session until it
+//!                       changes)
 //! - PostToolUse edit… → record the touch, say nothing
-//! - Pre/PostToolUse shell → record the files the command modified
-//! - Stop              → block once each on planned work left without a note,
-//!                       an unprobed test and unreconciled claims; otherwise
-//!                       hand the user a one-line summary
+//! - Pre/PostToolUse shell → record the files the command modified; while a
+//!                       probe is open, refuse a git command that would
+//!                       discard uncommitted work outside the probe worktree
+//! - Stop              → close the session's record — the todo tests it
+//!                       wrote, the claims its edits reach — say nothing
 //!
 //! Where they differ is the tool vocabulary and the reply shape, and neither is
 //! discoverable from the event — so the install writes which harness it is
@@ -27,9 +29,9 @@
 //! file named in the envelope. Copilot fires post-read like Claude Code does,
 //! so it gets the same post-Read overlay.
 //!
-//! Every failure path — no model above the working directory, malformed input,
-//! an unreadable model — exits 0 with no output: a hook must never break the
-//! session it observes.
+//! Every failure path — no project above the working directory, malformed
+//! input, a tree that cannot be derived — exits 0 with no output: a hook must
+//! never break the session it observes.
 
 use scryer_core::ModelRef;
 use std::io::Read;
@@ -156,7 +158,7 @@ fn discover(event: &serde_json::Value) -> Option<ModelRef> {
         .or_else(|| event["cwd"].as_str().map(str::to_string))?;
     let mut dir = Some(PathBuf::from(start));
     while let Some(d) = dir {
-        if let Some(r) = scryer_core::resolve_project_model(&d) {
+        if let Some(r) = scryer_core::resolve_project(&d) {
             return Some(r);
         }
         dir = d.parent().map(Path::to_path_buf);
@@ -182,9 +184,17 @@ fn session_id(event: &serde_json::Value) -> Option<&str> {
     event["session_id"].as_str().filter(|s| !s.is_empty())
 }
 
-/// The rendered overlay for `file`, unless the session already saw it.
+/// How many claims an overlay lists before pointing at `locate`.
+const OVERLAY_CLAIMS_CAP: usize = 8;
+
+/// The rendered overlay for `file` — what the derived tree says about it —
+/// unless the session already saw exactly this.
 fn overlay_text(r: &ModelRef, event: &serde_json::Value, file: &str) -> Option<String> {
-    let overlay = scryer_core::session::overlay(r, session_id(event), file).ok()??;
+    let rel = scryer_core::session::relativize(r.project_path(), file);
+    let loaded = crate::derived::load(r).ok()?;
+    let peers = crate::tools::read::Peers::besides(r, &loaded.tree, session_id(event));
+    let report = crate::tools::read::file_report(&loaded, &peers, &rel, Some(OVERLAY_CLAIMS_CAP));
+    let overlay = scryer_core::session::overlay(r, session_id(event), file, report).ok()??;
     render_overlay(&overlay)
 }
 
@@ -192,7 +202,6 @@ fn post_tool_use(r: &ModelRef, event: &serde_json::Value, harness: Harness) {
     match harness.tool_kind(event["tool_name"].as_str().unwrap_or_default()) {
         ToolKind::Read => {
             let Some(file) = tool_file(event) else { return };
-            first_sight(r, event, file);
             if let Some(text) = overlay_text(r, event, file) {
                 harness.emit_context("PostToolUse", &text);
             }
@@ -227,17 +236,6 @@ fn tool_use_id(event: &serde_json::Value) -> Option<&str> {
     event["tool_use_id"].as_str().filter(|s| !s.is_empty())
 }
 
-/// The first time the session reads `file` (or, on Codex, is about to patch
-/// it), note which of its anchors are already out of sync, so the close gate
-/// later blames the session only for drift it made.
-fn first_sight(r: &ModelRef, event: &serde_json::Value, file: &str) {
-    if let Some(session) = session_id(event) {
-        let _ = scryer_core::session::record_first_sight(r, session, file, |f| {
-            anchor_flags(r, &[f.to_string()])
-        });
-    }
-}
-
 /// Record one touched file. No output: touch recording must cost the session
 /// zero tokens.
 fn touch(r: &ModelRef, event: &serde_json::Value, file: &str) {
@@ -268,9 +266,6 @@ fn pre_tool_use(r: &ModelRef, event: &serde_json::Value, harness: Harness) {
         }
     }
     let files = patched_files(event);
-    for file in &files {
-        first_sight(r, event, file);
-    }
     let sections: Vec<String> = files
         .iter()
         .take(OVERLAY_FILE_CAP)
@@ -406,104 +401,63 @@ fn absolutize(cwd: &str, file: &str) -> String {
     }
 }
 
-/// The compact intent overlay for one file — or `None` when the model has
-/// nothing to say about it (dark files stay silent; noise here would teach
-/// the agent to ignore the channel). Repeats never get here: the session log
-/// already answered them with no overlay at all.
+/// The compact overlay for one file, from the derived tree: where it sits,
+/// what its module says, the claims its tests make with their status, and
+/// where a new claim's todo test goes — or `None` when the tree has nothing
+/// to say (dark files stay silent; noise here would teach the agent to
+/// ignore the channel). Repeats never get here: the session log already
+/// answered them with no overlay at all.
 fn render_overlay(overlay: &serde_json::Value) -> Option<String> {
-    let claims = overlay["claims"].as_array().cloned().unwrap_or_default();
-    let pending = overlay["pending"].as_array().cloned().unwrap_or_default();
-    let mut directives: Vec<String> = Vec::new();
-    for d in overlay["ownDirectives"].as_array().into_iter().flatten() {
-        if let Some(s) = d.as_str() {
-            directives.push(s.to_string());
-        }
-    }
-    for inh in overlay["inheritedDirectives"].as_array().into_iter().flatten() {
-        let from = inh["name"].as_str().unwrap_or("ancestor");
-        for d in inh["directives"].as_array().into_iter().flatten() {
-            if let Some(s) = d.as_str() {
-                directives.push(format!("{s} (from {from})"));
-            }
-        }
-    }
-    let placement = overlay.get("placement").filter(|p| p.is_object());
-    if claims.is_empty() && directives.is_empty() && pending.is_empty() && placement.is_none() {
+    let claims: Vec<&str> = overlay["claims"].as_array().into_iter().flatten().filter_map(|c| c.as_str()).collect();
+    let description = overlay["description"].as_str();
+    overlay["node"].as_str()?;
+    if claims.is_empty() && description.is_none() {
         return None;
     }
-
     let file = overlay["file"].as_str().unwrap_or("this file");
-    let mut out = String::new();
-    match overlay["path"].as_str() {
-        Some(p) => out.push_str(&format!("[scryer] {file} — {p}\n")),
-        None => out.push_str(&format!("[scryer] {file}\n")),
+    let mut out = match overlay["path"].as_str() {
+        Some(p) => format!("[scryer] {file} — {p}\n"),
+        None => format!("[scryer] {file}\n"),
+    };
+    if let Some(layer) = overlay["layer"].as_str() {
+        out.push_str(&format!("layer: {layer}\n"));
     }
-    // The style's answer for this file, one line: its layer, what it may
-    // import, where its layer lives. The table itself never appears.
-    if let Some(p) = placement {
-        let may: Vec<&str> = p["mayImport"].as_array().into_iter().flatten().filter_map(|v| v.as_str()).collect();
-        let mut line = format!(
-            "layer: {} · may import: {}",
-            p["layer"].as_str().unwrap_or("?"),
-            if may.is_empty() { "nothing".to_string() } else { may.join(", ") }
-        );
-        if let Some(d) = p["dir"].as_str() {
-            line.push_str(&format!(" · path: {d}"));
-        }
-        out.push_str(&line);
-        out.push('\n');
+    if let Some(d) = description {
+        out.push_str(&format!("{d}\n"));
     }
     if !claims.is_empty() {
-        out.push_str("The model claims this file:\n");
+        out.push_str("Claims its tests make:\n");
         for c in &claims {
-            let host = c["hostName"].as_str().unwrap_or("?");
-            let statement = c["statement"].as_str().unwrap_or("(data shape declaration)");
-            let mut flags = String::new();
-            if c["stale"].as_bool() == Some(true) {
-                flags.push_str(" [stale — awaiting verdict]");
-            }
-            if c["vagrant"].as_bool() == Some(true) {
-                flags.push_str(" [vagrant — awaiting adoption]");
-            }
-            out.push_str(&format!("- ({host}) {statement}{flags}\n"));
-            for d in c["directives"].as_array().into_iter().flatten() {
-                if let Some(s) = d.as_str() {
-                    out.push_str(&format!("  ⚑ {s}\n"));
-                }
-            }
+            out.push_str(&format!("- {c}\n"));
         }
     }
-    if !directives.is_empty() {
-        out.push_str("Binding directives:\n");
-        for d in &directives {
-            out.push_str(&format!("⚑ {d}\n"));
+    if let Some(more) = overlay["moreClaims"].as_str() {
+        out.push_str(&format!("({more})\n"));
+    }
+    for key in ["probe", "alsoEditing", "othersTodos", "radiusOverlap"] {
+        if let Some(line) = overlay[key].as_str() {
+            out.push_str(&format!("{line}\n"));
         }
     }
-    if !pending.is_empty() {
-        out.push_str("Pending plan work here:\n");
-        for p in &pending {
-            let label = p["label"].as_str().unwrap_or("?");
-            let kinds: Vec<&str> = p["changes"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|c| c["type"].as_str())
-                .collect();
-            out.push_str(&format!("- {}: {label}\n", kinds.join("+")));
-        }
+    if let Some(stubs) = overlay["stubs"].as_str() {
+        out.push_str(&format!("A new claim here is a todo test in {stubs}."));
     }
-    out.push_str("Keep edits consistent with these claims, or update the model as you go.");
-    Some(out)
+    Some(out.trim_end().to_string())
 }
 
 /// Bind the harness process to the session, so an MCP server it spawned
-/// before a `/clear` follows the session to its new id. Silent: the prompt
-/// itself is the user's conversation with the agent, not scryer's to read.
+/// before a `/clear` follows the session to its new id. The prompt itself is
+/// never read: scryer does not record what the developer types. Silent.
 fn user_prompt_submit(r: &ModelRef, event: &serde_json::Value) {
     let Some(session) = session_id(event) else { return };
     for pid in ancestor_pids() {
         let _ = scryer_core::session::bind_pid(r, session, pid);
     }
+    // The first submit notes the todo tests already there, so the stubs this
+    // session writes can be told apart at its stops.
+    let _ = scryer_core::session::begin(r, session, || {
+        crate::derived::load_tree(r).map(|t| crate::derived::planned_tests(&t)).unwrap_or_default()
+    });
 }
 
 /// The hook's ancestor processes, nearest first — the harness process that
@@ -536,44 +490,22 @@ fn parent_of(pid: u32) -> Option<u32> {
     stat.rsplit_once(')')?.1.split_whitespace().nth(1)?.parse().ok()
 }
 
+/// Close the session's record: the todo tests it wrote become its stubs, and
+/// the claims its edits reach are noted. Silent: a stop never blocks and
+/// never hands anyone a summary — the record is read where the user looks.
 fn stop(r: &ModelRef, event: &serde_json::Value) {
     let Some(session) = session_id(event) else { return };
-    let out = scryer_core::session::stop(
-        r,
-        session,
-        |files| anchor_flags(r, files),
-        |log| {
-            let c = scryer_extract::test_status::probe_check(r, log);
-            (c.block, c.summary)
-        },
-    );
-    if let Some(reason) = out.block {
-        emit(&serde_json::json!({ "decision": "block", "reason": reason }));
-    } else if let Some(summary) = out.summary {
-        emit(&serde_json::json!({ "systemMessage": summary }));
+    let touched = scryer_core::session::session_log(r, session).touched;
+    match crate::derived::load_tree(r) {
+        Ok(tree) => {
+            let planned = crate::derived::planned_tests(&tree);
+            let reached = crate::derived::reached_claims(r, &tree, &touched);
+            let _ = scryer_core::session::stop(r, session, Some(&planned), reached);
+        }
+        Err(_) => {
+            let _ = scryer_core::session::stop(r, session, None, Vec::new());
+        }
     }
-}
-
-/// Out-of-sync anchors in the session's touched files (may silently re-anchor
-/// moved symbols, exactly like get_health). No baseline yet → no flags → the
-/// gate stays silent rather than crying wolf on a fresh model.
-fn anchor_flags(r: &ModelRef, files: &[String]) -> Vec<scryer_core::session::AnchorFlag> {
-    let files = files.iter().cloned().collect();
-    let Ok(check) = scryer_extract::anchors::check_anchors_in(r, &files) else { return Vec::new() };
-    check
-        .observations
-        .into_iter()
-        .map(|o| scryer_core::session::AnchorFlag {
-            state: serde_json::to_value(o.state)
-                .ok()
-                .and_then(|v| v.as_str().map(str::to_string))
-                .unwrap_or_else(|| "changed".into()),
-            key: o.key,
-            host_name: o.host_name,
-            file: o.file,
-            symbol: o.symbol,
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -642,9 +574,7 @@ mod tests {
     fn a_bash_commands_edits_become_session_touches() {
         let dir = tempfile::tempdir().unwrap();
         let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
-        let model: scryer_core::ScryModel =
-            serde_json::from_value(serde_json::json!({ "version": "0.3", "nodes": [], "links": [] })).unwrap();
-        scryer_core::write_model_at(&r, &model).unwrap();
+        std::fs::create_dir_all(dir.path().join(".scryer")).unwrap();
         std::fs::create_dir_all(dir.path().join("src")).unwrap();
         std::fs::write(dir.path().join("src/lib.rs"), "old").unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
@@ -673,11 +603,10 @@ mod tests {
     /// open, nothing is refused.
     #[test]
     fn an_open_probe_refuses_discarding_git_outside_its_worktree() {
+        crate::tools::fixture::isolate_probes_root();
         let dir = tempfile::tempdir().unwrap();
         let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
-        let model: scryer_core::ScryModel =
-            serde_json::from_value(serde_json::json!({ "version": "0.3", "nodes": [], "links": [] })).unwrap();
-        scryer_core::write_model_at(&r, &model).unwrap();
+        std::fs::create_dir_all(dir.path().join(".scryer")).unwrap();
         let wt = scryer_core::worktree::worktree_path(dir.path());
         let call = |command: String| {
             serde_json::json!({
@@ -713,17 +642,50 @@ mod tests {
         assert!(probe_guard(&r, &checkout()).is_none(), "the probe closed");
     }
 
-    /// An overlay with no claims, directives, pending work or placement — a
-    /// dark file — renders to nothing: noise there teaches the agent to skim.
+    /// A session that writes a todo test into a file it edits owns it from
+    /// its next stop; a stub already there at its first prompt stays
+    /// unowned. The stop also records the claims the edit reaches.
     #[test]
-    fn an_empty_overlay_renders_to_nothing() {
-        assert_eq!(render_overlay(&serde_json::json!({ "file": "src/lib.rs" })), None);
-        assert_eq!(render_overlay(&serde_json::json!({})), None);
-        assert!(render_overlay(&serde_json::json!({
+    fn a_stop_takes_ownership_of_the_stubs_the_session_wrote() {
+        let dir = crate::tools::fixture::project();
+        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let event = |hook: &str| serde_json::json!({ "hook_event_name": hook, "session_id": "s", "cwd": dir.path() });
+        user_prompt_submit(&r, &event("UserPromptSubmit"));
+
+        let draft = dir.path().join("crates/notes/src/draft.rs");
+        let text = std::fs::read_to_string(&draft).unwrap().replace(
+            "    fn merges() { todo!() }\n",
+            "    fn merges() { todo!() }\n\n    /// When a draft is renamed, keeps its text\n    #[test]\n    fn renames() { todo!() }\n",
+        );
+        std::fs::write(&draft, text).unwrap();
+        scryer_core::session::record_touch(&r, "s", &draft.to_string_lossy()).unwrap();
+        stop(&r, &event("Stop"));
+
+        let log = scryer_core::session::session_log(&r, "s");
+        assert_eq!(log.stubs, vec![("crates/notes/src/draft.rs".to_string(), "renames".to_string())]);
+        let tree = crate::derived::load_tree(&r).unwrap();
+        let keeps = tree.claims.iter().find(|c| c.identifier == "keeps_draft").unwrap();
+        assert!(log.reached.contains(&keeps.id), "{:?}", log.reached);
+    }
+
+    /// When the tree has nothing on a file — no node holds it (dark code),
+    /// or its node has neither claims nor a description — the overlay renders
+    /// to nothing; a file with claims renders them with where new ones go.
+    #[test]
+    fn an_overlay_renders_only_what_the_tree_says() {
+        assert_eq!(render_overlay(&serde_json::json!({ "file": "src/lib.rs", "claims": ["x"] })), None, "dark");
+        assert_eq!(render_overlay(&serde_json::json!({ "file": "src/lib.rs", "node": "n" })), None, "silent node");
+        let text = render_overlay(&serde_json::json!({
             "file": "src/lib.rs",
-            "claims": [{ "hostName": "API", "statement": "serves requests" }]
+            "node": "n",
+            "path": "app › api",
+            "claims": ["[proven] When asked, serves requests — tests/api.rs:3"],
+            "stubs": "tests/api.rs"
         }))
-        .is_some());
+        .unwrap();
+        assert!(text.starts_with("[scryer] src/lib.rs — app › api"), "{text}");
+        assert!(text.contains("- [proven] When asked, serves requests"), "{text}");
+        assert!(text.ends_with("A new claim here is a todo test in tests/api.rs."), "{text}");
     }
 
 }

@@ -1,3 +1,7 @@
+//! The events a running agent session emits, and the token usage (with cost)
+//! it reports at the end of a turn — summable across sessions into a running
+//! total.
+
 use serde::Serialize;
 
 /// Token usage (and cost) an agent reports at the end of a turn. Populated from

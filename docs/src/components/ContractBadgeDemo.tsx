@@ -1,5 +1,5 @@
 /**
- * Wraps the actual ContractBadge from the app for docs display.
+ * Wraps the actual ContractBadge from the app, shown inline, for docs display.
  */
 import { ContractBadge } from "@app/nodes/ContractBadge";
 import type { Contract } from "@app/types";

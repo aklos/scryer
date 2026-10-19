@@ -1,3 +1,10 @@
+//! The subprocess runtime: spawns agent sessions — CLI print mode, or an ACP
+//! subprocess with the protocol handshake — and runs many at once on one
+//! background executor. It reads token usage and one-line activity summaries
+//! out of a CLI agent's stream-json output, and a cancel stops every active
+//! session, killing each one's whole process tree (process-group signals on
+//! Unix, `taskkill` on Windows).
+
 use std::path::PathBuf;
 
 use agent_client_protocol::{
@@ -682,8 +689,8 @@ async fn start_acp_session(
             if !project_declares_scryer_mcp(cwd) {
                 return Err(format!(
                     "Copilot can only reach scryer through this project's own MCP config, and \
-                     {cwd}/.mcp.json doesn't declare it. Enable AI tool integration for this \
-                     project (or run `scryer-mcp init`), and make sure you've trusted the folder \
+                     {cwd}/.mcp.json doesn't declare it. Turn on Agent integration for this \
+                     project (or run `scryer-mcp setup on`), and make sure you've trusted the folder \
                      in Copilot — it skips project MCP servers in untrusted folders."
                 ));
             }

@@ -1,8 +1,9 @@
 /**
  * The C4 card chrome — an SVG fill+stroke that follows the node's shape
- * contour, with kind-specific decorations (container hat, system outer frame,
- * component side-tabs). Ported from the pre-pivot canvas; the `kind` type is
- * the v0.3 `Kind`.
+ * contour (rectangle, cylinder, pipe, hexagon, …), with kind-specific
+ * decorations (container hat, system outer frame, component side-tabs) and an
+ * optional pulsing glow. The caller supplies the stroke, so the change-mark
+ * outline is decided upstream. Ported from the pre-pivot canvas.
  */
 
 import type { Kind } from "../viewmodel";

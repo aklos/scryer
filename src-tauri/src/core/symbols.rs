@@ -1,9 +1,13 @@
 //! In-process symbol resolution for the code inspector.
 //!
-//! Given a file + an identifier the agent recorded (`SourceLocation.symbol`),
-//! resolve the definition's line range by parsing with tree-sitter. Grammars
-//! are compiled into the binary, so this needs no external tool. Languages
-//! without a bundled grammar fall back to the caller's text search.
+//! Given a file and an identifier (`SourceLocation.symbol`), resolve the
+//! definition's line range by parsing with tree-sitter, preferring a
+//! definition over a mere name match and, among equals, the one nearest a line
+//! hint. A test named by its string (`it("…")`) resolves to the whole call and a
+//! Vue SFC is one symbol spanning the file; Clojure, which has no definition
+//! node, is the shell's to resolve through scryer-extract. Grammars are compiled into the binary, so
+//! this needs no external tool. Languages without a bundled grammar fall back
+//! to the caller's text search.
 
 use std::path::Path;
 use tree_sitter::{Language, Parser};
@@ -65,15 +69,6 @@ pub fn resolve(
             .collect();
         return (pascal == symbol).then(|| (1, source.lines().count().max(1) as u32));
     }
-    // Clojure has no definition NODE to look for: `defn` is a macro in
-    // `clojure.core`, not syntax, so the grammar exposes only s-expression
-    // primitives — no `name` field and no definition-shaped kinds for the walk
-    // below to match. Delegate to the extractor's structural collector, which
-    // is also what the model's anchors are fingerprinted against, so the
-    // inspector and the anchor checker agree by construction.
-    if matches!(ext, "clj" | "cljs" | "cljc" | "cljr") {
-        return resolve_via_extractor(path, source, symbol, line_hint);
-    }
     let language = language_for_ext(ext)?;
 
     let mut parser = Parser::new();
@@ -128,26 +123,6 @@ pub fn resolve(
     best.map(|(s, e, _)| (s, e))
 }
 
-/// Resolve `symbol` through `scryer-extract`'s grammar-derived definition
-/// list, preferring the definition nearest `line_hint`. Identifier defs are
-/// tried before string-named blocks, matching the priority the tree walk above
-/// applies.
-fn resolve_via_extractor(
-    path: &Path,
-    source: &str,
-    symbol: &str,
-    line_hint: Option<u32>,
-) -> Option<(u32, u32)> {
-    let parse = scryer_extract::lang::parse_file(path, source)?;
-    parse
-        .defs
-        .iter()
-        .chain(parse.test_blocks.iter())
-        .filter(|d| d.name == symbol)
-        .min_by_key(|d| line_hint.map_or(0, |h| d.start_line.abs_diff(h)))
-        .map(|d| (d.start_line, d.end_line.max(d.start_line)))
-}
-
 /// The literal content of a call's first argument when it is a plain string:
 /// argument list via the `arguments` field (or the named child whose kind says
 /// "argument"), quotes trimmed. Interpolated templates yield `None` — a
@@ -174,31 +149,6 @@ fn first_string_arg(call: tree_sitter::Node, bytes: &[u8]) -> Option<String> {
 mod tests {
     use super::*;
     use std::path::Path;
-
-    /// Clojure resolves through the extractor's structural collector, so the
-    /// inspector agrees with the anchor checker by construction. `defn` has no
-    /// grammar node and no `name` field, so the tree walk above finds nothing
-    /// here.
-    #[test]
-    fn clojure_defn() {
-        let src = "(ns app.core)\n\n(defn fetch-user\n  [id]\n  (inc id))\n\n(defn helper [x] x)\n";
-        assert_eq!(
-            resolve(Path::new("core.clj"), src, "fetch-user", None),
-            Some((3, 5))
-        );
-        assert_eq!(resolve(Path::new("core.clj"), src, "helper", None), Some((7, 7)));
-        assert_eq!(resolve(Path::new("core.clj"), src, "nope", None), None);
-    }
-
-    /// `defmethod` siblings share a name; the line hint picks the intended one.
-    #[test]
-    fn clojure_line_hint_disambiguates_siblings() {
-        let src = "(defmethod render :html\n  [x]\n  x)\n\n(defmethod render :text\n  [x]\n  x)\n";
-        assert_eq!(
-            resolve(Path::new("r.cljc"), src, "render", Some(5)),
-            Some((5, 7))
-        );
-    }
 
     #[test]
     fn ts_function() {

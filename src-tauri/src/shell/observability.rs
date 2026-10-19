@@ -1,164 +1,93 @@
-/// Cheap, agent-free drift status: nodes with OUT-OF-PLAN regressions to mapped
-/// code — a committed anchor that broke or changed since the last reconcile with
-/// no pending plan item to explain it (see `anchors::out_of_plan_scopes`). Stays
-/// quiet while the plan is being implemented (that churn is expected) and ticks
-/// when code diverges from the model outside the plan. Used to nudge the user to
-/// run a semantic check — it never decides the model drifted, only where to look.
-#[tauri::command]
-pub(crate) async fn get_drift_status(cwd: String) -> Result<Vec<scryer_core::drift::DriftScope>, String> {
-    // Off the main thread: a sync command runs on the UI thread and stalls the window.
-    tauri::async_runtime::spawn_blocking(move || drift_status(&cwd))
-        .await
-        .map_err(|e| format!("drift-status task failed: {e}"))?
-}
+//! What the observability surfaces read: the health report over the derived
+//! tree (coverage, link evidence, style conformance, dark files and every
+//! claim's status) and the per-claim verdicts and probe results the Tests
+//! lens marks rows with. All of it is derived from the code and the last
+//! ingested reports; nothing here is stored.
 
-fn drift_status(cwd: &str) -> Result<Vec<scryer_core::drift::DriftScope>, String> {
-    let project = std::path::Path::new(cwd);
-    let model_ref = scryer_core::ModelRef::ProjectLocal(project.to_path_buf());
-
-    // A model that has never been reconciled has no `.sync` anchor, so the
-    // baseline defaults to epoch 0 and *every* file reads as "changed since
-    // reconcile" — flagging every boundary-owning node as drift, forever. There
-    // is no baseline to diff against, so that verdict is pure noise. Seed the
-    // anchor to the current commit/time (treat the model as in-sync as of now)
-    // and report nothing; real drift then surfaces once code changes after this
-    // point. Models built through the MCP tools land here, since only the in-app
-    // build and drift-check completion write the anchor.
-    if !model_ref.sync_path().exists() {
-        let _ = scryer_core::write_sync_state(
-            &model_ref,
-            &scryer_core::drift::SyncState::anchored_now(scryer_core::drift::head_commit(project)),
-        );
-        let _ = scryer_extract::anchors::write_baseline(&model_ref);
-        return Ok(Vec::new());
-    }
-
-    scryer_extract::anchors::out_of_plan_scopes(&model_ref)
-}
-
-/// Everything the observability surfaces read, in one deterministic pass — no
-/// agent involved, no git. Composes the per-node health rollup (computed
-/// discharge + anchor coverage + boundary darkness), the anchor fingerprint
-/// check (changed/broken anchors, with moved-but-unchanged symbols silently
-/// re-anchored as a side effect), and the link evidence (declared-link audit +
-/// unmodeled candidates). Runs the extractor, so it also refreshes the
-/// `.build_edges.json` cache the MCP commit tool reads.
+/// Everything the health surfaces read, in one deterministic pass. Runs the
+/// extractor, so it also refreshes the `.build_edges.json` cache.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ModelHealthReport {
     health: scryer_core::health::ModelHealth,
-    /// Per-node build completeness (anchored primitives over authored ones),
-    /// keyed by node id. Spans committed + planned, so it is defined from
-    /// greenfield onward.
+    /// Per-node completeness (anchored primitives over all of them), keyed
+    /// by node id.
     completeness: std::collections::BTreeMap<String, scryer_core::health::Completeness>,
-    /// Anchors whose code changed/broke since the last reconcile.
-    anchors: Vec<scryer_extract::anchors::AnchorObservation>,
-    /// Anchors silently healed this pass (symbol moved, content unchanged).
-    reanchored: usize,
     derived: scryer_core::build_edges::DerivedGraph,
-    /// Structural violations: code-time conformance to each container's declared style, over the
-    /// same resolved import graph as `derived`.
+    /// Structural violations: the code held against each container's style
+    /// from structure.toml, over the same resolved import graph.
     structural: scryer_core::style_health::StyleReport,
     /// The project's style table (built-ins plus `.scryer/styles/*.json`), so
     /// the diagram draws custom styles with their own layers.
     styles: Vec<scryer_core::style::StyleDef>,
+    /// Every claim's state and probe mark, and the health counts per node.
+    derived_status: scryer_core::derived_tree::DerivedStatus,
 }
 
 #[tauri::command]
 pub(crate) async fn get_model_health(cwd: String) -> Result<ModelHealthReport, String> {
     // The extractor parses the whole repo (seconds on a big project) — keep it
     // off the IPC thread so the UI stays responsive while the report computes.
-    tauri::async_runtime::spawn_blocking(move || {
-        let project = std::path::Path::new(&cwd);
-        let model_ref = scryer_core::ModelRef::ProjectLocal(project.to_path_buf());
-
-        // Check (and self-heal) anchors first: re-anchoring may update sourceMap
-        // line ranges, and the health/evidence below should see the healed model.
-        let check = scryer_extract::anchors::check_anchors(&model_ref)?;
-        let model = scryer_core::read_model_at(&model_ref)?;
-
-        let (ctx, _) = scryer_extract::extract_context_with_stats(project)?;
-        let files: std::collections::BTreeSet<String> =
-            ctx.files.iter().map(|f| f.rel_path.clone()).collect();
-        let edges = ctx.build_edges();
-        // Keep the cross-process cache fresh for the MCP commit tool. Best-effort.
-        let _ = scryer_core::build_edges::write_build_edges(project, &edges);
-
-        // Completeness spans the authored model, so resolve the plan against real
-        // files. Boundary globs can own files the parser skips (config/assets), so
-        // match against the full inventory, not just the parsed source set.
-        let planned = scryer_core::read_planned_at(&model_ref).unwrap_or_else(|_| model.clone());
-        let all_files = scryer_extract::list_project_files(project);
-        let dead: std::collections::HashSet<&str> = check
-            .observations
-            .iter()
-            .filter(|o| {
-                matches!(
-                    o.state,
-                    scryer_extract::anchors::AnchorState::Broken
-                        | scryer_extract::anchors::AnchorState::FileMissing
-                )
-            })
-            .map(|o| o.key.as_str())
-            .collect();
-        let completeness =
-            scryer_core::health::resolve_completeness(&model, &planned, &all_files, &dead);
-
-        let derived = scryer_core::build_edges::derive_graph(&model, &edges);
-        let styles = scryer_core::load_styles(project);
-        let structural = scryer_core::style_health::check_code(
-            &model,
-            &styles,
-            &derived,
-            &edges,
-            Some(&all_files),
-        );
-        let styles: Vec<scryer_core::style::StyleDef> = styles.iter().cloned().collect();
-        Ok(ModelHealthReport {
-            health: scryer_core::health::compute_health(&model, Some(&planned), Some(&files)),
-            completeness,
-            anchors: check.observations,
-            reanchored: check.reanchored,
-            derived,
-            structural,
-            styles,
-        })
-    })
-    .await
-    .map_err(|e| format!("health task failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || model_health(std::path::Path::new(&cwd)))
+        .await
+        .map_err(|e| format!("health task failed: {e}"))?
 }
 
-/// Per-claim test verdicts from the status cache, each re-verified against the
-/// working tree as it stands (fingerprint compare with an mtime fast path, so
-/// the steady state costs stats, not parses). Empty until a test report has
-/// been ingested. The canvas colors claim rows from this — quiet when green,
-/// amber when stale, red when failing.
+fn model_health(project: &std::path::Path) -> Result<ModelHealthReport, String> {
+    let model_ref = scryer_core::ModelRef::ProjectLocal(project.to_path_buf());
+    let (tree, status) = scryer_extract::test_status::derived_status(&model_ref)?;
+    let (ctx, _) = scryer_extract::extract_context_with_stats(project)?;
+    let edges = ctx.build_edges();
+    let _ = scryer_core::build_edges::write_build_edges(project, &edges);
+    let all_files = scryer_extract::list_project_files(project);
+    let derived = scryer_core::build_edges::derive_graph(&tree.committed, &edges);
+    let styles = scryer_core::load_styles(project);
+    let structural = scryer_core::style_health::check_code(&tree.committed, &styles, &derived, &edges, Some(&all_files));
+    let mut health = scryer_core::health::compute_health(&tree.committed, Some(&tree.planned), Some(&all_files));
+    // Darkness is test reach: the files no test reaches by import.
+    for (id, node) in health.nodes.iter_mut() {
+        if let Some(b) = node.boundary.as_mut() {
+            b.dark_files = status.nodes.get(id).map(|n| n.dark_files.clone()).unwrap_or_default();
+            b.anchored_files = b.total_files.saturating_sub(b.dark_files.len() as u32);
+        }
+    }
+    let completeness =
+        scryer_core::health::resolve_completeness(&tree.planned, &all_files, &std::collections::HashSet::new());
+    Ok(ModelHealthReport {
+        health,
+        completeness,
+        derived,
+        structural,
+        styles: styles.iter().cloned().collect(),
+        derived_status: status,
+    })
+}
+
+/// Per-claim test verdicts, each re-verified against the working tree as it
+/// stands. Empty until a test report has been ingested. The tree and node
+/// pages color claim rows from this.
 #[tauri::command]
 pub(crate) async fn get_test_statuses(
     cwd: String,
 ) -> Result<Vec<scryer_extract::test_status::ClaimTestStatus>, String> {
-    // A cold check after wide edits re-hashes many files — keep it off the IPC
-    // thread like the health report.
     tauri::async_runtime::spawn_blocking(move || {
         let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
-        scryer_extract::test_status::test_statuses(&model_ref)
+        scryer_extract::test_status::derived_status(&model_ref).map(|(_, s)| s.tests)
     })
     .await
     .map_err(|e| format!("test-status task failed: {e}"))?
 }
 
-/// Per-claim PROBE results — how many deliberate breaks a claim's attached
-/// test was asked to catch, and how many it missed. A separate axis from the
-/// verdict: a claim can be green and still have a survivor, which is exactly
-/// the state worth seeing. Claims nobody has probed are absent rather than
-/// zeroed, so unprobed never renders as clean.
+/// Per-claim probe results — deliberate breaks a claim's test was asked to
+/// catch and how many it missed, from probe rounds and mutation reports.
+/// Claims nobody has probed are absent rather than zeroed.
 #[tauri::command]
 pub(crate) async fn get_probe_statuses(
     cwd: String,
 ) -> Result<Vec<scryer_extract::test_status::ClaimProbeStatus>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let model_ref = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(&cwd));
-        scryer_extract::test_status::probe_statuses(&model_ref)
+        scryer_extract::test_status::derived_status(&model_ref).map(|(_, s)| s.probes)
     })
     .await
     .map_err(|e| format!("probe-status task failed: {e}"))?
@@ -166,97 +95,26 @@ pub(crate) async fn get_probe_statuses(
 
 #[cfg(test)]
 mod tests {
-    use scryer_core::{ModelRef, ScryModel};
+    fn write(dir: &std::path::Path, rel: &str, text: &str) {
+        let path = dir.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
 
-    const ALPHA: &str = "export function alpha() {\n    return 1;\n}\n";
-    const BETA: &str = "export function beta() {\n    return 2;\n}\n";
-
-    /// A project whose model anchors one symbol node per given (id, symbol,
-    /// file) triple, identical in both layers.
-    fn project(files: &[(&str, &str, &str)]) -> (tempfile::TempDir, ModelRef, String) {
+    /// The health report reads the derived tree: claims carry their derived
+    /// status, and a file no test reaches is the dark file of its node.
+    #[test]
+    fn health_reports_the_derived_tree_with_its_status_and_dark_files() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join("src")).unwrap();
-        let mut m = ScryModel::new();
-        m.nodes.push(
-            serde_json::from_value(
-                serde_json::json!({ "id": "node-1", "kind": "system", "name": "Acme" }),
-            )
-            .unwrap(),
-        );
-        for (i, (id, symbol, file)) in files.iter().enumerate() {
-            let content = if *symbol == "alpha" { ALPHA } else { BETA };
-            std::fs::write(dir.path().join(file), content).unwrap();
-            let mut sym: scryer_core::Node = serde_json::from_value(serde_json::json!({
-                "id": id, "kind": "symbol", "name": symbol, "parentId": "node-1"
-            }))
-            .unwrap();
-            let rid = format!("resp-{i}");
-            sym.responsibilities = vec![serde_json::from_value(
-                serde_json::json!({ "id": rid, "statement": format!("does {symbol}") }),
-            )
-            .unwrap()];
-            m.nodes.push(sym);
-            m.source_map.insert(
-                rid,
-                vec![serde_json::from_value(
-                    serde_json::json!({ "pattern": file, "symbol": symbol, "line": 1, "endLine": 3 }),
-                )
-                .unwrap()],
-            );
-        }
-        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
-        scryer_core::write_model_at(&r, &m).unwrap();
-        scryer_core::write_planned_at(&r, &m).unwrap();
-        let cwd = dir.path().to_string_lossy().to_string();
-        (dir, r, cwd)
-    }
-
-    /// The sync anchor is nanosecond-precise; a token gap keeps a later edit
-    /// strictly after it even on coarse-clock filesystems.
-    fn touch_gate() {
-        std::thread::sleep(std::time::Duration::from_millis(25));
-    }
-
-    /// With no reconcile baseline, the first status check seeds the anchor to
-    /// now and reports NOTHING — not everything.
-    #[test]
-    fn a_first_status_check_seeds_the_anchor_and_reports_nothing() {
-        let (_dir, r, cwd) = project(&[("node-2", "alpha", "src/alpha.ts")]);
-        assert!(!r.sync_path().exists());
-        let scopes = super::drift_status(&cwd).unwrap();
-        assert!(scopes.is_empty(), "{scopes:?}");
-        assert!(r.sync_path().exists(), "the anchor is seeded for next time");
-    }
-
-    /// After the seed, an out-of-plan regression to mapped code — an anchored
-    /// definition gone with no plan item explaining it — is reported.
-    #[test]
-    fn status_reports_out_of_plan_regressions_to_mapped_code() {
-        let (dir, _r, cwd) = project(&[("node-2", "alpha", "src/alpha.ts")]);
-        assert!(super::drift_status(&cwd).unwrap().is_empty());
-
-        touch_gate();
-        std::fs::write(dir.path().join("src/alpha.ts"), BETA).unwrap();
-        let scopes = super::drift_status(&cwd).unwrap();
-        assert_eq!(scopes.len(), 1, "{scopes:?}");
-        assert_eq!(scopes[0].node_id, "node-2");
-    }
-
-    /// The health report checks and SELF-HEALS anchors first (a moved symbol is
-    /// re-anchored), then computes completeness against the healed model.
-    #[test]
-    fn health_self_heals_anchors_then_computes() {
-        let (dir, r, cwd) = project(&[("node-2", "alpha", "src/alpha.ts")]);
-        assert!(super::drift_status(&cwd).unwrap().is_empty());
-        touch_gate();
-        // Push alpha down; its text is unchanged — heal, not drift.
-        std::fs::write(dir.path().join("src/alpha.ts"), format!("// pad\n// pad\n{ALPHA}")).unwrap();
-
-        let report = tauri::async_runtime::block_on(super::get_model_health(cwd)).unwrap();
-        assert_eq!(report.reanchored, 1, "moved symbol healed");
-        assert!(report.anchors.is_empty(), "healed, so no observations");
-        assert!(!report.completeness.is_empty(), "completeness computed");
-        let healed = scryer_core::read_model_at(&r).unwrap();
-        assert_eq!(healed.source_map["resp-0"][0].line, Some(3), "the model saw the heal");
+        let d = dir.path();
+        write(d, "Cargo.toml", "[package]\nname = \"core\"\nversion = \"0.1.0\"\n");
+        write(d, "src/lib.rs", "pub mod draft;\npub mod store;\n");
+        write(d, "src/draft.rs", "pub fn save() {}\n#[cfg(test)]\nmod tests {\n    /// Saves\n    #[test]\n    fn saves() {}\n}\n");
+        write(d, "src/store.rs", "pub fn put() {}\n");
+        let report = super::model_health(d).unwrap();
+        assert_eq!(report.derived_status.totals.claims, 1);
+        assert_eq!(report.derived_status.totals.stale, 1, "no report has covered it yet");
+        let dark: Vec<&String> = report.derived_status.nodes.values().flat_map(|n| n.dark_files.iter()).collect();
+        assert!(dark.iter().any(|f| f.as_str() == "src/store.rs"), "{dark:?}");
     }
 }

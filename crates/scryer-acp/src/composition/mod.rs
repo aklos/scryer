@@ -1,7 +1,10 @@
 //! The crate's entry points: everything that reaches the outside world to
 //! decide WHICH agent to launch, and the handle another container drives a
-//! session through. The runtime itself stays private — a consumer names this
-//! handle, never the subprocess adapter behind it.
+//! session through. A known MCP client name maps to its CLI (print mode for
+//! Claude Code and Codex, ACP for Copilot), anything else to a `{name}-acp`
+//! adapter or bare binary on PATH; a user preference is tried first, then the
+//! rest in a fixed order. The runtime itself stays private — a consumer names
+//! this handle, never the subprocess adapter behind it.
 
 use crate::domain::events::AgentEvent;
 use crate::domain::launch::{AcpKind, AgentKind, AgentLaunch, LaunchMode};

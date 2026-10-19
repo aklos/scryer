@@ -1,81 +1,28 @@
+/**
+ * The settings panel: the project's one agent-integration switch, and which
+ * coding agent the app launches for preview fixtures, with its model and
+ * reasoning effort.
+ */
+
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { Check, X } from "lucide-react";
 import { Input, Select } from "../../shared/ui";
 import { BTN, BTN_GO, BTN_ICON, EYEBROW, SegField } from "../../shared/ui/pagekit";
-import { HOOK_TARGETS, useMcpSetup, type HookStatus } from "../../features/mcp-setup/useMcpSetup";
-
-/** The agents a fill can run with, in the order they're fallen back to when the
- *  preferred one isn't installed. Mirrors `detect_available_agent_pref`, so the
- *  readout here and the agent that actually launches can't disagree. */
-const AGENTS = ["claudeCode", "codex", "copilot"] as const;
-type LaunchAgent = (typeof AGENTS)[number];
-type AgentPref = "auto" | LaunchAgent;
-
-interface AgentSettings {
-  model: string;
-  effort: string;
-}
-
-export interface SubagentSettings {
-  agent: AgentPref;
-  claude: AgentSettings;
-  codex: AgentSettings;
-  copilot: AgentSettings;
-  /** Confirm before a UI action launches an agent. "Don't ask again" clears it. */
-  confirmLaunch: boolean;
-}
-
-export interface Detected {
-  claude: boolean;
-  codex: boolean;
-  copilot: boolean;
-}
-
-/** Each agent's key in `Detected` and in the settings blocks — the same word in
- *  both, so one map serves the availability check and the model/effort lookup. */
-const AGENT_KEY: Record<LaunchAgent, "claude" | "codex" | "copilot"> = {
-  claudeCode: "claude",
-  codex: "codex",
-  copilot: "copilot",
-};
-
-const DEFAULT_AGENT: AgentSettings = { model: "", effort: "medium" };
-export const SUBAGENT_DEFAULTS: SubagentSettings = {
-  agent: "auto",
-  claude: { ...DEFAULT_AGENT },
-  codex: { ...DEFAULT_AGENT },
-  copilot: { ...DEFAULT_AGENT },
-  confirmLaunch: true,
-};
-
-/** Which agent a fill will actually use given the preference + what's installed,
- *  and the model + effort it runs with. Shared by the settings panel and the
- *  powerline so the launch readout and the editor can never disagree. `model`
- *  empty means the agent CLI's own default. */
-export interface ResolvedLaunch {
-  agent: LaunchAgent | null;
-  model: string;
-  effort: string;
-}
-
-export const AGENT_LABEL: Record<LaunchAgent, string> = {
-  claudeCode: "Claude Code",
-  codex: "Codex",
-  copilot: "Copilot CLI",
-};
-
-export function resolveLaunch(settings: SubagentSettings, detected: Detected): ResolvedLaunch {
-  const installed = (a: LaunchAgent) => detected[AGENT_KEY[a]];
-  // Preference first, then the standing order — so an uninstalled preference
-  // degrades to a working agent rather than to nothing.
-  const order: LaunchAgent[] =
-    settings.agent === "auto" ? [...AGENTS] : [settings.agent, ...AGENTS];
-  const agent = order.find(installed) ?? null;
-  const a = agent ? settings[AGENT_KEY[agent]] : null;
-  return { agent, model: a?.model ?? "", effort: a?.effort ?? "" };
-}
+import { AgentIntegrationSwitch } from "../../features/agent-integration/AgentIntegrationSwitch";
+import {
+  AGENT_KEY,
+  AGENT_LABEL,
+  AGENTS,
+  type AgentPref,
+  type AgentSettings,
+  type Detected,
+  type LaunchAgent,
+  resolveLaunch,
+  SUBAGENT_DEFAULTS,
+  type SubagentSettings,
+} from "../../features/agent-launch/launchSettings";
 
 // Effort levels are agent-specific (from each CLI's own option set).
 const CLAUDE_EFFORT = ["low", "medium", "high", "xhigh", "max"];
@@ -113,7 +60,7 @@ export function SettingsPanel({
   projectPath,
 }: {
   onClose: () => void;
-  /** Current project, when one is open — enables the per-project session-hooks action. */
+  /** Current project, when one is open — shows its agent-integration switch. */
   projectPath?: string | null;
 }) {
   const [settings, setSettings] = useState<SubagentSettings>(SUBAGENT_DEFAULTS);
@@ -123,13 +70,12 @@ export function SettingsPanel({
     copilot: false,
   });
   const [saving, setSaving] = useState(false);
-  const mcpSetup = useMcpSetup(projectPath ?? null);
 
   useEffect(() => {
     invoke<SubagentSettings>("get_subagent_settings")
       .then((s) => setSettings({ ...SUBAGENT_DEFAULTS, ...s }))
       .catch(() => {});
-    invoke<Detected>("detect_ai_tools", { projectPath: null })
+    invoke<Detected>("detect_ai_tools")
       .then((d) => setDetected({ claude: !!d.claude, codex: !!d.codex, copilot: !!d.copilot }))
       .catch(() => {});
   }, []);
@@ -173,7 +119,7 @@ export function SettingsPanel({
 
         <div className="flex flex-col gap-4 px-4 py-4">
           <p className="text-xs text-[var(--text-muted)]">
-            Controls which AI agent fills out the architecture model, and the model + reasoning
+            Which AI agent the app launches to write preview fixtures, and the model + reasoning
             effort it runs with. An empty model uses the agent CLI's own default.
           </p>
 
@@ -247,65 +193,9 @@ export function SettingsPanel({
             }
           })()}
 
-          {projectPath &&
-            (mcpSetup.tools.claude || mcpSetup.tools.codex || mcpSetup.tools.copilot) && (
-            <Field label="Session hooks (this project)">
-              <p className="text-xs leading-relaxed text-[var(--text-muted)]">
-                Let agent sessions see the model as they work: each prompt logged as asks, each
-                file's claims and directives as they work in it, and a close check on the claims
-                they touched. Installed per tool; they run whether or not Scryer is open.
-              </p>
-              {mcpSetup.tools.claude && (
-                <HooksRow
-                  name="Claude Code"
-                  target={HOOK_TARGETS.claude}
-                  status={mcpSetup.tools.claudeHooks}
-                  busy={mcpSetup.busy}
-                  onInstall={() => void mcpSetup.enableHooks("claude")}
-                />
-              )}
-              {mcpSetup.tools.codex && (
-                <HooksRow
-                  name="Codex"
-                  target={HOOK_TARGETS.codex}
-                  status={mcpSetup.tools.codexHooks}
-                  busy={mcpSetup.busy}
-                  onInstall={() => void mcpSetup.enableHooks("codex")}
-                />
-              )}
-              {mcpSetup.tools.copilot && (
-                <>
-                  <HooksRow
-                    name="Copilot CLI"
-                    target={HOOK_TARGETS.copilot}
-                    status={mcpSetup.tools.copilotHooks}
-                    busy={mcpSetup.busy}
-                    onInstall={() => void mcpSetup.enableHooks("copilot")}
-                  />
-                  <p className="text-xs leading-relaxed text-[var(--text-muted)]">
-                    Copilot loads a project's hooks — and its MCP servers — only in a folder
-                    you've trusted, and asks the first time you open one. Until you do, it stays
-                    silent about both.
-                  </p>
-                </>
-              )}
-            </Field>
-          )}
-
-          {projectPath && mcpSetup.tools.claude && (
-            <Field label="Status line (this project)">
-              <p className="text-xs leading-relaxed text-[var(--text-muted)]">
-                Show the model's status — pending, drift, anchor health — in Claude Code's status
-                line. Unlike the session hooks, it keeps reporting while Scryer is closed: the
-                command reads the model straight off disk.
-              </p>
-              <StatuslineRow
-                target=".claude/settings.local.json"
-                installed={mcpSetup.tools.claudeStatuslineEnabled}
-                foreign={mcpSetup.tools.claudeStatuslineForeign}
-                busy={mcpSetup.busy}
-                onInstall={() => void mcpSetup.enableStatusline()}
-              />
+          {projectPath && (
+            <Field label="This project">
+              <AgentIntegrationSwitch projectPath={projectPath} />
             </Field>
           )}
         </div>
@@ -336,90 +226,6 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     <div className="flex flex-col gap-1.5">
       <span className={EYEBROW}>{label}</span>
       {children}
-    </div>
-  );
-}
-
-/** One tool's hook-install state: installed check, or the target file + an
- *  Install button — Update when the install predates the current hooks. */
-export function HooksRow({
-  name,
-  target,
-  status,
-  busy,
-  onInstall,
-}: {
-  name: string;
-  target: string;
-  status: HookStatus;
-  busy: boolean;
-  onInstall: () => void;
-}) {
-  const outdated = status === "outdated";
-  return (
-    <div className="flex items-center justify-between gap-2">
-      <span className="text-xs text-[var(--text)]">{name}</span>
-      {status === "current" ? (
-        <span className="flex items-center gap-1 text-xs text-emerald-500">
-          <Check className="h-3 w-3" /> Installed
-        </span>
-      ) : (
-        <span className="flex items-center gap-2">
-          {outdated ? (
-            <span className="text-xs text-orange-600 dark:text-orange-400">Outdated</span>
-          ) : (
-            <span className="font-mono text-xs text-[var(--text-muted)]">{target}</span>
-          )}
-          <button
-            type="button"
-            className={outdated ? BTN_GO : BTN}
-            disabled={busy}
-            onClick={onInstall}
-            title={outdated ? `Rewrite scryer's hook entries in ${target}` : undefined}
-          >
-            {outdated ? (busy ? "Updating…" : "Update") : busy ? "Installing…" : "Install"}
-          </button>
-        </span>
-      )}
-    </div>
-  );
-}
-
-/** The statusLine install state. Like a HooksRow, but statusLine is a single
- *  slot (whole-line replacement), so a foreign line is never clobbered — that
- *  case shows a note in place of the Install button. */
-function StatuslineRow({
-  target,
-  installed,
-  foreign,
-  busy,
-  onInstall,
-}: {
-  target: string;
-  installed: boolean;
-  foreign: boolean;
-  busy: boolean;
-  onInstall: () => void;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-2">
-      <span className="text-xs text-[var(--text)]">Claude Code</span>
-      {installed ? (
-        <span className="flex items-center gap-1 text-xs text-emerald-500">
-          <Check className="h-3 w-3" /> Installed
-        </span>
-      ) : foreign ? (
-        <span className="text-xs text-[var(--text-muted)]">
-          A status line is already configured — left untouched.
-        </span>
-      ) : (
-        <span className="flex items-center gap-2">
-          <span className="font-mono text-xs text-[var(--text-muted)]">{target}</span>
-          <button type="button" className={BTN} disabled={busy} onClick={onInstall}>
-            {busy ? "Installing…" : "Install"}
-          </button>
-        </span>
-      )}
     </div>
   );
 }

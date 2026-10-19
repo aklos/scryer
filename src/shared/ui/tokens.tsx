@@ -1,6 +1,6 @@
 import { Fragment } from "react";
 import { Bot } from "lucide-react";
-import { wordDiff } from "../../features/markup/wordDiff";
+import { wordDiff } from "../lib/wordDiff";
 
 const EMPTY_HINT =
   "Empty — no responsibilities or properties. Give it a business responsibility or remove the node.";

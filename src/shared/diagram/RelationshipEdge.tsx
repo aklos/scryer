@@ -1,12 +1,10 @@
 /**
- * The relationship edge for the diagram — a faithful port of the pre-pivot
- * canvas edge (`RelationshipEdge`), adapted to the read-only v0.3 diagram.
- *
- * Kept from main: the animated dashed line, the clipped arrowhead, the
- * label/method pill, and the hover midpoint dot. Dropped: orthogonal route
- * geometry, bidirectional pair-shift, mention/dim/highlight states, and the old
- * endpoint-status coloring — the change-mark palette lives on the nodes now, so
- * edges read as neutral chrome.
+ * The relationship edge for the diagram — a port of the pre-pivot canvas edge:
+ * a dashed chord with a clipped arrowhead and a label/method pill. A reverse
+ * pair splits into parallel lanes, code-tier edges inset to their dots' rims,
+ * same-ring edges in a styled level bow outward, and edges light or fade with
+ * the selection. An edge carrying structural violations is drawn red, and
+ * clicking it lists the reasons beside it.
  */
 
 import {

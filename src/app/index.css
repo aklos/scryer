@@ -388,3 +388,12 @@
 * {
   scrollbar-width: thin;
 }
+
+/* The demo film renders every frame on its own, so under [data-film] nothing
+   moves by the clock: no transitions, no animations. */
+[data-film] *,
+[data-film] *::before,
+[data-film] *::after {
+  transition: none !important;
+  animation: none !important;
+}

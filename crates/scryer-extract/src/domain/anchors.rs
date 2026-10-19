@@ -1,120 +1,12 @@
-//! What an anchor IS and how a span is recognised: the fingerprint entries the
-//! baseline stores, the observations a check produces, and the pure resolution
-//! of a symbol to its span in a given source text. Reading files and the model
-//! is the infrastructure's job — see `infrastructure::anchors`.
+//! How an anchor's span is recognised and fingerprinted: the pure resolution
+//! of a symbol (or a line range, or a whole file) to its span in a given
+//! source text, and the content hash a verdict records for it.
 
 use crate::domain::lang;
-use scryer_core::ScryModel;
-use serde::{Deserialize, Serialize};
-
-/// One fingerprinted anchor: a sourceMap location resolved to a concrete span
-/// at reconcile time.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AnchorEntry {
-    /// The sourceMap key — a responsibility id, or a node id for a data-shape
-    /// declaration anchor.
-    pub key: String,
-    pub file: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub symbol: Option<String>,
-    /// 1-based inclusive line span that was fingerprinted.
-    pub start: u32,
-    pub end: u32,
-    /// FNV-1a 64 hex of the span text (line endings normalized).
-    pub hash: String,
-    /// How many same-named defs the file held at baseline time (symbol anchors
-    /// only; 0 = unknown or not a symbol anchor). Lets the checker tell "my
-    /// def was deleted while a sibling survives" (count shrank, no content
-    /// match → broken) from "my def was edited in place" (changed).
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub peers: u32,
-    /// The originating sourceMap GLOB when this entry came from expanding one
-    /// (`file` is then a concrete matched file). Links the entry back to its
-    /// model location, which spells the glob, not the file.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pattern: Option<String>,
-}
-
-impl AnchorEntry {
-    /// What the model's sourceMap location spells for this entry: the glob it
-    /// was expanded from, or the literal file path.
-    pub(crate) fn source_pattern(&self) -> &str {
-        self.pattern.as_deref().unwrap_or(&self.file)
-    }
-}
-
-pub(crate) fn is_zero(n: &u32) -> bool {
-    *n == 0
-}
-
-/// The model locations behind a baseline key: `test:`-namespaced keys read
-/// the test_map (claim → attached test), plain keys the source_map. One
-/// baseline fingerprints both dimensions.
-pub(crate) fn keyed_locs<'m>(
-    model: &'m ScryModel,
-    key: &str,
-) -> Option<&'m Vec<scryer_core::SourceLocation>> {
-    match scryer_core::test_resp_id(key) {
-        Some(id) => model.test_map.get(id),
-        None => model.source_map.get(key),
-    }
-}
-
-pub(crate) fn keyed_locs_mut<'m>(
-    model: &'m mut ScryModel,
-    key: &str,
-) -> Option<&'m mut Vec<scryer_core::SourceLocation>> {
-    match scryer_core::test_resp_id(key) {
-        Some(id) => model.test_map.get_mut(id),
-        None => model.source_map.get_mut(key),
-    }
-}
 
 /// A sourceMap pattern with glob metacharacters claims territory, not a file.
 pub(crate) fn is_glob_pattern(p: &str) -> bool {
     p.contains(['*', '?', '['])
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AnchorBaseline {
-    #[serde(default)]
-    pub anchors: Vec<AnchorEntry>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum AnchorState {
-    /// The anchored span's content changed since the reconcile.
-    Changed,
-    /// The anchor's symbol no longer exists in the file.
-    Broken,
-    /// The anchor's file no longer exists.
-    FileMissing,
-}
-
-/// A blur observation: one anchor whose code no longer matches what the model
-/// last saw. Scoping for a semantic re-check, never a verdict.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AnchorObservation {
-    pub key: String,
-    pub host_id: String,
-    pub host_name: String,
-    pub file: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub symbol: Option<String>,
-    pub state: AnchorState,
-}
-
-/// Outcome of an anchor check.
-#[derive(Debug, Default)]
-pub struct AnchorCheck {
-    pub observations: Vec<AnchorObservation>,
-    /// Anchors whose symbol moved without changing — sourceMap line ranges
-    /// were updated in place (self-healing, not drift).
-    pub reanchored: usize,
 }
 
 /// Hash a 1-based inclusive line span with FNV-1a 64 — deterministic and
@@ -139,28 +31,6 @@ pub(crate) fn fnv1a64_continue(mut h: u64, bytes: &[u8]) -> u64 {
         h = h.wrapping_mul(0x100000001b3);
     }
     h
-}
-
-/// 1-based start lines of every `len`-line window whose content hashes to
-/// `hash`, up to `limit` (the caller treats more than one as ambiguous, so
-/// scanning further is wasted work). This is what lets a LINE-ONLY anchor
-/// survive an insertion above it: the remembered content is searched for,
-/// not just re-read at the remembered position.
-pub(crate) fn find_spans_by_hash(lines: &[&str], len: u32, hash: &str, limit: usize) -> Vec<u32> {
-    let mut out = Vec::new();
-    let n = lines.len() as u32;
-    if len == 0 || n < len {
-        return out;
-    }
-    for start in 1..=(n - len + 1) {
-        if span_hash(lines, start, start + len - 1) == hash {
-            out.push(start);
-            if out.len() >= limit {
-                break;
-            }
-        }
-    }
-    out
 }
 
 /// Every definition matching `name` — identifier defs first, then string-named
@@ -225,14 +95,3 @@ pub fn covers_extent(line: u32, end_line: u32, extent: (u32, u32)) -> bool {
     line <= extent.0 + 1 && end_line + 1 >= extent.1
 }
 
-/// A sourceMap anchor with NO fingerprint in the baseline: a span the
-/// tripwire cannot watch. No drift will ever fire for it, so health must say
-/// so — a silent anchor reading as green is the trust-burning failure mode.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UntrackedAnchor {
-    pub key: String,
-    pub file: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub symbol: Option<String>,
-}

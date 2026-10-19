@@ -1,3 +1,9 @@
+/**
+ * Toast notifications: `ToastProvider` stacks transient messages (error by
+ * default, or success / info), each dismissing itself after five seconds, and
+ * `useToast()` hands callers the `toast` function.
+ */
+
 import { createContext, useCallback, useContext, useRef, useState } from "react";
 import type { ReactNode } from "react";
 

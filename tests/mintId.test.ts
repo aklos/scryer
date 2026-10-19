@@ -30,7 +30,7 @@ describe("mintId", () => {
     }
   });
 
-  it("clears both the plan and the committed layer when adding a node", () => {
+  it("When a node is added, clears both the plan and the committed layer", () => {
     const plan = model(["node-1"]);
     const committed = model(["node-1", "node-2"]);
     const id = nextNodeId(plan, committed);

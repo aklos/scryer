@@ -1,14 +1,13 @@
 /*
  * Demo-only typography. The product ships no webfonts — it inherits the OS
  * stack, which looks right in the desktop app but falls back to DejaVu on the
- * headless Linux chromium that records the trailer. The demo bundles real
- * fonts instead (imported in main.tsx via @fontsource), and this file points
+ * headless Linux chromium that renders the film. The demo bundles real
+ * fonts instead (imported in Root.tsx via @fontsource), and this file points
  * every stack at them:
  *   - Inter          → the app UI (Tailwind's sans stack)
  *   - JetBrains Mono → statements, tree, terminal, code (every mono stack)
  *   - Space Grotesk  → the kinetic treatment + annotations (already named
  *                      there; it just never had a face to resolve to)
- * Loaded AFTER src/index.css, so equal-specificity overrides win by order.
  */
 
 :root {

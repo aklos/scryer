@@ -1,3 +1,8 @@
+//! Component previews: starts or reuses the shared preview dev server (the
+//! embedded `preview/` sidecar, run by `node`), and launches an agent to
+//! author fixture data when a deterministic render comes out empty or
+//! crashes. Also holds the command that cancels agent sessions.
+
 use std::path::PathBuf;
 
 use tauri::Emitter;
@@ -171,7 +176,6 @@ fn node_source_file(model: &scryer_core::ScryModel, node_id: &str) -> String {
 #[tauri::command]
 pub(crate) async fn start_preview_fixture_session(
     cwd: String,
-    model_ref: String,
     node_id: String,
     render_status: String,
     render_error: Option<String>,
@@ -185,8 +189,7 @@ pub(crate) async fn start_preview_fixture_session(
     let launch = scryer_acp::detect_available_agent_pref(&settings.agent)
         .ok_or("No AI agent found. Install Claude Code, Codex or Copilot CLI first.")?;
 
-    let parsed_ref = scryer_core::ModelRef::parse(&model_ref)?;
-    let model = scryer_core::read_model_at(&parsed_ref)?;
+    let model = scryer_extract::derived_tree::derived_tree(std::path::Path::new(&cwd))?.planned;
     let node = model
         .nodes
         .iter()
@@ -307,8 +310,7 @@ mod tests {
         );
     }
 
-    /// A node's source file comes from its own source-map entry first, then
-    /// its first anchored responsibility; empty when nothing anchors.
+    /// When a node's source file is resolved, takes its own source-map entry, then its first anchored claim, and is empty if nothing anchors.
     #[test]
     fn node_source_resolves_own_anchor_then_first_responsibility() {
         let mut m = scryer_core::ScryModel::new();

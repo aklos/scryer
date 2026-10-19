@@ -1,21 +1,21 @@
 /**
- * The secondary Diagram view — a navigational projection of the model. It
- * renders one level at a time (the children of a focus node) and shares the
- * workspace selection with the tree and the wiki page:
+ * The Diagram view — a navigational projection of the tree. It renders one
+ * level at a time (the children of a focus node) and shares the workspace
+ * selection with the tree and the wiki page:
  *
  *   - single-click a node      → select it (drives the shared selection)
  *   - double-click a container → drill into it (descend a level)
  *   - the ↗ button on a card   → drill into it (same)
  *   - breadcrumb               → ascend to any ancestor level
- *   - drag a card (arch tiers) → place it manually; the spot persists on the
- *     node (`position`) and auto-layout only places the unpinned rest
+ *   - click a red edge         → list its structural violations
  *   - drag a dot (code tier)   → tug the live constellation apart (a resident
  *     d3-force sim, `useDotSim`) to trace connectivity; nothing persists
  *
- * Two render modes, chosen by `buildDiagramScene`: the architecture tiers draw
- * as the ported C4 cards-and-edges (planar layout + handle routing); the symbol
- * tier draws as a force-directed dot graph. All semantic editing stays in the
- * tree and the page — this surface navigates, places, and untangles.
+ * `buildDiagramScene` picks the drawing: architecture tiers as the ported C4
+ * cards and edges (planar layout + handle routing), a styled level inside its
+ * style's regions, the symbol tier as a force-directed dot graph. Cards carry
+ * change marks, completeness and violation counts, and dim under the concern
+ * lens. Dragging a card to pin it works only when the host passes `onMoveNode`.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -40,13 +40,14 @@ import { ChevronRight, CornerLeftUp, LayoutGrid } from "lucide-react";
 import type { ScryModel } from "../../entities/model/viewmodel";
 import { concernCounts } from "../../entities/model/viewmodel";
 import type { ModelDiff } from "../../entities/model/planDiff";
-import { collectPlanEntries, MARK_META, type Mark, nodeDrift, resolveMark, rollupMarks } from "../../features/change-marks/changeMarks";
+import { collectPlanEntries, nodeDrift, resolveMark, rollupMarks } from "../../features/change-marks/changeMarks";
+import { MARK_META, type Mark } from "../../entities/model/changeKinds";
 import { assignAllHandles } from "../../shared/diagram/edgeRouting";
-import { DiagramCard, type CardData, type RFCard } from "../../entities/model/DiagramCard";
+import { DiagramCard, type CardData, type RFCard } from "./DiagramCard";
 import { CenterHandle } from "../../shared/diagram/NodeHandles";
 import { RelationshipEdge, type EdgeData } from "../../shared/diagram/RelationshipEdge";
 import { buildDiagramScene, CARD_W, CARD_H, type DiagramScene, type DiagramNode } from "./diagramLayout";
-import { useDotSim } from "../../shared/lib/useDotSim";
+import { useDotSim } from "./useDotSim";
 import { StyleRegions } from "./StyleRegions";
 import { nextOpenEdge } from "./edgePanel";
 import { structuralBySubtree, type ModelHealthReport } from "../../entities/model/health";

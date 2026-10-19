@@ -1,3 +1,11 @@
+/**
+ * The node page's claims: a node's or group's claims grouped by concern, each
+ * a diff row against the committed tree — its marker, statement (word-diffed
+ * when reworded), inline source locations, and attached tests with their
+ * recorded verdict and probe result. Edit mode is a list form, committed on
+ * Done, with EARS lint and a live markup preview.
+ */
+
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -29,7 +37,7 @@ import {
   DRIFT_HINT,
 } from "../../entities/model/diffkit";
 import { ClaimSource, ClaimTests, respElementId } from "../source-section/SourceSection";
-import { ANCHOR_CALM, earsTestable, hasMarkup, lintEars, MarkupMirror, serializeEars, StatementText, stripMarkup } from "../../features/markup/markup";
+import { ANCHOR_CALM, earsTestable, hasMarkup, lintEars, MarkupMirror, serializeEars, StatementText, stripMarkup } from "../../entities/model/markup";
 import { usePageMenu, useCopyId, copyIdItem } from "../../features/search/pageMenu";
 import {
   BTN,
@@ -42,6 +50,7 @@ import {
   WordDiffText,
 } from "../../shared/ui/pagekit";
 import { CTL_DROW, CTL_SROW, DIR_HL, RESP_ROW, STMT_HL_HOVER } from "./kit";
+import { onAddClaimRequest } from "../../features/derived-tree/addClaim";
 
 // --- responsibilities (the diff view) ---------------------------------------
 
@@ -218,6 +227,16 @@ export function ResponsibilitiesSection({
   // "Add responsibility" from read mode opens the editor seeded with a fresh
   // row; nothing is written to the model until Done.
   const [seedNewRow, setSeedNewRow] = useState(false);
+  // "Add claim" from the tree opens this editor seeded with a fresh row.
+  useEffect(
+    () =>
+      onAddClaimRequest(hostId, () => {
+        if (!editor || editing) return;
+        setSeedNewRow(true);
+        onToggle();
+      }),
+    [hostId, editor, editing, onToggle],
+  );
 
   return (
     <PageSection

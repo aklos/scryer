@@ -1,7 +1,8 @@
-use std::fs;
+//! Where a project's scryer files live: `.scryer/` beside the code, holding
+//! `structure.toml`, the session logs and the regenerable caches.
+
 use std::path::{Path, PathBuf};
 
-use crate::SCRY_VERSION;
 
 // --- ModelRef (project-local only in v0.3) ---
 
@@ -37,47 +38,6 @@ impl ModelRef {
         }
     }
 
-    pub fn model_path(&self) -> PathBuf {
-        match self {
-            ModelRef::ProjectLocal(path) => path.join(".scryer").join("model.scry"),
-        }
-    }
-
-    pub fn baseline_path(&self) -> PathBuf {
-        match self {
-            ModelRef::ProjectLocal(path) => path.join(".scryer").join("model.baseline.scry"),
-        }
-    }
-
-    /// The PLANNED (draft) model — the intent the canvas and agent edit. The
-    /// diff against `model.scry` (the committed source of truth) is the planning
-    /// substrate. Absent until the first edit diverges from the model.
-    pub fn planned_path(&self) -> PathBuf {
-        match self {
-            ModelRef::ProjectLocal(path) => path.join(".scryer").join("planned.scry"),
-        }
-    }
-
-    pub fn lock_path(&self) -> PathBuf {
-        match self {
-            ModelRef::ProjectLocal(path) => path.join(".scryer").join(".lock"),
-        }
-    }
-
-    pub fn sync_path(&self) -> PathBuf {
-        match self {
-            ModelRef::ProjectLocal(path) => path.join(".scryer").join(".sync"),
-        }
-    }
-
-    /// The durable committed-model event log (append-only JSONL). Git-tracked
-    /// like the model — see [`crate::history`].
-    pub fn history_path(&self) -> PathBuf {
-        match self {
-            ModelRef::ProjectLocal(path) => path.join(".scryer").join("history.jsonl"),
-        }
-    }
-
     /// Where the deterministic codebase dependency graph is cached for the
     /// duration of a model build, so the MCP `fill_container` tool (a
     /// separate process from the build orchestrator) can wire code-level links
@@ -88,12 +48,11 @@ impl ModelRef {
         }
     }
 
-    /// The anchor fingerprint baseline — what every sourceMap anchor's span
-    /// contained at the last reconcile (see `scryer_extract::anchors`).
-    /// Regenerable, git-free, never hand-authored.
-    pub fn anchors_path(&self) -> PathBuf {
+    /// The derived C4 tree (see `scryer_extract::derived_tree`), keyed on the
+    /// mtimes it was derived from. Regenerable, never hand-authored.
+    pub fn derived_tree_path(&self) -> PathBuf {
         match self {
-            ModelRef::ProjectLocal(path) => path.join(".scryer").join(".anchors.json"),
+            ModelRef::ProjectLocal(path) => path.join(".scryer").join(".derived_tree.json"),
         }
     }
 
@@ -107,11 +66,11 @@ impl ModelRef {
         }
     }
 
-    /// The fold-refusal ledger — claims `mark_implemented` last declined to
-    /// fold and why (see `crate::refusals`). Regenerable, git-free.
-    pub fn fold_refusals_path(&self) -> PathBuf {
+    /// The last ingested mutation report per file and per test (see
+    /// `scryer_extract::test_status::ingest_mutation_report`). Regenerable.
+    pub fn mutations_path(&self) -> PathBuf {
         match self {
-            ModelRef::ProjectLocal(path) => path.join(".scryer").join(".fold-refusals.json"),
+            ModelRef::ProjectLocal(path) => path.join(".scryer").join(".mutations.json"),
         }
     }
 
@@ -147,25 +106,8 @@ impl std::fmt::Display for ModelRef {
 
 // --- Project model resolution ---
 
-/// Returns `Some(ProjectLocal)` if `{project}/.scryer/model.scry` exists.
-/// Does NOT validate the file's version — use [`is_legacy_model`] for that.
-pub fn resolve_project_model(project_path: &Path) -> Option<ModelRef> {
-    if project_path.join(".scryer").join("model.scry").exists() {
-        Some(ModelRef::ProjectLocal(project_path.to_path_buf()))
-    } else {
-        None
-    }
-}
-
-/// True iff `{project}/.scryer/model.scry` exists with a version other than the
-/// current `SCRY_VERSION` (or no version field at all, or unparseable JSON).
-pub fn is_legacy_model(project_path: &Path) -> bool {
-    let model_path = project_path.join(".scryer").join("model.scry");
-    let Ok(raw) = fs::read_to_string(&model_path) else {
-        return false;
-    };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
-        return true;
-    };
-    v.get("version").and_then(|x| x.as_str()).unwrap_or("") != SCRY_VERSION
+/// The project at `project_path`, when it has a `.scryer/` directory (its
+/// `structure.toml`, sessions and caches live there).
+pub fn resolve_project(project_path: &Path) -> Option<ModelRef> {
+    project_path.join(".scryer").is_dir().then(|| ModelRef::ProjectLocal(project_path.to_path_buf()))
 }

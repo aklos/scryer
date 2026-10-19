@@ -1,3 +1,9 @@
+/**
+ * Pixel-identical inline editing: `Editable`, a contentEditable field that
+ * swaps between read and edit with no reflow, and `EditLink`, the section's
+ * Edit button.
+ */
+
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { BTN } from "./tokens";
 

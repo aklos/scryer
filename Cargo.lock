@@ -3575,7 +3575,6 @@ dependencies = [
  "tauri-plugin-opener",
  "tempfile",
  "tokio",
- "toml_edit 0.22.27",
  "tree-sitter",
  "tree-sitter-c",
  "tree-sitter-c-sharp",
@@ -3601,7 +3600,6 @@ dependencies = [
  "async-trait",
  "libc",
  "scryer-core",
- "scryer-extract",
  "serde",
  "serde_json",
  "tempfile",
@@ -3622,6 +3620,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "toml_edit 0.22.27",
 ]
 
 [[package]]
@@ -6212,10 +6211,6 @@ dependencies = [
 [[package]]
 name = "xtask"
 version = "0.4.21"
-dependencies = [
- "scryer-core",
- "tempfile",
-]
 
 [[package]]
 name = "yoke"

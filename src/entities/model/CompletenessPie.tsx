@@ -1,4 +1,10 @@
-import type { Completeness } from "./health";
+/**
+ * A node's completeness as a small pie gauge: the wedge fills clockwise to the
+ * share of its claims that read through to code, and a dashed ring means there
+ * is nothing to measure yet.
+ */
+
+import type { Completeness } from "./completeness";
 
 /** SVG path for a pie wedge from 12 o'clock, sweeping clockwise to `pct`%. */
 export function wedgePath(k: number, r: number, pct: number): string {

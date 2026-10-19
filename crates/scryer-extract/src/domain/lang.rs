@@ -4,9 +4,12 @@
 //! declares (functions, types, methods, module-level bindings) with their exact
 //! line ranges and — for data shapes (structs, enums, interfaces, type-object
 //! literals, classes with fields) — their declared field names. It also returns
-//! every identifier occurrence, which the model builder resolves into a
-//! reference graph. Everything here is grammar-derived: no name tables, no
-//! regex heuristics on contents.
+//! every identifier occurrence, import and qualified path, which the context
+//! resolves into a reference graph, and string-named test blocks (`it("…")`)
+//! so a test can be found by its name. A `.vue` file is one component spanning
+//! the whole file, its script block parsed in place so line numbers stay
+//! file-accurate. Everything here is grammar-derived: no name tables, no regex
+//! heuristics on contents.
 
 use std::path::Path;
 use tree_sitter::{Language, Node, Parser};
@@ -1724,9 +1727,13 @@ fn collect_qualified_paths(node: Node, bytes: &[u8], out: &mut Vec<PathRef>) {
         if child.kind() == "use_declaration" {
             continue; // handled by collect_use_paths
         }
-        // A scoped_identifier nested inside another is just a prefix of it; only
-        // flatten the outermost occurrence.
-        if child.kind() == "scoped_identifier" && node.kind() != "scoped_identifier" {
+        // A scoped path nested inside another is just a prefix of it — the
+        // `crate::model` in `crate::model::Node`, whether that is a value path
+        // or a type path (`scoped_type_identifier`). Only the outermost one is
+        // a reference: its prefix names modules, and a module segment
+        // resolved as a leaf would bind to any def that shares its name.
+        let scoped = |k: &str| matches!(k, "scoped_identifier" | "scoped_type_identifier");
+        if scoped(child.kind()) && !scoped(node.kind()) {
             if let Some(segments) = flatten_use(child, bytes).into_iter().next() {
                 if segments.len() >= 2 {
                     out.push(PathRef {
@@ -1748,7 +1755,7 @@ fn flatten_use(node: Node, bytes: &[u8]) -> Vec<Vec<String>> {
         "identifier" | "type_identifier" | "crate" | "self" | "super" | "primitive_type" => {
             vec![vec![node.utf8_text(bytes).unwrap_or("").to_string()]]
         }
-        "scoped_identifier" => {
+        "scoped_identifier" | "scoped_type_identifier" => {
             let name = node
                 .child_by_field_name("name")
                 .and_then(|n| n.utf8_text(bytes).ok())
@@ -2117,10 +2124,7 @@ mod tests {
         parse.defs.iter().map(|d| d.name.as_str()).collect()
     }
 
-    /// A `.vue` SFC is one definition named after its file, spanning the whole
-    /// file — its template and style blocks never mint symbols — while the
-    /// script block's imports and identifiers are read in place, so the lines
-    /// they report are lines of the `.vue` file.
+    /// When a `.vue` single-file component is parsed, makes it one definition named after its file, reading its script block's imports and identifiers at their lines in the `.vue` file.
     #[test]
     fn vue_sfc_is_one_component_named_after_its_file() {
         let src = "<template>\n  <div>{{ title }}<Avatar :user=\"user\" /></div>\n</template>\n\n<script setup lang=\"ts\">\nimport Avatar from \"./Avatar.vue\";\nimport { formatName } from \"../lib/names\";\ndefineProps<{ title: string }>();\n</script>\n\n<style scoped>\n.x { color: red; }\n</style>\n";
@@ -2722,6 +2726,7 @@ async function f(p: string) { return import(p); }
         parse_file(Path::new("app/core.clj"), CLJ_SRC).expect("clojure parses")
     }
 
+    /// When a list's head names a defining form, record the following symbol as a definition, ignoring quoted, discarded and commented code
     #[test]
     fn clojure_def_forms_collected() {
         let p = clj_parse();
@@ -2793,6 +2798,7 @@ async function f(p: string) { return import(p); }
         assert!(!f.is_data_shape && f.fields.is_empty());
     }
 
+    /// When a namespace declaration lists requires, record each required namespace with its alias and referred names
     #[test]
     fn clojure_ns_requires_become_imports() {
         let p = clj_parse();

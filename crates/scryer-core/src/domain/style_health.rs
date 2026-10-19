@@ -1,19 +1,21 @@
-//! Code-time enforcement of the model's styles.
+//! Code-time enforcement of the model's styles: the imports the code actually
+//! has, held against each container's governing style. The build's dependency
+//! graph arrives already resolved to node pairs by
+//! [`crate::domain::build_edges::derive_graph`]; one more pass maps each end to
+//! `(component, layer)` and applies the style's table — layer legality,
+//! same-layer isolation and public surfaces, banned packages, misplaced files,
+//! type roles, cycles, and declared links the style forbids. Each violation is
+//! charged to the component that must fix it, in the file the fix happens in.
 //!
-//! [`crate::validate`] checks the links the agent DECLARED; this module
-//! checks the imports the code ACTUALLY has. The build's dependency graph is
-//! already resolved to node pairs by [`crate::domain::build_edges::derive_graph`];
-//! one more pass maps each end to `(component, layer)` and applies the
-//! governing style's table. Everything here is deterministic and derived;
-//! nothing is stored. It is the language-agnostic twin of dependency-cruiser,
-//! import-linter and ArchUnit, driven by the model instead of a per-tool
-//! config.
+//! Everything here is deterministic and derived; nothing is stored. It is the
+//! language-agnostic twin of dependency-cruiser, import-linter and ArchUnit,
+//! driven by the model instead of a per-tool config.
 
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::domain::build_edges::{BuildEdges, DerivedGraph};
-use crate::domain::ownership::BoundaryOwnership;
+use crate::domain::build_edges::BoundaryOwnership;
 use crate::domain::style::{self, Isolation, RoleDef, StyleDef, Styles};
 use crate::{Kind, Node, ScryModel};
 
@@ -462,7 +464,7 @@ pub fn check_code(
     // A link the style forbids, on the model side. When the code already
     // imports across the same pair it was charged above; one line per fact.
     for l in &model.links {
-        let Some(breach) = crate::domain::validate::style_link_breach(model, styles, &l.src, &l.dst, l.kind) else {
+        let Some(breach) = crate::domain::style::style_link_breach(model, styles, &l.src, &l.dst, l.kind) else {
             continue;
         };
         let lift = |id: &str| style::layer_component(model, id).map(|c| c.id.clone()).unwrap_or_else(|| id.to_string());
@@ -470,7 +472,19 @@ pub fn check_code(
         if out.iter().any(|v| v.node == src && v.other.as_deref() == Some(dst.as_str())) {
             continue;
         }
-        let file = index.files_of(&src).and_then(|fs| fs.iter().next().cloned()).unwrap_or_default();
+        // Charged to a file that imports across the pair when the code does,
+        // else the source's first file; a link from a container itself (its
+        // crate root's imports) has none, so it names the container's dir.
+        let importing = derived.resolved_edges.iter().find(|e| {
+            !e.guessed
+                && style::layer_component(model, &e.src_node).is_some_and(|c| c.id == src)
+                && style::layer_component(model, &e.dst_node).is_some_and(|c| c.id == dst)
+        });
+        let file = importing
+            .map(|e| e.src_file.clone())
+            .or_else(|| index.files_of(&src).and_then(|fs| fs.iter().next().cloned()))
+            .or_else(|| style::container_prefix(model, &src))
+            .unwrap_or_default();
         out.push(StyleViolation {
             kind: ViolationKind::ForbiddenLink,
             node: src,
@@ -1020,9 +1034,7 @@ mod tests {
         assert_eq!(r.violations[0].node, "app");
     }
 
-    /// Two symbols of ONE component referencing each other is not a layer
-    /// relationship — under a style that isolates a layer it would otherwise
-    /// report every internal reference as a violation.
+    /// When two symbols of one component reference each other, reports no layer relationship between them.
     #[test]
     fn a_components_own_internals_are_not_checked_against_the_matrix() {
         let mut m = hex_service();
@@ -1103,6 +1115,7 @@ mod tests {
         assert!(r.violations[0].detail.contains("enter through presentation or application"));
     }
 
+    /// If an import leaves a styled container from a layer outside its style's outbound layers, then reports a layer violation charged to the importer
     #[test]
     fn leaving_a_container_from_a_non_outbound_layer_is_a_layer_violation() {
         let m = hex_service();
@@ -1118,6 +1131,7 @@ mod tests {
         assert!(v.detail.contains("only shared or app talks to the outside"), "{}", v.detail);
     }
 
+    /// When a declared model link breaks its style's legality rules, reports it as a forbidden link charged to the linking component
     #[test]
     fn a_declared_link_the_style_forbids_is_a_forbidden_link() {
         let mut m = hex_service();
@@ -1141,6 +1155,7 @@ mod tests {
         assert_eq!((r.layer_violations, r.forbidden_links), (1, 0), "{:#?}", r.violations);
     }
 
+    /// If a code edge was only guessed from a matching name, then charge no structural violation for it.
     #[test]
     fn a_guessed_edge_charges_no_violation() {
         let m = hex_service();

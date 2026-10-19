@@ -1,0 +1,32 @@
+---
+title: Structure
+description: .scryer/structure.toml — the little the code cannot say about its own shape.
+---
+
+The tree is derived from the code. `.scryer/structure.toml` adds only what the code cannot say, and every key is optional:
+
+```toml
+[system]
+name = "aperture-pay"
+persons = ["cardholder", "merchant"]
+externals = ["acquiring bank", "card networks"]
+
+[levels]
+e2e = ["tests/e2e/**"]
+integration = ["crates/*/tests/**"]
+# everything else is unit
+
+[containers.ledger]
+name = "Ledger"
+style = "hexagonal"
+```
+
+- `[system]` names the system, its people and the external systems it talks to.
+- `[levels]` lists the globs whose tests are end-to-end or integration tests. Left out, e2e and integration directories are recognised by name, and a Rust crate's `tests/` directory is integration.
+- `[containers.<dir or package name>]` sets a container's display name, its architecture style and, optionally, its layers.
+
+## Styles
+
+A style is a structural claim: which layers a container has and which may import which. The import graph is checked against it deterministically, and a violation is a red finding like a failing test. It is fixed by moving the code, or, when the declared style was a guess, by declaring the shape the code actually has; never by loosening a rule to let one violation through. A container's files outside its source root (build scripts, tool configs, examples) are asked for no layer.
+
+Renaming a container in the app writes its display name here.

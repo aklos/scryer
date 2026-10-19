@@ -1,3 +1,7 @@
+/**
+ * The shared text field, in title, inline, bordered and ghost variants.
+ */
+
 import type { InputHTMLAttributes } from "react";
 
 type InputVariant = "title" | "inline" | "bordered" | "ghost";

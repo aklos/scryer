@@ -22,7 +22,7 @@ describe("red edge reasons", () => {
     expect(nextOpenEdge("e1", { id: "plain" })).toBeNull();
   });
 
-  it("lists reasons only while the edge is the clicked one, never because a selection lights it", () => {
+  it("While the edge is the clicked one, lists its reasons, never because a selection lights it", () => {
     expect(showsViolationPanel({ violations: ["x"], highlighted: true })).toBe(false);
     expect(showsViolationPanel({ violations: ["x"], open: true })).toBe(true);
     expect(showsViolationPanel({ open: true })).toBe(false);
@@ -40,7 +40,7 @@ describe("layer descriptions", () => {
 describe("map content", () => {
   it("carries no hover tooltips", () => {
     for (const f of [
-      "src/entities/model/DiagramCard.tsx",
+      "src/widgets/diagram-canvas/DiagramCard.tsx",
       "src/widgets/diagram-canvas/DiagramView.tsx",
       "src/widgets/diagram-canvas/StyleRegions.tsx",
       "src/shared/diagram/RelationshipEdge.tsx",

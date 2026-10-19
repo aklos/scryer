@@ -1,3 +1,7 @@
+//! Walking a project directory: whether it looks like a codebase, the
+//! subdirectories that carry a manifest, and the annotated tree of its files.
+//! Which files count as product code is `domain::product_code`.
+
 use std::path::Path;
 
 pub use crate::domain::product_code::*;
@@ -260,9 +264,7 @@ mod tests {
         assert!(!is_product_code("app/__generated__/gql.ts"));
     }
 
-    /// A directory counts as a codebase when it has a `.git` folder or a
-    /// manifest file at the root (including .csproj/.sln discovered by
-    /// extension); a bare directory does not.
+    /// When a directory has a `.git` folder or a manifest at its root (a .csproj or .sln found by extension included), counts it as a codebase.
     #[test]
     fn a_git_folder_or_manifest_marks_a_codebase() {
         let dir = tempfile::tempdir().unwrap();

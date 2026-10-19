@@ -17,7 +17,7 @@
  */
 
 import type { Group, Responsibility, ScryModel } from "./viewmodel";
-import { stripMarkup } from "../../features/markup/markup";
+import { stripMarkup } from "./markup";
 
 export type ElementKind = "node" | "link" | "responsibility" | "property" | "group";
 

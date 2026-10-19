@@ -1,3 +1,9 @@
+/**
+ * Page-section building blocks: `PageSection` (the wiki-style eyebrow heading
+ * with a hover-revealed Edit toggle), `SectionEditor` (the one editing shell:
+ * a local draft that commits only on Done), plus `SegField` and `Empty`.
+ */
+
 import {
   createContext,
   useContext,

@@ -2,12 +2,11 @@
 name = "scryer-acp"
 version = "0.4.21"
 edition = "2021"
-description = "Agent sync for Scryer — spawns AI agents to update architecture models"
+description = "Agent runtime for Scryer — spawns and drives AI coding agent subprocesses"
 authors = ["Alexander Klos"]
 
 [dependencies]
 agent-client-protocol = "0.10"
-scryer-core = { path = "../scryer-core" }
 tokio = { version = "1", features = ["rt", "sync", "process", "macros", "io-util", "time"] }
 tokio-util = { version = "0.7", features = ["compat"] }
 async-trait = "0.1"
@@ -19,5 +18,5 @@ which = "7"
 libc = "0.2"
 
 [dev-dependencies]
-scryer-extract = { path = "../scryer-extract" }
+scryer-core = { path = "../scryer-core" }
 tempfile = "3"

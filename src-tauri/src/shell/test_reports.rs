@@ -1,11 +1,12 @@
 //! Passive JUnit report ingestion — the no-agent feeder of claim test
 //! verdicts. Test runs (a terminal, CI, an IDE) drop JUnit XML into the
-//! project's report directories; the project watcher routes those file
-//! events here and the report is ingested into the claim status cache, so
-//! the verdict badges light without anyone calling a tool. The cache write
-//! then trips the `.scryer/` watcher's `test-results-changed` event, which
-//! is what actually refreshes the UI — this module never talks to the
-//! frontend directly.
+//! project's report directories (`testReportDirs` in `.scryer/config.json`,
+//! or conventional defaults); the project watcher routes those file events
+//! here and, once a burst of events settles, the report is ingested into the
+//! claim status cache, so the verdict badges light without anyone calling a
+//! tool. The cache write then trips the `.scryer/` watcher's
+//! `test-results-changed` event, which is what actually refreshes the UI —
+//! this module never talks to the frontend directly.
 //!
 //! Two deliberate refusals: an unparseable file is skipped quietly (report
 //! directories hold screenshots, traces, HTML alongside the XML), and
@@ -65,7 +66,7 @@ pub(crate) fn ingest_report_file(project: &Path, path: &Path) -> bool {
         return false;
     };
     let model_ref = scryer_core::ModelRef::ProjectLocal(project.to_path_buf());
-    let Ok(_lock) = scryer_core::lock_model(&model_ref) else {
+    let Ok(_lock) = scryer_core::derived_tree::lock_project(&model_ref) else {
         return false;
     };
     match scryer_extract::test_status::ingest_report(&model_ref, &xml) {
@@ -124,57 +125,21 @@ impl ReportDebounce {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scryer_core::{Kind, ModelRef, Node, Responsibility, ScryModel, SourceLocation};
+    use scryer_core::ModelRef;
 
     const SPEC_TS: &str = "describe(\"alpha\", () => {\n  it(\"answers one\", () => {\n    expect(alpha()).toBe(1);\n  });\n});\n";
     const REPORT: &str = r#"<testsuites><testsuite name="s">
         <testcase classname="src/m.spec.ts" name="alpha &gt; answers one"/>
     </testsuite></testsuites>"#;
 
+    /// A package with one Vitest test, so the derived tree has one claim.
     fn project_with_model() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".scryer")).unwrap();
+        std::fs::write(dir.path().join("package.json"), r#"{"name":"m"}"#).unwrap();
+        std::fs::write(dir.path().join("src/m.ts"), "export function alpha() { return 1; }\n").unwrap();
         std::fs::write(dir.path().join("src/m.spec.ts"), SPEC_TS).unwrap();
-        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
-        let mut m = ScryModel::new();
-        m.nodes.push(Node {
-            style: None,
-            layer: None,
-            id: "sym".into(),
-            kind: Kind::Symbol,
-            name: "alpha".into(),
-            vagrant: None,
-            stale: None,
-            parent_id: None,
-            external: None,
-            technology: None,
-            description: None,
-            responsibilities: vec![Responsibility {
-                concern: None,
-                id: "r1".into(),
-                statement: "answers one".into(),
-                vagrant: None,
-                stale: None,
-                stale_proposal: None,
-                directives: Vec::new(),
-                last_touched_at: None,
-            }],
-            properties: Vec::new(),
-            icon: None,
-            notes: None,
-            position: None,
-            directives: Vec::new(),
-        });
-        m.test_map.insert(
-            "r1".into(),
-            vec![SourceLocation {
-                pattern: "src/m.spec.ts".into(),
-                symbol: Some("answers one".into()),
-                line: None,
-                end_line: None,
-            }],
-        );
-        scryer_core::write_model_at(&r, &m).unwrap();
         dir
     }
 
@@ -205,7 +170,8 @@ mod tests {
         let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
         let statuses = scryer_extract::test_status::test_statuses(&r).unwrap();
         assert_eq!(statuses.len(), 1);
-        assert_eq!(statuses[0].resp_id, "r1");
+        let tree = scryer_extract::derived_tree::derived_tree(dir.path()).unwrap();
+        assert_eq!(statuses[0].resp_id, tree.claims[0].id);
 
         // An HTML artifact in the same directory: quietly nothing.
         std::fs::write(dir.path().join("index.html"), "<html>report</html>").unwrap();

@@ -13,11 +13,11 @@
  *                            (re-exported from pagekit, the historical home).
  */
 
-import { CHANGE_COLOR, type ChangeKind } from "../../features/change-marks/changeMarks";
-import { ANCHOR_CALM } from "../../features/markup/markup";
+import { CHANGE_COLOR, type ChangeKind } from "./changeKinds";
+import { ANCHOR_CALM } from "./markup";
 
 export { WordDiffText } from "../../shared/ui/pagekit";
-export type { ChangeKind } from "../../features/change-marks/changeMarks";
+export type { ChangeKind } from "./changeKinds";
 
 /** The glyph each change category shows. `!` (stale) and `?` (vagrant) are
  *  drift markers; the rest are plan changes. */

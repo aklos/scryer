@@ -9,7 +9,9 @@
 use crate::domain::session::{SessionEntry, SessionEvent};
 use crate::ModelRef;
 use std::io::Write;
-use std::path::PathBuf;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 
 /// The log path for `session`, or `None` when the id could escape the
 /// sessions directory. Harness session ids are UUID-like; anything else is
@@ -88,6 +90,60 @@ pub fn list(r: &ModelRef) -> Vec<(String, u64)> {
     out
 }
 
+
+/// Project files modified after `ns` (unix nanoseconds) — whatever wrote them.
+pub fn files_modified_since_ns(project: &Path, ns: u64) -> BTreeSet<String> {
+    mtime_changed_files(project, ns / 1_000_000_000, Some(ns))
+}
+
+/// Files whose mtime is newer than the anchor. With a ns anchor the comparison
+/// is nanosecond-exact (a same-second edit is visible); without one (old
+/// `.sync` files) it falls back to whole seconds. Honors the same directory
+/// skipping as the rest of scryer (SKIP_DIRS / SKIP_BUILD_DIRS, .gitignore).
+fn mtime_changed_files(
+    project: &Path,
+    baseline_secs: u64,
+    baseline_ns: Option<u64>,
+) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for entry in project_walker(project).flatten() {
+        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        let Ok(mtime) = meta.modified() else { continue };
+        let since_epoch = mtime.duration_since(UNIX_EPOCH).unwrap_or_default();
+        let newer = match baseline_ns {
+            Some(anchor_ns) => since_epoch.as_nanos() as u64 > anchor_ns,
+            None => since_epoch.as_secs() > baseline_secs,
+        };
+        if newer {
+            if let Ok(rel) = entry.path().strip_prefix(project) {
+                out.insert(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    out
+}
+
+/// The shared project walk: everything except vendor/build dirs.
+fn project_walker(project: &Path) -> ignore::Walk {
+    ignore::WalkBuilder::new(project)
+        .hidden(false)
+        .filter_entry(|entry| {
+            if entry.file_type().is_some_and(|ft| ft.is_dir()) {
+                let name = entry.file_name().to_string_lossy();
+                if crate::domain::product_code::SKIP_DIRS.iter().any(|&s| name == s)
+                    || crate::domain::product_code::SKIP_BUILD_DIRS.iter().any(|&s| name == s)
+                {
+                    return false;
+                }
+            }
+            true
+        })
+        .build()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,7 +153,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
         append(&r, "s-1", SessionEvent::Touch { file: "a.rs".into() }).unwrap();
-        append(&r, "s-1", SessionEvent::ReconcileGate).unwrap();
+        append(&r, "s-1", SessionEvent::Stop).unwrap();
         // A torn line from a killed writer.
         let path = session_path(&r, "s-1").unwrap();
         let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();

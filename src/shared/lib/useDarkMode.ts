@@ -1,3 +1,7 @@
+/**
+ * A hook that tracks whether the dark color mode is active.
+ */
+
 import { useEffect, useState } from "react";
 
 /**

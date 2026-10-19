@@ -6,7 +6,7 @@ import {
   type Detected,
   type ResolvedLaunch,
   type SubagentSettings,
-} from "../../widgets/settings-panel/SettingsPanel";
+} from "./launchSettings";
 
 export interface LaunchSettings {
   /** Which agent + model + effort a fill will actually run with. */
@@ -36,7 +36,7 @@ export function useLaunchSettings(): LaunchSettings {
     invoke<SubagentSettings>("get_subagent_settings")
       .then((s) => setSubagent({ ...SUBAGENT_DEFAULTS, ...s }))
       .catch(() => {});
-    invoke<Detected>("detect_ai_tools", { projectPath: null })
+    invoke<Detected>("detect_ai_tools")
       .then((d) => setDetected({ claude: !!d.claude, codex: !!d.codex, copilot: !!d.copilot }))
       .catch(() => {});
   }, []);

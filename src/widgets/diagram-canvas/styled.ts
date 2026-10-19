@@ -288,6 +288,54 @@ function ringsLayout(def: StyleDef, members: StyledMember[], ghosts: string[], e
 
 // ── hexagon ─────────────────────────────────────────────────────────────────
 
+/** The composition root's own symbols (a crate root's functions beside its
+ *  modules) in one row under a styled drawing: a small strip of their own,
+ *  so the style's shape stays the style's and nothing lands inside a layer
+ *  it does not belong to. Returns their centres and the strip's region. */
+export function rootStrip(
+  laid: StyledLayout,
+  ids: string[],
+): { centers: Map<string, { x: number; y: number }>; region?: LayerRegion } {
+  const centers = new Map<string, { x: number; y: number }>();
+  if (ids.length === 0) return { centers };
+  let minX = Infinity, maxX = -Infinity, bottom = -Infinity;
+  for (const c of laid.centers.values()) {
+    minX = Math.min(minX, c.x - CARD_W / 2);
+    maxX = Math.max(maxX, c.x + CARD_W / 2);
+    bottom = Math.max(bottom, c.y + CARD_H / 2);
+  }
+  for (const r of laid.regions) {
+    if (r.shape === "rect") {
+      minX = Math.min(minX, r.x);
+      maxX = Math.max(maxX, r.x + r.w);
+      bottom = Math.max(bottom, r.y + r.h);
+    } else {
+      minX = Math.min(minX, r.cx - r.r);
+      maxX = Math.max(maxX, r.cx + r.r);
+      bottom = Math.max(bottom, r.cy + r.r);
+    }
+  }
+  if (!Number.isFinite(bottom)) [minX, maxX, bottom] = [0, 0, 0];
+  const pitch = CARD_W + 40;
+  const pad = 24;
+  const top = bottom + 60;
+  const width = ids.length * pitch - 40;
+  const left = (minX + maxX) / 2 - width / 2;
+  ids.forEach((id, i) => centers.set(id, { x: left + i * pitch + CARD_W / 2, y: top + pad + CARD_H / 2 }));
+  return {
+    centers,
+    region: {
+      shape: "rect",
+      layer: "composition root",
+      caption: "the root module's own definitions, wiring the layers above",
+      x: left - pad,
+      y: top,
+      w: width + 2 * pad,
+      h: CARD_H + 2 * pad,
+    },
+  };
+}
+
 /**
  * Cockburn's drawing, read off the style's layer order. The last four layers
  * are the hexagon: the driving side (presentation) as a column on the LEFT,

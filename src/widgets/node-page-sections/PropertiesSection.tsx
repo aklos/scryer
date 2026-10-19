@@ -1,3 +1,8 @@
+/**
+ * A data-shape symbol's fields, listed as a diff against the committed tree
+ * (matched by exact label) and edited as a list form committed on Done.
+ */
+
 import { Plus, Trash2 } from "lucide-react";
 import type { Node, SchemaProperty } from "../../entities/model/viewmodel";
 import type { Editor } from "../../entities/model/editor";

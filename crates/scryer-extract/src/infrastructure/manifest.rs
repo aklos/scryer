@@ -8,11 +8,15 @@
 //! edges come from declared values; `technology` is taken only from literal
 //! declared strings (a Dockerfile's `FROM <image>`), never a filename→ecosystem
 //! lookup table.
+//!
+//! Discovery is two-pass: each directory's manifests become a container, then
+//! dependencies declared by name rather than path (npm workspace siblings,
+//! Cargo `{ workspace = true }`) resolve against the discovered set.
 
 use crate::lang;
 use scryer_core::scan;
 use std::collections::BTreeMap;
-use crate::domain::facts::Container;
+use crate::domain::context::Container;
 use std::path::Path;
 
 /// One manifest file found in a candidate directory.
@@ -305,6 +309,10 @@ fn scan_dir(project: &Path, dir: &str, signals: &[Signal]) -> DirScan {
                     clj_paths.extend(paths);
                 }
             }
+            f if f.ends_with(".csproj") || f.ends_with(".fsproj") => {
+                is_unit = true;
+                dep_dirs.extend(msbuild_project_refs(&text, dir));
+            }
             _ => {
                 is_unit = true;
                 if sig.deploy && technology.is_none() && sig.filename.starts_with("Dockerfile") {
@@ -345,6 +353,32 @@ fn scan_dir(project: &Path, dir: &str, signals: &[Signal]) -> DirScan {
 }
 
 /// The `module <path>` directive of a go.mod, quotes tolerated.
+/// The directories of the projects an MSBuild project file references:
+/// `<ProjectReference Include="../Shared/Shared.csproj" />` → `src/Shared`
+/// for a manifest in `src/Server`.
+fn msbuild_project_refs(text: &str, manifest_dir: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for chunk in text.split("<ProjectReference").skip(1) {
+        let Some(at) = chunk.find("Include=\"") else { continue };
+        let rest = &chunk[at + "Include=\"".len()..];
+        let Some(end) = rest.find('"') else { continue };
+        let target = rest[..end].replace('\\', "/");
+        let mut parts: Vec<&str> = manifest_dir.split('/').filter(|p| !p.is_empty()).collect();
+        for seg in target.split('/') {
+            match seg {
+                "" | "." => {}
+                ".." => {
+                    parts.pop();
+                }
+                s => parts.push(s),
+            }
+        }
+        parts.pop(); // the referenced project file itself
+        out.push(parts.join("/"));
+    }
+    out
+}
+
 fn go_mod_module(text: &str) -> Option<String> {
     for line in text.lines() {
         let line = line.trim();
@@ -631,6 +665,22 @@ serde = "1"
             parse_cargo(toml, ""),
             CargoManifest::WorkspaceOnly { .. }
         ));
+    }
+
+    /// An MSBuild ProjectReference resolves to the referenced project's
+    /// directory, relative to the project root.
+    #[test]
+    fn msbuild_project_references_become_dep_dirs() {
+        let text = r#"<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../../src/Server/Server.csproj" />
+    <ProjectReference Include="..\..\src\Shared\Shared.csproj" />
+  </ItemGroup>
+</Project>"#;
+        assert_eq!(
+            msbuild_project_refs(text, "tests/Server.Tests"),
+            vec!["src/Server".to_string(), "src/Shared".to_string()]
+        );
     }
 
     /// `{ workspace = true }` deps and target-specific tables are collected;

@@ -1,15 +1,14 @@
-//! Deterministic, parser-only codebase CONTEXT extraction.
+//! Deterministic, parser-only codebase extraction, and the C4 tree derived
+//! from it.
 //!
-//! scryer's modeling speed lever: instead of making the AI agent discover a
-//! codebase from scratch, [`extract_context`] precomputes a MAP of it — every
-//! container (declared build/deploy unit), every symbol with its exact line
-//! range, and a conservative dependency graph — using only manifests and
-//! tree-sitter parse trees (no LLM, no curated "known-X" lookup tables). The
-//! orchestrator slices this per scope ([`slice_scope`]) and hands each modeling
-//! subagent exactly the facts it needs, so the agent skips discovery and goes
-//! straight to the semantic work: choosing components and writing
-//! responsibilities. The context is a map the agent reads FROM — it is never a
-//! C4 model, and it is never persisted to disk.
+//! [`extract_context`] precomputes a MAP of a codebase — every container
+//! (declared build/deploy unit), every symbol with its exact line range, and a
+//! conservative dependency graph — using only manifests and tree-sitter parse
+//! trees (no LLM, no curated "known-X" lookup tables); [`slice_scope`] cuts it
+//! down to one subtree. On that map the crate derives the C4 tree, lifts each
+//! test's description as a claim, writes claims back into the code, and keeps
+//! the test evidence that gives each claim its status. The context itself is
+//! never persisted to disk.
 
 pub mod composition;
 pub mod domain;
@@ -24,7 +23,7 @@ pub use domain::context::{
     ContainerFacts, Edge, FileContext, ProjectContext, PromptScopeContext, ScopeContext,
     SymbolContext,
 };
-pub use domain::facts::{Container, TsAliases};
+pub use domain::context::{Container, TsAliases};
 pub use domain::{context, lang};
-pub use composition::{anchors, test_status};
+pub use composition::{claim_files, derived_tree, landing, test_status};
 pub use infrastructure::{manifest, tsconfig};

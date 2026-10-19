@@ -1,0 +1,62 @@
+# How scryer reads this repo's shape. Containers, components and claims are
+# derived from packaging and tests; this file says only what the code cannot.
+
+[system]
+name = "scryer"
+persons = ["developer", "agent"]
+externals = ["claude code", "codex", "copilot cli"]
+
+[levels]
+e2e = ["e2e/**", "tests/e2e/**"]
+integration = ["crates/*/tests/**", "src-tauri/tests/**"]
+# everything else is unit
+
+# Display names and styles carried over from the authored model.
+#
+# A style is a claim about the code's shape. When a container's code does not
+# have the declared shape, fix it by declaring the shape the code actually has
+# (or none), not by inventing directories. When the code has the shape, a
+# violation is fixed by moving the offending files.
+
+[containers.scryer]
+name = "Desktop App UI"
+style = "feature-sliced"
+
+[containers.src-tauri]
+name = "Desktop App Host"
+style = "core-shell"
+
+[containers."crates/scryer-core"]
+name = "Model Core"
+style = "library"
+layers = ["domain", "application", "composition", "infrastructure"]
+
+[containers."crates/scryer-extract"]
+name = "Code Extractor"
+style = "library"
+layers = ["domain", "application", "composition", "infrastructure"]
+
+[containers."crates/scryer-acp"]
+name = "Agent Sync"
+style = "library"
+layers = ["domain", "application", "composition", "infrastructure"]
+
+# No style, honestly: the server was declared core-shell, but its modules
+# are flat files under src/ (server, cli, hook_client, tools, derived,
+# helpers, types, instructions) with no shell/core split for the style to
+# read. Choosing the shape it should take is a refactor of its own; until
+# then check reports it as the one unstyled container.
+[containers."crates/scryer-mcp"]
+name = "MCP Server"
+
+[containers."crates/xtask"]
+name = "Build Tasks"
+style = "core-shell"
+
+# The docs site was declared feature-sliced, which its code never was: it is
+# an Astro Starlight site, laid out the way Astro documents src/ (components
+# embedded by content collections). That is the shape declared here, as the
+# project style .scryer/styles/astro.json.
+[containers.docs]
+name = "Docs Site"
+style = "astro"

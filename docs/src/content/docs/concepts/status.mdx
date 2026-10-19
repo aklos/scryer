@@ -1,0 +1,27 @@
+---
+title: Status
+description: How each claim's status is derived from the last test run, and what health counts.
+---
+
+No tool writes a claim's status. It is computed from the last ingested test report and the fingerprints of the code involved.
+
+| Status | Means |
+|--------|-------|
+| **proven** | the test was green, and neither it nor the code it exercises has changed since |
+| **stale** | the test or the code it exercises changed since its verdict, or no report has covered it yet |
+| **failing** | the test was red |
+| **planned** | the test is a todo |
+
+Feed a run by handing scryer its JUnit report: the agent calls `ingest_test_report`, or the app picks up reports written to a watched report directory.
+
+## Probed
+
+A separate mark asks whether a green test would notice a bug. An agent's probe (`open_probe` / `close_probe`) breaks the code a passing test exercises in an isolated worktree and runs the test expecting red. Mutation reports from cargo-mutants or Stryker feed the same mark without an agent in the loop: a surviving break marks a crosshair, every break caught a double check. Mutation results hold as of their ingest.
+
+## Health
+
+The status bar and node pages count what needs attention: planned, stale and failing claims, components with code and no claims, files no test reaches by import (dark code), surviving mutants, and [style](/scryer/concepts/structure/) violations.
+
+## Since you last looked
+
+The app opens on a page listing every agent session since you last opened the project, titled by its task (or the first component it touched), with the claims it newly proved, newly planned or left planned, the ones now stale or failing, and the components more than one session touched.

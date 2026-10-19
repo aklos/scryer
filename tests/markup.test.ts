@@ -1,5 +1,5 @@
 /**
- * Statement display markup (`src/markup.tsx`) — the markdown-lite subset
+ * Statement display markup (`src/entities/model/markup.tsx`) — the markdown-lite subset
  * agents author into claim statements. `**bold**` scan anchors are the WHOLE
  * vocabulary: underscores were retired and now carry no meaning at all. The
  * invariants that matter: strip(parse) round-trips to plain text, malformed
@@ -7,7 +7,7 @@
  * identifier or prose — is ever consumed as a marker.
  */
 import { describe, expect, it } from "vitest";
-import { earsTestable, earsTokenize, hasMarkup, lintEars, parseMarkup, serializeEars, stripMarkup } from "../src/features/markup/markup";
+import { earsTestable, earsTokenize, hasMarkup, lintEars, parseMarkup, serializeEars, stripMarkup } from "../src/entities/model/markup";
 
 describe("parseMarkup", () => {
   it("splits a marked statement into anchor / plain segments", () => {
@@ -89,7 +89,7 @@ describe("earsTokenize (the positional pass)", () => {
     ]);
   });
 
-  it("bolds `then` after an If clause", () => {
+  it("When an If clause is followed by then, bolds the then", () => {
     expect(earsTokenize("If the signature is invalid, then reject the request")).toEqual([
       { text: "If", bold: true },
       { text: " the signature is invalid, " },
@@ -100,7 +100,7 @@ describe("earsTokenize (the positional pass)", () => {
     ]);
   });
 
-  it("stacks While + when, in grammar order only", () => {
+  it("When While and when are stacked, keeps them in grammar order only", () => {
     const segs = earsTokenize("While a reconcile runs, when a claim is edited, queue the edit");
     expect(segs.filter((s) => s.bold).map((s) => s.text)).toEqual(["While", "when", "queue"]);
     expect(segs.map((s) => s.text).join("")).toBe(
@@ -169,7 +169,7 @@ describe("lintEars (rule-21 advisories)", () => {
     expect(codes("Hold the append-only log; CNTRC browsing is excluded")).toEqual(["compound-response"]);
   });
 
-  it("keeps the grammar's own 'then' of an If claim out of the compound check", () => {
+  it("When an If claim has its grammar's own then, keeps it out of the compound check", () => {
     expect(codes("If the signature is invalid, then reject the request")).toEqual([]);
   });
 
@@ -198,7 +198,7 @@ describe("lintEars (rule-21 advisories)", () => {
     ]);
   });
 
-  it("flags an illegal clause stack, allowing While + when/if", () => {
+  it("When clauses are stacked illegally, flags them, allowing While with when or if", () => {
     expect(codes("When a claim is edited, if it is unchanged, skip the write")).toEqual(["illegal-stack"]);
     expect(codes("While a reconcile runs, when a claim is edited, queue the edit")).toEqual([]);
   });
@@ -224,7 +224,7 @@ describe("serializeEars", () => {
     expect(stripMarkup(minted)).toBe(plain);
   });
 
-  it("keeps odd spacing intact when minting", () => {
+  it("When minting, keeps odd spacing intact", () => {
     const minted = serializeEars("When a callback arrives , append an event");
     expect(stripMarkup(minted)).toBe("When a callback arrives , append an event");
     expect(hasMarkup(minted)).toBe(true);

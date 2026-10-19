@@ -1,6 +1,7 @@
-//! Reading the project off disk: which files are there, and their parse
-//! trees. The parser cache lives here because it is an artifact of reading —
-//! the map built from these files is the domain's.
+//! Reading the project off disk: which files are there (skipping the vendor
+//! and build directories the extractor ignores), and their parse trees, parsed
+//! in parallel. The parser cache lives here because it is an artifact of
+//! reading — the map built from these files is the domain's.
 
 use crate::domain::context::ParsedFile;
 use crate::domain::lang;
@@ -130,7 +131,14 @@ pub fn parse_sources(project: &Path, all_files: &[PathBuf]) -> (Vec<ParsedFile>,
                     parse
                 }
             };
-            (!parse.defs.is_empty()).then_some(ParsedFile {
+            // A file that defines nothing can still reach code: a test file
+            // of `describe`/`it` calls, a barrel that only re-exports. Only a
+            // file with nothing to say at all is dropped.
+            let says_something = !parse.defs.is_empty()
+                || !parse.imports.is_empty()
+                || !parse.paths.is_empty()
+                || !parse.test_blocks.is_empty();
+            says_something.then_some(ParsedFile {
                 rel_path,
                 parse,
                 source,

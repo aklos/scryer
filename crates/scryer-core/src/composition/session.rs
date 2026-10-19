@@ -1,13 +1,8 @@
-//! The session hooks' entry points: read the session's log and the model,
-//! answer, and append what the answer implies. The hook client calls these
-//! in-process — no app, no server.
+//! The session hooks' entry points: read the session's log, answer, and
+//! append what the answer implies. The hook client calls these in-process —
+//! no app, no server.
 
-use crate::application::hooks::{close_view, session_summary, AnchorFlag, CloseView, Unfolded};
-use crate::application::locate::LocateReport;
-use crate::composition::locate::locate_at;
-use crate::composition::model_store::{read_model_at, read_planned_at};
-use crate::domain::session::{fnv1a64, relativize, SessionLog};
-use serde::Serialize;
+use crate::domain::session::{fnv1a64, relativize, test_key, SessionLog};
 use std::collections::HashSet;
 use crate::infrastructure::session_store;
 use crate::ModelRef;
@@ -72,7 +67,7 @@ pub fn record_shell_edits(r: &ModelRef, session: &str, tool: Option<&str>) -> Re
         })
         .collect();
     let mut added = Vec::new();
-    for file in crate::infrastructure::drift::files_modified_since_ns(r.project_path(), since) {
+    for file in session_store::files_modified_since_ns(r.project_path(), since) {
         if file.starts_with(".scryer/") || log.touched.contains(&file) || others.contains(&file) {
             continue;
         }
@@ -82,84 +77,26 @@ pub fn record_shell_edits(r: &ModelRef, session: &str, tool: Option<&str>) -> Re
     Ok(added)
 }
 
-/// The intent overlay for `file`, or `None` when the session was already shown
-/// this exact payload for it — re-reads must not re-inject an identical block.
-/// Without a session there is nothing to dedupe against: always answer.
-/// The returned report is serialized with the relative `file` added.
+/// Serve the read overlay `payload` for `file`, or `None` when the session
+/// was already shown this exact payload for it — re-reads must not re-inject
+/// an identical block. Without a session there is nothing to dedupe
+/// against: always answer. The payload is built by the caller from the
+/// derived tree.
 pub fn overlay(
     r: &ModelRef,
     session: Option<&str>,
     file: &str,
+    payload: serde_json::Value,
 ) -> Result<Option<serde_json::Value>, String> {
     let file = relativize(r.project_path(), file);
-    let report: LocateReport = locate_at(r, &file, None)?;
-    let mut v = serde_json::to_value(&report).map_err(|e| e.to_string())?;
-    if let serde_json::Value::Object(map) = &mut v {
-        map.insert("file".into(), serde_json::json!(file));
-    }
     if let Some(session) = session.filter(|s| !s.is_empty()) {
-        let hash = fnv1a64(&serde_json::to_vec(&v).unwrap_or_default());
+        let hash = fnv1a64(&serde_json::to_vec(&payload).unwrap_or_default());
         if session_log(r, session).overlay_is_repeat(&file, hash) {
             return Ok(None);
         }
         session_store::append(r, session, SessionEvent::Overlay { file, hash })?;
     }
-    Ok(Some(v))
-}
-
-/// The close view for `session`'s touches. The gate fires ONCE per session:
-/// the verdict on a flagged claim may legitimately be "it still describes the
-/// code", which writes nothing, so a re-derived gate would fire on every stop
-/// forever. A view that fires is recorded; a clean one leaves the gate armed.
-/// `flags` runs the anchor check over the touched files, only when needed.
-pub fn close_gate(
-    r: &ModelRef,
-    session: &str,
-    flags: impl FnOnce(&[String]) -> Vec<AnchorFlag>,
-) -> CloseView {
-    let log = session_log(r, session);
-    if log.reconcile_gated || log.touched.is_empty() {
-        return CloseView::default();
-    }
-    // Drift the session found rather than made: an anchor already in this
-    // state when the session first read its file is not this session's to
-    // reconcile.
-    let flags: Vec<AnchorFlag> = flags(&log.touched)
-        .into_iter()
-        .filter(|f| !log.found_stale(&f.file, &f.key, &f.state))
-        .collect();
-    let committed = read_model_at(r).ok();
-    let working = match (&committed, read_planned_at(r)) {
-        (Some(c), Ok(p)) => Some(crate::working_view(c, &p)),
-        _ => committed.clone(),
-    };
-    let view = close_view(committed.as_ref(), working.as_ref(), &flags, &log.touched);
-    if !view.needs_reconcile.is_empty() {
-        let _ = session_store::append(r, session, SessionEvent::ReconcileGate);
-    }
-    view
-}
-
-/// The session is reading `file`: the first time, record which of its anchors
-/// are already out of sync (`flags` runs the anchor check on that one file),
-/// so the close gate later tells drift the session made from drift it found.
-/// Later reads cost nothing.
-pub fn record_first_sight(
-    r: &ModelRef,
-    session: &str,
-    file: &str,
-    flags: impl FnOnce(&str) -> Vec<AnchorFlag>,
-) -> Result<(), String> {
-    let file = relativize(r.project_path(), file);
-    if std::path::Path::new(&file).is_absolute() || session_log(r, session).has_seen(&file) {
-        return Ok(());
-    }
-    let stale = flags(&file)
-        .into_iter()
-        .filter(|f| f.file == file)
-        .map(|f| (f.key, f.state))
-        .collect();
-    session_store::append(r, session, SessionEvent::FirstSight { file, stale })
+    Ok(Some(payload))
 }
 
 /// Record the task the agent oriented on — the first one titles the session's
@@ -177,219 +114,50 @@ pub fn session_task(r: &ModelRef, session: &str) -> Option<String> {
     session_log(r, session).task
 }
 
-/// Record that the agent wrote these plan elements.
-pub fn record_model_edit(r: &ModelRef, session: &str, keys: Vec<String>) -> Result<(), String> {
-    if keys.is_empty() {
+/// The session is starting: the first time, record the todo tests already in
+/// the project (`(file, junit_name)`, computed only then), so its first stop
+/// can tell the stubs it wrote from ones that were there.
+pub fn begin(
+    r: &ModelRef,
+    session: &str,
+    planned: impl FnOnce() -> Vec<(String, String)>,
+) -> Result<(), String> {
+    if session_log(r, session).planned_seen.is_some() {
         return Ok(());
     }
-    session_store::append(r, session, SessionEvent::ModelEdit { keys })
+    let tests = planned().iter().map(|(f, t)| test_key(f, t)).collect();
+    session_store::append(r, session, SessionEvent::Planned { tests })
 }
 
-fn working(r: &ModelRef) -> Option<crate::ScryModel> {
-    let committed = read_model_at(r).ok()?;
-    Some(match read_planned_at(r) {
-        Ok(p) => crate::working_view(&committed, &p),
-        Err(_) => committed,
-    })
-}
-
-/// A session as the user reviews it: what was edited and which claims that
-/// reached, and what it planned and left unbuilt.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionView {
-    pub session: String,
-    pub touched: Vec<TouchedFile>,
-    /// Plan entries the session planned and has not folded.
-    pub unfolded: Vec<Unfolded>,
-    pub model_edits: Vec<String>,
-    /// Unix seconds of the first and last event.
-    pub started_at: u64,
-    pub updated_at: u64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct TouchedFile {
-    pub file: String,
-    /// Claims anchored in the file: `(id, statement)`.
-    pub claims: Vec<(String, String)>,
-}
-
-pub fn session_view(r: &ModelRef, session: &str) -> SessionView {
-    let entries = session_store::read(r, session);
-    let log = SessionLog::from_events(&entries);
-    let working = working(r).unwrap_or_default();
-    let touched = log
-        .touched
-        .iter()
-        .map(|f| TouchedFile {
-            file: f.clone(),
-            claims: crate::application::locate::locate(&working, f, None)
-                .claims
-                .into_iter()
-                .filter(|c| !c.via_test)
-                .map(|c| (c.id, c.statement.unwrap_or_default()))
-                .collect(),
-        })
-        .collect();
-    SessionView {
-        session: session.to_string(),
-        touched,
-        unfolded: unfolded(r, session),
-        model_edits: log.model_edits.clone(),
-        started_at: entries.first().map_or(0, |e| e.at),
-        updated_at: entries.last().map_or(0, |e| e.at),
-    }
-}
-
-/// What the Stop hook does: block with a reason for the agent, or let the
-/// session stop with an optional summary line for the user.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct StopOutcome {
-    pub block: Option<String>,
-    pub summary: Option<String>,
-}
-
-/// The Stop check. Blocks on planned work left unbuilt with no note once code
-/// was edited after it was planned, on an unprobed test, and on unreconciled
-/// anchors — each at most once. A clean stop hands the user a summary, unless
-/// it says what the last one said.
+/// The session stopped: close its record. Given the project's todo tests
+/// (`None` when they could not be read), the ones it wrote since its last
+/// record — new, in a file it touched, not already another session's —
+/// become its stubs, and the claims its edits reach are noted. Nothing is
+/// said to the agent or the user: the record is read where they look.
 pub fn stop(
     r: &ModelRef,
     session: &str,
-    flags: impl FnOnce(&[String]) -> Vec<AnchorFlag>,
-    probes: impl FnOnce(&SessionLog) -> (Option<String>, Option<String>),
-) -> StopOutcome {
+    planned: Option<&[(String, String)]>,
+    reached: Vec<String>,
+) -> Result<(), String> {
+    let Some(planned) = planned else {
+        return session_store::append(r, session, SessionEvent::Stop);
+    };
     let log = session_log(r, session);
-    let (probe_block, probe_summary) = probes(&log);
-    let left = unfolded(r, session);
-
-    let mut reasons: Vec<String> = Vec::new();
-    // An entry nothing was built on since it was planned is a plan waiting
-    // on the user's sign-off — blocking there buries the question.
-    let silent: Vec<&Unfolded> = left
-        .iter()
-        .filter(|u| {
-            u.note.is_none() && !log.gated_pending.contains(&u.key) && log.edited_since_planning(&u.key)
-        })
+    let theirs: HashSet<(String, String)> = session_store::list(r)
+        .into_iter()
+        .filter(|(id, _)| id != session)
+        .flat_map(|(id, _)| session_log(r, &id).stubs)
         .collect();
-    if !silent.is_empty() {
-        reasons.push(pending_reason(&silent));
-        let keys = silent.iter().map(|u| u.key.clone()).collect();
-        let _ = session_store::append(r, session, SessionEvent::PendingGate { keys });
+    for (file, test) in log.new_stubs(planned).into_iter().filter(|s| !theirs.contains(s)) {
+        session_store::append(r, session, SessionEvent::Stub { file: file.clone(), test: test.clone() })?;
     }
-    if let Some(reason) = probe_block.filter(|_| !log.probe_gated) {
-        reasons.push(reason);
-        let _ = session_store::append(r, session, SessionEvent::ProbeGate);
+    let tests = planned.iter().map(|(f, t)| test_key(f, t)).collect();
+    session_store::append(r, session, SessionEvent::Planned { tests })?;
+    if !log.touched.is_empty() || !log.reached.is_empty() {
+        session_store::append(r, session, SessionEvent::Reached { ids: reached })?;
     }
-    let close = close_gate(r, session, flags);
-    if !close.needs_reconcile.is_empty() {
-        reasons.push(reconcile_reason(&close));
-    }
-    if !reasons.is_empty() {
-        return StopOutcome { block: Some(reasons.join("\n\n")), summary: None };
-    }
-
-    let summary = match (session_summary(&left), probe_summary) {
-        (Some(s), Some(p)) => Some(format!("{s} · {p}")),
-        (None, Some(p)) => Some(format!("scryer · {p}")),
-        (s, None) => s,
-    }
-    .filter(|s| log.last_summary.as_deref() != Some(s.as_str()));
-    if let Some(s) = &summary {
-        let _ = session_store::append(r, session, SessionEvent::Summary { text: s.clone() });
-    }
-    StopOutcome { block: None, summary }
-}
-
-/// Plan entries tagged to `session`'s change that are still pending — the
-/// work it planned and neither folded nor reverted — with any progress note.
-pub fn unfolded(r: &ModelRef, session: &str) -> Vec<Unfolded> {
-    let (Ok(committed), Ok(planned)) = (read_model_at(r), read_planned_at(r)) else {
-        return Vec::new();
-    };
-    let Some(cid) = crate::domain::changes::session_change(&planned, session).map(|c| c.id.clone()) else {
-        return Vec::new();
-    };
-    crate::domain::diff::diff(&committed, &planned)
-        .changes
-        .iter()
-        .map(|ch| Unfolded {
-            key: crate::domain::changes::key_for(ch),
-            label: ch.label.clone(),
-            note: (ch.kind == crate::domain::diff::ElementKind::Responsibility)
-                .then(|| planned.notes.get(&ch.id).cloned())
-                .flatten(),
-        })
-        .filter(|u| planned.change_map.get(&u.key) == Some(&cid))
-        .collect()
-}
-
-const PENDING_SHOWN: usize = 15;
-
-fn pending_reason(left: &[&Unfolded]) -> String {
-    let mut lines: Vec<String> = left
-        .iter()
-        .take(PENDING_SHOWN)
-        .map(|u| format!("- {}: {}", u.key, u.label))
-        .collect();
-    if left.len() > PENDING_SHOWN {
-        lines.push(format!("- … {} more (get_pending)", left.len() - PENDING_SHOWN));
-    }
-    format!(
-        "Scryer — this session planned {} model entr{} it has not folded, with no note saying \
-         why:\n{}\nFinish each: built and tested → mark_implemented (anchors + tests); dropped → \
-         revert the plan entry; a drift finding → resolve_drift; genuinely unfinished → \
-         note_claims {{notes: {{id: \"built …; left …; waits on …\"}}}} — the user reads it on \
-         the claim and the next session starts from it. Nobody closes these after you.",
-        left.len(),
-        if left.len() == 1 { "y" } else { "ies" },
-        lines.join("\n"),
-    )
-}
-
-const RECONCILE_FILES_SHOWN: usize = 8;
-
-/// The close gate's block: one line per file, each claim counted once (its
-/// code and test anchors are one claim) by its worst state. The statements
-/// stay out — this lands in the user's transcript; `locate {file}` has them.
-fn reconcile_reason(close: &CloseView) -> String {
-    let mut total = 0;
-    let mut lines: Vec<String> = Vec::new();
-    for f in &close.needs_reconcile {
-        let mut by_claim: Vec<(&str, &str)> = Vec::new();
-        for c in &f.claims {
-            let id = crate::test_resp_id(&c.id).unwrap_or(&c.id);
-            match by_claim.iter_mut().find(|(k, _)| *k == id) {
-                Some(entry) if c.state == "broken" => entry.1 = "broken",
-                Some(_) => {}
-                None => by_claim.push((id, c.state.as_str())),
-            }
-        }
-        total += by_claim.len();
-        let mut counts: Vec<(&str, usize)> = Vec::new();
-        for (_, state) in &by_claim {
-            match counts.iter_mut().find(|(s, _)| s == state) {
-                Some(entry) => entry.1 += 1,
-                None => counts.push((state, 1)),
-            }
-        }
-        let counts: Vec<String> = counts.iter().map(|(s, n)| format!("{n} {s}")).collect();
-        lines.push(format!("- {} — {}", f.file, counts.join(", ")));
-    }
-    let more = lines.len().saturating_sub(RECONCILE_FILES_SHOWN);
-    lines.truncate(RECONCILE_FILES_SHOWN);
-    if more > 0 {
-        lines.push(format!("- +{more} more file(s)"));
-    }
-    format!(
-        "Scryer close gate — {total} claim(s) in {} file(s) went out of sync with the code this \
-         session:\n{}\n`locate {{file}}` lists them. If a claim still describes the code, nothing to \
-         do; if its behaviour changed, reword it (update_nodes), re-anchor it (update_source_map) or \
-         flag_drift. Fires once per session.",
-        close.needs_reconcile.len(),
-        lines.join("\n"),
-    )
+    session_store::append(r, session, SessionEvent::Stop)
 }
 
 /// Point harness process `pid` at `session`, so an MCP server spawned by that
@@ -407,6 +175,59 @@ pub fn bind_pid(r: &ModelRef, session: &str, pid: u32) -> Result<(), String> {
     std::fs::write(path, session).map_err(|e| e.to_string())
 }
 
+/// Another session working in this project now, as orient shows it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiveSession {
+    pub id: String,
+    /// The task it oriented on.
+    pub task: Option<String>,
+    pub touched: Vec<String>,
+    /// The todo tests it owns, `(file, junit_name)`.
+    pub stubs: Vec<(String, String)>,
+}
+
+/// How recent a touch keeps a session live without a running process.
+const LIVE_SECS: u64 = 3600;
+
+/// The sessions live in this project besides `except`: a harness process
+/// bound to it is still running, or it touched a file in the last hour.
+pub fn live_sessions(r: &ModelRef, except: Option<&str>) -> Vec<LiveSession> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let running: HashSet<String> = std::fs::read_dir(r.sessions_dir().join(".by-pid"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_name().to_str().and_then(|p| p.parse::<u32>().ok()).is_some_and(process_alive))
+        .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+        .map(|s| s.trim().to_string())
+        .collect();
+    session_store::list(r)
+        .into_iter()
+        .filter(|(id, _)| Some(id.as_str()) != except)
+        .filter_map(|(id, _)| {
+            let entries = session_store::read(r, &id);
+            let recent = entries
+                .iter()
+                .any(|e| matches!(e.event, SessionEvent::Touch { .. }) && e.at + LIVE_SECS >= now);
+            if !recent && !running.contains(&id) {
+                return None;
+            }
+            let log = SessionLog::from_events(&entries);
+            let task = log.task.clone();
+            Some(LiveSession { id, task, touched: log.touched, stubs: log.stubs })
+        })
+        .collect()
+}
+
+/// Whether process `pid` is running. Known on Linux; elsewhere a session is
+/// live only by its recent touches.
+fn process_alive(pid: u32) -> bool {
+    cfg!(target_os = "linux") && std::path::Path::new(&format!("/proc/{pid}")).exists()
+}
+
 /// The session harness process `pid` last bound, if any.
 pub fn session_for_pid(r: &ModelRef, pid: u32) -> Option<String> {
     let s = std::fs::read_to_string(r.sessions_dir().join(".by-pid").join(pid.to_string())).ok()?;
@@ -421,218 +242,69 @@ mod tests {
     fn project() -> (tempfile::TempDir, ModelRef) {
         let dir = tempfile::tempdir().unwrap();
         let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
-        let m: crate::ScryModel = serde_json::from_value(serde_json::json!({
-            "version": "0.3", "links": [],
-            "nodes": [
-                { "id": "sys", "kind": "system", "name": "Acme" },
-                { "id": "api", "kind": "container", "name": "API", "parentId": "sys",
-                  "responsibilities": [
-                      { "id": "r-1", "statement": "**When** a request arrives, **serves** it" },
-                      { "id": "r-2", "statement": "**Log** every request" }
-                  ] }
-            ],
-            "sourceMap": {
-                "r-1": [{ "pattern": "src/auth.rs", "symbol": "verify" }],
-                "r-2": [{ "pattern": "src/log.rs", "symbol": "log" }]
-            }
-        }))
-        .unwrap();
-        crate::write_model_at(&r, &m).unwrap();
+        std::fs::create_dir_all(dir.path().join(".scryer")).unwrap();
         (dir, r)
     }
 
+    /// The overlay is served once per session until its payload changes.
     #[test]
     fn overlay_is_served_once_per_session_until_it_changes() {
         let (dir, r) = project();
         let abs = format!("{}/src/auth.rs", dir.path().display());
+        let payload = |claim: &str| serde_json::json!({ "file": "src/auth.rs", "claims": [claim] });
 
-        let first = overlay(&r, Some("s1"), &abs).unwrap().expect("first read injects");
-        assert_eq!(first["file"], "src/auth.rs");
-        assert_eq!(first["claims"][0]["id"], "r-1");
-        assert!(overlay(&r, Some("s1"), &abs).unwrap().is_none(), "identical repeat is silent");
-        assert!(overlay(&r, Some("s2"), &abs).unwrap().is_some(), "per session");
-        assert!(overlay(&r, None, &abs).unwrap().is_some(), "no session: always");
-        assert!(overlay(&r, None, &abs).unwrap().is_some());
-
-        let mut m = crate::read_model_at(&r).unwrap();
-        m.nodes[1].responsibilities[0].statement = "serves authenticated requests".into();
-        crate::write_model_at(&r, &m).unwrap();
-        let changed = overlay(&r, Some("s1"), &abs).unwrap().expect("changed payload re-fires");
-        assert_eq!(changed["claims"][0]["statement"], "serves authenticated requests");
-        assert!(overlay(&r, Some("s1"), &abs).unwrap().is_none());
+        let first = overlay(&r, Some("s1"), &abs, payload("serves")).unwrap().expect("first read injects");
+        assert_eq!(first["claims"][0], "serves");
+        assert!(overlay(&r, Some("s1"), &abs, payload("serves")).unwrap().is_none(), "identical repeat is silent");
+        assert!(overlay(&r, Some("s2"), &abs, payload("serves")).unwrap().is_some(), "per session");
+        assert!(overlay(&r, None, &abs, payload("serves")).unwrap().is_some(), "no session: always");
+        let changed = overlay(&r, Some("s1"), &abs, payload("serves authenticated")).unwrap();
+        assert!(changed.is_some(), "a changed payload re-fires");
+        assert!(overlay(&r, Some("s1"), &abs, payload("serves authenticated")).unwrap().is_none());
     }
 
+    /// A stop is only recorded: it never blocks, whatever the session left.
     #[test]
-    fn the_close_gate_fires_once_per_session() {
-        let (dir, r) = project();
-        record_touch(&r, "s1", &format!("{}/src/auth.rs", dir.path().display())).unwrap();
-        record_touch(&r, "s1", "README.md").unwrap();
-        assert_eq!(session_log(&r, "s1").touched, vec!["src/auth.rs", "README.md"]);
-
-        let clean = close_gate(&r, "s1", |_| vec![]);
-        assert!(clean.needs_reconcile.is_empty());
-        assert_eq!(clean.unmodeled, vec!["README.md"]);
-
-        let flag = || AnchorFlag {
-            key: "r-1".into(),
-            host_name: "API".into(),
-            file: "src/auth.rs".into(),
-            symbol: Some("verify".into()),
-            state: "changed".into(),
-        };
-        assert_eq!(close_gate(&r, "s1", |_| vec![flag()]).needs_reconcile.len(), 1);
-        assert!(close_gate(&r, "s1", |_| vec![flag()]).needs_reconcile.is_empty(), "spent");
-        assert!(close_gate(&r, "s2", |_| vec![flag()]).needs_reconcile.is_empty(), "s2 touched nothing");
-        record_touch(&r, "s2", "src/auth.rs").unwrap();
-        assert_eq!(close_gate(&r, "s2", |_| vec![flag()]).needs_reconcile.len(), 1, "s2 has its own gate");
-    }
-
-    use crate::application::hooks::{FileClaims, FlaggedClaim};
-
-    fn flag_on(file: &str, key: &str, state: &str) -> AnchorFlag {
-        AnchorFlag {
-            key: key.into(),
-            host_name: "API".into(),
-            file: file.into(),
-            symbol: None,
-            state: state.into(),
-        }
-    }
-
-    /// Drift the session found is not drift it made: a claim already out of
-    /// sync when the session first read its file, and still in that state,
-    /// stays out of the gate; one that changed state, or was in sync then, is
-    /// the session's.
-    #[test]
-    fn the_close_gate_leaves_out_drift_the_session_found() {
+    fn a_stop_is_recorded_and_never_blocks() {
         let (_dir, r) = project();
-        let before = vec![flag_on("src/auth.rs", "r-1", "changed"), flag_on("src/other.rs", "r-9", "changed")];
-        record_first_sight(&r, "s", "src/auth.rs", |_| before.clone()).unwrap();
-        record_first_sight(&r, "s", "src/auth.rs", |_| panic!("only the first read checks")).unwrap();
         record_touch(&r, "s", "src/auth.rs").unwrap();
-
-        let found = close_gate(&r, "s", |_| vec![flag_on("src/auth.rs", "r-1", "changed")]);
-        assert!(found.needs_reconcile.is_empty(), "already changed at first sight: {found:?}");
-        let made = close_gate(&r, "s", |_| vec![flag_on("src/auth.rs", "r-1", "broken")]);
-        assert_eq!(made.needs_reconcile.len(), 1, "changed → broken is the session's");
+        stop(&r, "s", Some(&[]), Vec::new()).unwrap();
+        stop(&r, "s", None, Vec::new()).unwrap();
+        let stops = session_store::read(&r, "s").into_iter().filter(|e| e.event == SessionEvent::Stop).count();
+        assert_eq!(stops, 2);
     }
 
-    /// The block lands in the user's transcript: one line per file, a claim's
-    /// code and test anchors counted once, at most eight files.
+    /// At a stop, the todo tests the session wrote since its start in files
+    /// it touched become its stubs — not ones that were already there, not
+    /// ones in files it never touched, not another session's — and the
+    /// claims its edits reach are recorded.
     #[test]
-    fn the_close_gate_block_is_one_line_per_file() {
-        let claim = |id: &str, state: &str| FlaggedClaim {
-            id: id.into(),
-            host: Some("API".into()),
-            symbol: None,
-            state: state.into(),
-            statement: Some("a very long statement that must not reach the user".into()),
-        };
-        let file = |i: usize| FileClaims {
-            file: format!("src/f{i}.rs"),
-            claims: vec![claim("r-1", "changed"), claim("test:r-1", "broken"), claim("r-2", "changed")],
-        };
-        let close = CloseView { needs_reconcile: (0..10).map(file).collect(), ..Default::default() };
-        let reason = reconcile_reason(&close);
-        assert!(reason.contains("- src/f0.rs — 1 broken, 1 changed"), "{reason}");
-        assert!(reason.contains("- +2 more file(s)"), "{reason}");
-        assert!(!reason.contains("src/f8.rs"), "{reason}");
-        assert!(!reason.contains("very long statement"), "{reason}");
-        assert!(reason.contains("20 claim(s) in 10 file(s)"), "{reason}");
-    }
-
-    fn no_flags(_: &[String]) -> Vec<AnchorFlag> {
-        vec![]
-    }
-
-    fn no_probes(_: &SessionLog) -> (Option<String>, Option<String>) {
-        (None, None)
-    }
-
-    #[test]
-    fn the_probe_gate_blocks_once_and_survivors_reach_the_summary() {
+    fn a_stop_records_the_sessions_new_stubs_and_what_it_reached() {
         let (_dir, r) = project();
-        let probes = |_: &SessionLog| (Some("probe 2 claims".to_string()), None);
-        assert_eq!(stop(&r, "s", no_flags, probes).block.as_deref(), Some("probe 2 claims"));
-        assert!(stop(&r, "s", no_flags, probes).block.is_none(), "once per session");
-        let survivor = |_: &SessionLog| (Some("probe".to_string()), Some("r-1's test missed a break".to_string()));
-        let out = stop(&r, "s", no_flags, survivor);
-        assert_eq!(out.summary.as_deref(), Some("scryer · r-1's test missed a break"));
-    }
-
-    #[test]
-    fn a_progress_note_answers_the_unfolded_gate_and_reaches_the_user() {
-        let (_dir, r) = project();
-        let mut plan = crate::read_model_at(&r).unwrap();
-        plan.nodes[1].responsibilities.push(serde_json::from_value(
-            serde_json::json!({ "id": "r-2", "statement": "rate-limits callers" }),
+        let t = |f: &str, n: &str| (f.to_string(), n.to_string());
+        begin(&r, "s", || vec![t("src/a.rs", "old")]).unwrap();
+        begin(&r, "s", || panic!("the start is recorded once")).unwrap();
+        record_touch(&r, "s", "src/a.rs").unwrap();
+        record_touch(&r, "other", "src/a.rs").unwrap();
+        crate::infrastructure::session_store::append(
+            &r,
+            "other",
+            SessionEvent::Stub { file: "src/a.rs".into(), test: "theirs".into() },
         )
-        .unwrap());
-        let cid = crate::domain::changes::open_change_for(&mut plan, "limit", Some("s"), 1);
-        crate::domain::changes::tag(&mut plan, &["resp:r-2".to_string()], &cid);
-        crate::write_planned_at(&r, &plan).unwrap();
+        .unwrap();
 
-        let notes: std::collections::BTreeMap<String, String> = [
-            ("r-2".to_string(), "token bucket built; per-route limits left".to_string()),
-            ("r-1".to_string(), "already folded".to_string()),
-        ]
-        .into();
-        assert_eq!(crate::note_claims(&r, &notes).unwrap(), vec!["r-1".to_string()], "only pending claims take a note");
+        let planned = [t("src/a.rs", "old"), t("src/a.rs", "mine"), t("src/a.rs", "theirs"), t("src/b.rs", "untouched")];
+        stop(&r, "s", Some(&planned), vec!["resp-1".into()]).unwrap();
+        let log = session_log(&r, "s");
+        assert_eq!(log.stubs, vec![t("src/a.rs", "mine")]);
+        assert_eq!(log.reached, vec!["resp-1"]);
 
-        let out = stop(&r, "s", no_flags, no_probes);
-        assert!(out.block.is_none(), "a noted entry is an honest exit: {out:?}");
-        let summary = out.summary.unwrap();
-        assert!(summary.contains("per-route limits left") && !summary.contains("no note"), "{summary}");
-        assert_eq!(unfolded(&r, "s")[0].note.as_deref(), Some("token bucket built; per-route limits left"));
-    }
-
-    #[test]
-    fn the_stop_gate_names_unfolded_session_work_once() {
-        let (_dir, r) = project();
-        let mut plan = crate::read_model_at(&r).unwrap();
-        plan.nodes[1].responsibilities.push(serde_json::from_value(
-            serde_json::json!({ "id": "r-2", "statement": "rate-limits callers" }),
-        )
-        .unwrap());
-        let cid = crate::domain::changes::open_change_for(&mut plan, "limit", Some("s"), 1);
-        crate::domain::changes::tag(&mut plan, &["resp:r-2".to_string()], &cid);
-        crate::write_planned_at(&r, &plan).unwrap();
-
-        assert!(unfolded(&r, "other").is_empty(), "another session's work is not this one's");
-        record_model_edit(&r, "s", vec!["resp:r-2".to_string()]).unwrap();
-        record_touch(&r, "s", "src/auth.rs").unwrap();
-        let reason = stop(&r, "s", no_flags, no_probes).block.expect("unfolded work blocks");
-        assert!(reason.contains("resp:r-2") && reason.contains("mark_implemented"), "{reason}");
-        let quiet = stop(&r, "s", no_flags, no_probes);
-        assert!(quiet.block.is_none(), "once per session");
-        let summary = quiet.summary.expect("the user still hears about it");
-        assert!(summary.contains("planned, not built: 1") && summary.contains("rate-limits callers"), "{summary}");
-        assert_eq!(session_view(&r, "s").unfolded.len(), 1);
-    }
-
-    /// A plan nothing was built on yet is waiting on the user's sign-off: the
-    /// stop lets the question stand, and the gate arms once code is edited.
-    #[test]
-    fn a_plan_awaiting_sign_off_does_not_block_the_stop() {
-        let (_dir, r) = project();
-        let mut plan = crate::read_model_at(&r).unwrap();
-        plan.nodes[1].responsibilities.push(serde_json::from_value(
-            serde_json::json!({ "id": "r-2", "statement": "rate-limits callers" }),
-        )
-        .unwrap());
-        let cid = crate::domain::changes::open_change_for(&mut plan, "limit", Some("s"), 1);
-        crate::domain::changes::tag(&mut plan, &["resp:r-2".to_string()], &cid);
-        crate::write_planned_at(&r, &plan).unwrap();
-
-        record_touch(&r, "s", "src/log.rs").unwrap();
-        record_model_edit(&r, "s", vec!["resp:r-2".to_string()]).unwrap();
-        let out = stop(&r, "s", no_flags, no_probes);
-        assert!(out.block.is_none(), "an edit before planning is not building it: {out:?}");
-        assert!(out.summary.unwrap().contains("rate-limits callers"), "the user still sees it");
-
-        record_touch(&r, "s", "src/auth.rs").unwrap();
-        let reason = stop(&r, "s", no_flags, no_probes).block.expect("built on, then left unfolded");
-        assert!(reason.contains("resp:r-2"), "{reason}");
+        // A later stop with a new stub adds only that one.
+        let planned = [planned.as_slice(), &[t("src/a.rs", "later")]].concat();
+        stop(&r, "s", Some(&planned), vec!["resp-1".into(), "resp-2".into()]).unwrap();
+        let log = session_log(&r, "s");
+        assert_eq!(log.stubs, vec![t("src/a.rs", "mine"), t("src/a.rs", "later")]);
+        assert_eq!(log.reached.len(), 2);
     }
 
     /// Edits outside the project — a probe worktree, a scratch file — are
@@ -676,8 +348,7 @@ mod tests {
         assert!(record_shell_edits(&r, "other", None).unwrap().is_empty(), "no start, no touches");
     }
 
-    /// Sessions sharing a checkout: a file another session logged editing
-    /// while this one's command ran is left to that session.
+    /// When another session logged editing a file while this one's command ran, leaves the file to that session.
     #[test]
     fn a_file_another_session_edited_meanwhile_is_not_this_sessions() {
         let (dir, r) = project();
@@ -690,6 +361,26 @@ mod tests {
 
         assert_eq!(record_shell_edits(&r, "a", Some("call-1")).unwrap(), vec!["src/mine.rs"]);
         assert!(!session_log(&r, "a").touched.contains(&"src/theirs.rs".to_string()));
+    }
+
+    /// While a process bound to a session runs or it touched a file in the last hour, counts the session as live, never the caller itself.
+    #[test]
+    fn live_sessions_are_running_or_recently_touching() {
+        let (_dir, r) = project();
+        record_touch(&r, "recent", "src/a.rs").unwrap();
+        record_task(&r, "recent", "rename drafts").unwrap();
+        crate::infrastructure::session_store::append(&r, "idle", SessionEvent::Stop).unwrap();
+        crate::infrastructure::session_store::append(&r, "bound", SessionEvent::Stop).unwrap();
+        bind_pid(&r, "bound", std::process::id()).unwrap();
+        record_touch(&r, "me", "src/a.rs").unwrap();
+
+        let mut live: Vec<LiveSession> = live_sessions(&r, Some("me"));
+        live.sort_by(|a, b| a.id.cmp(&b.id));
+        let ids: Vec<&str> = live.iter().map(|s| s.id.as_str()).collect();
+        let expected: &[&str] = if cfg!(target_os = "linux") { &["bound", "recent"] } else { &["recent"] };
+        assert_eq!(ids, expected);
+        let recent = live.iter().find(|s| s.id == "recent").unwrap();
+        assert_eq!((recent.task.as_deref(), recent.touched.as_slice()), (Some("rename drafts"), &["src/a.rs".to_string()][..]));
     }
 
     #[test]

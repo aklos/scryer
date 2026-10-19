@@ -1,4 +1,5 @@
-//! The developer's global agent preferences.
+//! The developer's global agent preferences: read from the settings file, with
+//! the defaults when there is none, and written back to it.
 
 use crate::domain::agent_settings::SubagentSettings;
 use crate::infrastructure::settings;

@@ -1,9 +1,10 @@
 /**
- * The observability feed: fetches the `get_model_health` report (coverage,
- * anchor fingerprints, link evidence) and keeps it current. The command runs
- * the extractor over the whole project, so it's fetched in the background —
- * never on every keystroke — and refreshed when an agent run finishes or a
- * reconcile changes what the anchors mean.
+ * The observability feed: fetches the `get_model_health` report (completeness,
+ * test anchors, the derived import graph, structural violations) and keeps it
+ * current. The command runs the extractor over the whole project, so it is
+ * fetched in the background — on open, when an agent run ends, and on demand
+ * after a write — never on every keystroke. A refresh asked for mid-fetch
+ * queues one trailing re-fetch, and an unchanged report does not re-render.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";

@@ -1,3 +1,8 @@
+/**
+ * The dark code page: files under a node's boundary that no test reaches,
+ * grouped by node — the model's blind spots.
+ */
+
 import { Check } from "lucide-react";
 import type { ScryModel } from "../../entities/model/viewmodel";
 import type { ModelHealthReport } from "../../entities/model/health";

@@ -1,12 +1,11 @@
 /**
  * The bottom-of-page Connections section — Wikipedia's "See also" for the
- * model graph. Every declared relationship gets a full-width row with room to
- * read: the peer as a wikilink, the link label as plain text, the protocol,
- * and the import-evidence verdict; beneath it, the peer node's own
- * description (the "annotation" Wikipedia puts after a See-also entry).
+ * graph. Each of the node's links gets a full-width diff row against the
+ * committed tree: the peer as a wikilink, the link label, the protocol, the
+ * import-evidence count, and an expandable ladder of the code paths behind it.
  * Grouped by direction — Uses (outgoing) / Used by (incoming) — plus the
- * code-suggested candidates with a one-click declare. This is where
- * connections are read and edited.
+ * code-suggested candidates. `ImpliedConnectionsSection`, its read-only
+ * companion, lists this subtree's cross-level reaches from the import graph.
  */
 
 import { useMemo, useState } from "react";

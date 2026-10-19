@@ -1,4 +1,6 @@
-//! The build's cached dependency graph.
+//! The build's cached dependency graph: written best-effort to
+//! `.scryer/.build_edges.json` beside the model, and read back when a pass
+//! wrote one.
 
 use crate::domain::build_edges::BuildEdges;
 use crate::infrastructure::edges_cache;

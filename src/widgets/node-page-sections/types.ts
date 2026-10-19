@@ -1,24 +1,13 @@
-import type { ScryModel, DriftScope } from "../../entities/model/viewmodel";
+import type { ScryModel } from "../../entities/model/viewmodel";
 import type { Editor } from "../../entities/model/editor";
 import type { ClaimProbeStatus, ClaimTestStatus, ModelHealthReport } from "../../entities/model/health";
-import type { ChangeRevision } from "../../features/model-storage/useModelStorage";
-import type { HistoryEvent } from "../../entities/model/history";
 import type { PreviewServerState } from "../../features/preview-client/usePreviewServer";
-
-export type SpecialPage = "changes" | "dark" | "unmapped" | "session";
-
-export type Selected =
-  | { kind: "node"; id: string }
-  | { kind: "group"; id: string }
-  // Wiki special pages — Changes, Session, Dark code, Unmapped
-  // claims (App routes these).
-  | { kind: "special"; id: SpecialPage };
+import type { Selected } from "../../entities/model/navigation";
 
 export interface PageProps {
   model: ScryModel;
-  /** The committed model (`model.scry`) — the diff base. The Overview renders
-   *  each claim as a diff of `model` (working/planned) against this. Null only
-   *  in the brief window before the committed model loads. */
+  /** The derived tree's committed layer — the diff base: a claim in `model`
+   *  and not here is a todo stub. Null only before it loads. */
   committed: ScryModel | null;
   selected: Selected;
   report: ModelHealthReport | null;
@@ -37,14 +26,4 @@ export interface PageProps {
   /** The project's preview sidecar — whether a node gets a Preview section is
    *  derived from the mountable exports it reports, never from the model. */
   preview: PreviewServerState;
-  /** Session-local journal of every edit (yours and the agent's), newest
-   *  first — filtered per node to drive the History tab. */
-  changeLog: readonly ChangeRevision[];
-  /** Durable committed-model timeline (`.scryer/history.jsonl`), oldest first —
-   *  filtered per node to drive the History tab. */
-  history: readonly HistoryEvent[];
-  /** Boundary-owning nodes whose code changed since the last reconcile —
-   *  surfaced as a drift banner on the owning node's page. */
-  driftScopes: DriftScope[];
-  onCheckDrift?: () => void;
 }

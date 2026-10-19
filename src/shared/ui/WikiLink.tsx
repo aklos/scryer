@@ -1,3 +1,8 @@
+/**
+ * Inline cross-references: `WikiLink` to another node's or group's page, and
+ * `jumpTo`, which scrolls an element into view and flashes it.
+ */
+
 import type { ComponentType } from "react";
 import type { LucideProps } from "lucide-react";
 import { ArrowDownLeft, ArrowUpRight } from "lucide-react";

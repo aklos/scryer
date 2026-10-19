@@ -1,12 +1,13 @@
-//! The desktop app's wiring: recover the user's PATH, build the Tauri app,
-//! register its state and its whole command surface.
+//! The desktop app's wiring: recover the user's PATH (a macOS app launched
+//! from the Dock or Finder inherits a minimal one), build the Tauri app,
+//! register its managed state and its whole command surface.
 
 use std::sync::Mutex;
 
 use tauri::Manager;
 
 use crate::shell::state::{AcpState, PreviewState, WatcherState};
-use crate::shell::{build, mcp_setup, observability, preview, project, source_view, verdicts};
+use crate::shell::{derived, mcp_setup, observability, preview, project, source_view};
 
 /// macOS GUI apps launched via Spotlight, Dock, or Finder inherit a minimal
 /// PATH (`/usr/bin:/bin:/usr/sbin:/sbin`) that excludes user-installed tools.
@@ -59,41 +60,27 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             project::watch_project,
-            project::is_legacy_model,
             project::read_model,
             project::read_planned,
-            project::write_planned,
-            project::list_sessions,
-            project::read_session,
-            project::read_history,
             source_view::open_in_editor,
             source_view::read_source_span,
             source_view::verify_anchor,
             mcp_setup::detect_ai_tools,
-            mcp_setup::setup_mcp_integration,
-            project::create_blank_model,
+            mcp_setup::agent_integration,
+            mcp_setup::set_agent_integration,
             project::get_subagent_settings,
             project::set_subagent_settings,
             preview::ensure_preview_server,
             preview::start_preview_fixture_session,
-            build::start_model_build,
-            build::start_drift_check,
-            observability::get_drift_status,
             observability::get_model_health,
             observability::get_test_statuses,
             observability::get_probe_statuses,
-            verdicts::adopt_responsibility,
-            verdicts::reject_responsibility,
-            verdicts::drop_responsibility,
-            verdicts::reimplement_responsibility,
-            verdicts::adopt_property,
-            verdicts::reject_property,
-            verdicts::drop_property,
-            verdicts::reimplement_property,
-            verdicts::reword_responsibility,
-            verdicts::drop_node,
-            verdicts::reimplement_node,
             preview::cancel_agent_session,
+            derived::get_derived_status,
+            derived::get_landing,
+            derived::edit_claim_text,
+            derived::add_claim_stub,
+            derived::rename_container,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

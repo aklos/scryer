@@ -1,5 +1,8 @@
-//! The extraction entry points another container calls: walk the project,
-//! read what its manifests declare, parse its sources, and hand back the map.
+//! The extraction entry points another container calls: walk the project
+//! (skipping vendor and build directories), read what its manifests declare,
+//! parse its sources — reusing the cached parse of any unchanged file — and
+//! hand back the map. A parse-free listing of every project file serves
+//! checks that resolve boundary globs against real files.
 
 use crate::domain::context::{self, ProjectContext};
 use crate::infrastructure::{manifest, tsconfig, walk};
@@ -81,7 +84,8 @@ mod tests {
         }
     }
 
-    /// Ad-hoc: dump the container/file/symbol/edge summary for an arbitrary repo.
+    /// Ad-hoc: dump the container/file/symbol/edge summary for an arbitrary repo [manual]
+    ///
     /// `REPO=/path cargo test -p scryer-extract dump_external -- --ignored --nocapture`
     #[test]
     #[ignore]

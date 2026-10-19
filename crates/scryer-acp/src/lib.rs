@@ -1,5 +1,5 @@
-//! Spawns and drives AI coding agent subprocesses to update architecture
-//! models.
+//! Spawns and drives AI coding agent subprocesses — today, to author fixture
+//! data for a component's live preview.
 //!
 //! Layered as a `library`: `domain` is the launch vocabulary and the event
 //! shapes, `application` the prompts, `infrastructure` the subprocess runtime

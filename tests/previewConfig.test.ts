@@ -25,13 +25,13 @@ describe("previewConfigFile", () => {
     expect(previewConfigFile(project, pkg, on(previewTs))).toBe(previewTs);
   });
 
-  it("falls back to the package's own config when there is no preview config", () => {
+  it("When there is no preview config, falls back to the package's own config", () => {
     const own = path.join(project, "apps", "web", "vite.config.js");
     const pkg = path.join(project, "apps", "web");
     expect(previewConfigFile(project, pkg, on(own))).toBe(own);
   });
 
-  it("is undefined when neither exists, leaving vite its own default search", () => {
+  it("When neither config exists, is undefined, leaving vite its own default search", () => {
     expect(previewConfigFile(project, project, on())).toBeUndefined();
   });
 });

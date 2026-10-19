@@ -1,17 +1,17 @@
-//! `scryer-mcp status` — the model's loop state as a one-liner for humans.
+//! The command-line side of scryer-mcp: the status line, the CI gate, the
+//! claim lint, the derived-data export, agent-integration setup, and the
+//! one-shot migration of an authored model into the code.
 //!
-//! Reads the model straight from disk: no app, no MCP session. The project is
-//! found by walking up from the cwd (or an explicit path argument) to the
-//! first directory holding `.scryer/` — the first hit ends the walk, so a
-//! nested project never reports its parent's model. Every legal invocation
-//! exits 0, including "no model found", so the command is safe to call
-//! unconditionally from prompts and statuslines.
-//!
-//! The line matches the hook endpoint's `statusLine` wording (both are the
-//! same ambient signal, one pulled, one pushed), and `--json` returns the
-//! counts under the same keys as `GET /status`.
+//! Everything but `migrate` reads the C4 tree derived from the code and each
+//! claim's derived status. The project is found by walking up from the cwd (or
+//! an explicit path argument) to the first directory holding `.scryer/`; the
+//! first hit ends the walk, so a nested project never reports its parent's.
+//! `status` and `statusline` exit 0 on every legal invocation, so they are
+//! safe to call from prompts; `check` and `lint` are gates and exit non-zero
+//! on findings.
 
-use crate::helpers::{pending_changes, status_counts, StatusCounts};
+use scryer_core::derived_tree::{DerivedCounts, DerivedStatus, DerivedTree};
+use scryer_core::ModelRef;
 use std::path::{Path, PathBuf};
 
 pub(crate) fn run_status(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
@@ -31,25 +31,22 @@ pub(crate) fn run_status(args: &[String]) -> Result<(), Box<dyn std::error::Erro
         Some(p) => p,
         None => std::env::current_dir()?,
     };
-
-    let counts = find_project(&start).and_then(|project| {
-        status_counts(&scryer_core::ModelRef::ProjectLocal(project))
-    });
-    match counts {
-        Some(c) if json => println!("{}", status_json(&c)),
-        Some(c) => println!("{}", status_line(&c)),
-        None if json => println!("{}", serde_json::json!({ "model": false })),
-        None => println!("scryer: no model (searched up from {})", start.display()),
+    let status = find_project(&start).and_then(|p| derived_status(&p).ok());
+    match status {
+        Some((_, s)) if json => println!("{}", status_json(&s.totals)),
+        Some((_, s)) => println!("{}", status_line(&s.totals)),
+        None if json => println!("{}", serde_json::json!({ "project": false })),
+        None => println!("scryer: no project (searched up from {})", start.display()),
     }
     Ok(())
 }
 
 /// `scryer-mcp statusline` — the Claude Code statusline command. Claude Code
 /// invokes it on conversation updates with a session JSON blob on stdin and
-/// shows the first stdout line under the prompt. Prints NOTHING when no model
-/// is found (a blank segment, not an error), and always exits 0. Also callable
-/// from a user's own statusline script — stdin is only read when it is piped,
-/// and an empty/foreign payload falls back to the process cwd.
+/// shows the first stdout line under the prompt. Prints NOTHING when no
+/// project is found (a blank segment, not an error), and always exits 0. Also
+/// callable from a user's own statusline script — stdin is only read when it
+/// is piped, and an empty/foreign payload falls back to the process cwd.
 pub(crate) fn run_statusline() -> Result<(), Box<dyn std::error::Error>> {
     use std::io::{IsTerminal, Read};
     let mut input = String::new();
@@ -60,10 +57,8 @@ pub(crate) fn run_statusline() -> Result<(), Box<dyn std::error::Error>> {
         Some(d) => d,
         None => return Ok(()),
     };
-    if let Some(project) = find_project(&start) {
-        if let Some(c) = status_counts(&scryer_core::ModelRef::ProjectLocal(project)) {
-            println!("{}", status_line(&c));
-        }
+    if let Some((_, s)) = find_project(&start).and_then(|p| derived_status(&p).ok()) {
+        println!("{}", status_line(&s.totals));
     }
     Ok(())
 }
@@ -80,9 +75,8 @@ pub(crate) fn statusline_start_dir(input: &str) -> Option<PathBuf> {
 }
 
 /// Walk up from `start` to the first directory containing `.scryer/`. The
-/// first hit ends the walk whether or not a readable model is inside — an
-/// empty or broken `.scryer` is not a reason to keep climbing into a parent
-/// project's model (same rule as the hook client's discovery).
+/// first hit ends the walk — an empty `.scryer` is not a reason to keep
+/// climbing into a parent project (same rule as the hook client's discovery).
 pub(crate) fn find_project(start: &Path) -> Option<PathBuf> {
     let mut dir = Some(start.to_path_buf());
     while let Some(d) = dir {
@@ -94,30 +88,144 @@ pub(crate) fn find_project(start: &Path) -> Option<PathBuf> {
     None
 }
 
-/// `scryer-mcp check` — the opt-in CI gate. Exit 0 clean, 1 findings, 2 no
-/// model / unusable repo (a misconfigured CI step should be loud, unlike
-/// `status`). Default failure conditions: validator warnings on the working
-/// view (the same trio the `validate_model` tool runs) and anchors whose code
-/// is gone — broken/missing fingerprints plus a baseline-free existence sweep.
-/// `--fail-on-drift` and `--fail-on-pending` gate stricter teams; without the
-/// flags those dimensions are reported as notes, and dimensions that CANNOT be
-/// verified (no committed baseline / reconcile anchor) say so instead of
-/// passing silently.
-pub(crate) fn run_check(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let mut fail_on_drift = false;
-    let mut fail_on_pending = false;
-    let mut fail_on_tests = true;
+fn derived_status(project: &Path) -> Result<(DerivedTree, DerivedStatus), String> {
+    scryer_extract::test_status::derived_status(&ModelRef::ProjectLocal(project.to_path_buf()))
+}
+
+/// The project a gate runs on — the nearest `.scryer/` above the path
+/// argument (or the cwd), else that directory itself, since a repo can be
+/// checked before scryer ever wrote there — and the flags given.
+fn gate_project(args: &[String], usage: &str) -> Result<(PathBuf, Vec<String>), Box<dyn std::error::Error>> {
+    let mut flags = Vec::new();
     let mut start: Option<PathBuf> = None;
     for a in args {
-        match a.as_str() {
-            "--fail-on-drift" => fail_on_drift = true,
-            "--fail-on-pending" => fail_on_pending = true,
-            "--no-fail-on-tests" => fail_on_tests = false,
-            _ if !a.starts_with('-') && start.is_none() => start = Some(PathBuf::from(a)),
-            other => {
-                eprintln!(
-                    "unknown argument '{other}'\nusage: scryer-mcp check [--fail-on-drift] [--fail-on-pending] [--no-fail-on-tests] [path]"
-                );
+        if a.starts_with('-') {
+            flags.push(a.clone());
+        } else if start.is_none() {
+            start = Some(PathBuf::from(a));
+        } else {
+            eprintln!("unexpected argument '{a}'\nusage: {usage}");
+            std::process::exit(2);
+        }
+    }
+    let start = match start {
+        Some(p) => p,
+        None => std::env::current_dir()?,
+    };
+    Ok((find_project(&start).unwrap_or(start), flags))
+}
+
+/// `scryer-mcp migrate [path]`: move an authored model into the code once —
+/// claims into test descriptions, statements into module docs, untested
+/// claims into todo stubs, container names and styles into structure.toml.
+/// Prints each write; a second run prints nothing to do.
+pub(crate) fn run_migrate(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let (project, _) = gate_project(args, "scryer-mcp migrate [path]")?;
+    let report = match scryer_extract::claim_files::migrate(&project) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("migrate: {e}");
+            std::process::exit(2);
+        }
+    };
+    let section = |title: &str, rows: &[String]| {
+        if !rows.is_empty() {
+            println!("{title} ({}):", rows.len());
+            for r in rows {
+                println!("  {r}");
+            }
+        }
+    };
+    section("test descriptions", &report.described);
+    section("module docs", &report.documented);
+    section("todo stubs", &report.stubbed);
+    section("structure.toml", &report.structure);
+    section("left as they are", &report.skipped);
+    if !report.wrote_anything() {
+        println!("nothing to migrate: the code already says it all");
+    }
+    Ok(())
+}
+
+/// One test description that breaks the claim grammar.
+pub(crate) struct LintFinding {
+    pub at: String,
+    pub code: &'static str,
+    pub message: &'static str,
+    pub description: String,
+}
+
+/// Every claim in the tree whose description breaks the EARS grammar.
+pub(crate) fn lint_tree(tree: &DerivedTree) -> Vec<LintFinding> {
+    let mut out = Vec::new();
+    for c in &tree.claims {
+        for issue in scryer_core::ears::lint(&c.description, &c.concerns) {
+            out.push(LintFinding {
+                at: format!("{}:{}", c.file, c.line),
+                code: issue.code,
+                message: issue.message,
+                description: c.description.clone(),
+            });
+        }
+    }
+    out
+}
+
+fn lint_line(f: &LintFinding) -> String {
+    format!("{}: {}: {} — \"{}\"", f.at, f.code, f.message, f.description)
+}
+
+/// `scryer-mcp lint [path]` — lint every behaviour test's description as an
+/// EARS claim. Exit 0 clean, 1 findings, 2 when the tree cannot be derived.
+pub(crate) fn run_lint(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    const USAGE: &str = "scryer-mcp lint [path]";
+    let (project, flags) = gate_project(args, USAGE)?;
+    if let Some(f) = flags.first() {
+        eprintln!("unknown argument '{f}'\nusage: {USAGE}");
+        std::process::exit(2);
+    }
+    let tree = match scryer_extract::derived_tree::derived_tree(&project) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("scryer lint: {e}");
+            std::process::exit(2);
+        }
+    };
+    let findings = lint_tree(&tree);
+    if findings.is_empty() {
+        println!("scryer lint: {} claim(s), clean", tree.claims.len());
+        return Ok(());
+    }
+    for f in &findings {
+        println!("{}", lint_line(f));
+    }
+    println!("scryer lint: {} finding(s) in {} claim(s)", findings.len(), tree.claims.len());
+    std::process::exit(1);
+}
+
+/// What `check` gates on beyond what always fails it.
+#[derive(Default)]
+pub(crate) struct Gates {
+    pub stale: bool,
+    pub mutants: bool,
+}
+
+/// `scryer-mcp export [--project dir]` — refresh the derivation and print it
+/// as one JSON document in the shapes the app's commands return: `tree`
+/// (the derived tree), `status` (each claim's derived status, rolled up),
+/// `structure` (structure.toml with its defaults), `sessions` (each session
+/// log, newest first) and `layout` (the diagram placements the tree's nodes
+/// carry, by node id). Exit 2 when there is no project or it cannot be
+/// derived.
+pub(crate) fn run_export(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    const USAGE: &str = "scryer-mcp export [--project dir]";
+    let mut start: Option<PathBuf> = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match (a.as_str(), it.len()) {
+            ("--project", n) if n > 0 && start.is_none() => start = it.next().map(PathBuf::from),
+            (other, _) => {
+                eprintln!("unknown argument '{other}'\nusage: {USAGE}");
                 std::process::exit(2);
             }
         }
@@ -127,17 +235,75 @@ pub(crate) fn run_check(args: &[String]) -> Result<(), Box<dyn std::error::Error
         None => std::env::current_dir()?,
     };
     let Some(project) = find_project(&start) else {
-        eprintln!("scryer check: no model found (searched up from {})", start.display());
+        eprintln!("scryer export: no project (no .scryer/ at or above {})", start.display());
         std::process::exit(2);
     };
-    let r = scryer_core::ModelRef::ProjectLocal(project.clone());
-    let report = match check_report(&r, fail_on_drift, fail_on_pending, fail_on_tests) {
-        Ok(rep) => rep,
+    match export(&project) {
+        Ok(doc) => println!("{doc}"),
+        Err(e) => {
+            eprintln!("scryer export: {e}");
+            std::process::exit(2);
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn export(project: &Path) -> Result<serde_json::Value, String> {
+    let (tree, status) = derived_status(project)?;
+    let s = scryer_extract::derived_tree::read_structure(project)?;
+    let structure = serde_json::json!({
+        "system": { "name": s.system.name, "persons": s.system.persons, "externals": s.system.externals },
+        "levels": { "e2e": s.levels.e2e, "integration": s.levels.integration },
+        "containers": s.containers.iter().map(|(key, c)| {
+            (key.clone(), serde_json::json!({ "name": c.name, "style": c.style, "layers": c.layers }))
+        }).collect::<serde_json::Map<_, _>>(),
+    });
+    let r = ModelRef::ProjectLocal(project.to_path_buf());
+    let sessions: Vec<serde_json::Value> = scryer_core::derived_tree::sessions_since(&r, 0)
+        .into_iter()
+        .map(|(id, entries)| serde_json::json!({ "id": id, "entries": entries }))
+        .collect();
+    let layout: serde_json::Map<_, _> = tree
+        .planned
+        .nodes
+        .iter()
+        .filter_map(|n| n.position.as_ref().map(|p| (n.id.clone(), serde_json::json!({ "x": p.x, "y": p.y }))))
+        .collect();
+    Ok(serde_json::json!({
+        "tree": tree,
+        "status": status,
+        "structure": structure,
+        "sessions": sessions,
+        "layout": layout,
+    }))
+}
+
+/// `scryer-mcp check [--fail-on-stale] [--fail-on-mutants] [path]` — the CI
+/// gate. Exit 0 clean, 1 findings, 2 when the tree cannot be derived. Failing
+/// claims, style violations and lint errors always fail it; stale claims and
+/// surviving mutants fail it when asked, and are reported as notes otherwise.
+pub(crate) fn run_check(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    const USAGE: &str = "scryer-mcp check [--fail-on-stale] [--fail-on-mutants] [path]";
+    let (project, flags) = gate_project(args, USAGE)?;
+    let mut gates = Gates::default();
+    for f in &flags {
+        match f.as_str() {
+            "--fail-on-stale" => gates.stale = true,
+            "--fail-on-mutants" => gates.mutants = true,
+            other => {
+                eprintln!("unknown argument '{other}'\nusage: {USAGE}");
+                std::process::exit(2);
+            }
+        }
+    }
+    let (tree, status) = match derived_status(&project) {
+        Ok(s) => s,
         Err(e) => {
             eprintln!("scryer check: {e}");
             std::process::exit(2);
         }
     };
+    let report = check_report(&tree, &status, &gates);
     if report.failures.is_empty() {
         println!("scryer check: clean ({})", project.display());
     } else {
@@ -158,411 +324,118 @@ pub(crate) fn run_check(args: &[String]) -> Result<(), Box<dyn std::error::Error
 pub(crate) struct CheckReport {
     /// Findings that fail the gate.
     pub failures: Vec<String>,
-    /// Non-gating observations: dimensions opted out of, or unverifiable ones
-    /// — named explicitly so a vacuous pass never reads as a real one.
+    /// Non-gating observations, named so a pass never hides what it skipped.
     pub notes: Vec<String>,
 }
 
-pub(crate) fn check_report(
-    r: &scryer_core::ModelRef,
-    fail_on_drift: bool,
-    fail_on_pending: bool,
-    fail_on_tests: bool,
-) -> Result<CheckReport, String> {
-    use scryer_extract::anchors::AnchorState;
+pub(crate) fn check_report(tree: &DerivedTree, status: &DerivedStatus, gates: &Gates) -> CheckReport {
+    use scryer_core::derived_tree::{ClaimState, ProbeMark};
+    let mut failures = Vec::new();
+    let mut notes = Vec::new();
+    let at = |id: &str| {
+        tree.claims
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| format!("{}:{} \"{}\"", c.file, c.line, c.description))
+            .unwrap_or_else(|| id.to_string())
+    };
+    let in_state = |state: ClaimState| status.claims.iter().filter(move |c| c.state == state);
 
-    let committed = scryer_core::read_model_at(r)?;
-    let planned = scryer_core::read_planned_at(r)?;
-    let working = scryer_core::working_view(&committed, &planned);
-    let project = r.project_path();
-    let mut failures: Vec<String> = Vec::new();
-    let mut notes: Vec<String> = Vec::new();
-
-    // 1) The validator trio the `validate_model` tool runs, on the working view.
-    let mut warnings = scryer_core::validate::validate(&working);
-    warnings.extend(scryer_core::validate::validate_coverage(&working, project));
-    warnings.extend(scryer_extract::anchors::whole_symbol_warnings(&working, project));
-    failures.extend(warnings.into_iter().map(|w| format!("validator: {w}")));
-    failures.extend(
-        scryer_core::validate::check_conformance(&working, &scryer_core::load_styles(project))
-            .into_iter()
-            .map(|w| format!("conformance: {w}")),
-    );
-
-    // 1b) Structural violations: code-time conformance to declared styles. The check owns its own extraction so
-    //    CI needs no cached dependency graph; the cache is refreshed as a
-    //    side effect for the MCP tools. Every violation is a real import or
-    //    file, so every one gates.
-    match scryer_extract::extract_context_with_stats(project) {
-        Ok((ctx, _)) => {
-            let edges = ctx.build_edges();
-            let _ = scryer_core::build_edges::write_build_edges(project, &edges);
-            let derived = scryer_core::build_edges::derive_graph(&working, &edges);
-            let files = scryer_extract::list_project_files(project);
-            let report = scryer_core::style_health::check_code(
-                &working,
-                &scryer_core::load_styles(project),
-                &derived,
-                &edges,
-                Some(&files),
-            );
-            for v in &report.violations {
-                failures.push(format!("structural: {}", v.detail));
-            }
-        }
-        Err(e) => notes.push(format!("structural conformance unverified — extraction failed: {e}")),
+    for c in in_state(ClaimState::Failing) {
+        failures.push(format!("failing: {}", at(&c.resp_id)));
     }
-
-    // 2) Anchor fingerprints, when a committed baseline exists. Changed spans
-    //    are drift (unreconciled churn), not breakage — they gate only under
-    //    --fail-on-drift. Broken/missing spans always gate: the model points
-    //    at code that is gone.
-    let mut swept: std::collections::HashSet<(String, String)> = Default::default();
-    if r.anchors_path().exists() {
-        let check = scryer_extract::anchors::check_anchors(r)?;
-        let mut changed = 0usize;
-        for o in &check.observations {
-            match o.state {
-                AnchorState::Changed => changed += 1,
-                AnchorState::Broken => {
-                    swept.insert((o.key.clone(), o.file.clone()));
-                    failures.push(format!(
-                        "anchor: '{}' ({}) → {}{} — anchored span not found",
-                        o.key,
-                        o.host_name,
-                        o.file,
-                        o.symbol.as_deref().map(|s| format!(" `{s}`")).unwrap_or_default()
-                    ));
-                }
-                AnchorState::FileMissing => {
-                    swept.insert((o.key.clone(), o.file.clone()));
-                    failures.push(format!(
-                        "anchor: '{}' ({}) → {} — file is gone",
-                        o.key, o.host_name, o.file
-                    ));
-                }
-            }
-        }
-        if changed > 0 {
-            let line = format!("{changed} anchored claim(s) changed since the last reconcile");
-            if fail_on_drift {
-                failures.push(format!("drift: {line}"));
-            } else {
-                notes.push(format!("{line} (not gating — pass --fail-on-drift)"));
-            }
-        }
-    } else {
-        notes.push(
-            "anchor fingerprints unverified — no baseline (.scryer/.anchors.json). A reconcile \
-             (get_health / get_drift over MCP) writes it; commit it for CI to check against."
-                .into(),
-        );
+    let stale: Vec<String> = in_state(ClaimState::Stale).map(|c| at(&c.resp_id)).collect();
+    if gates.stale {
+        failures.extend(stale.iter().map(|s| format!("stale: {s} — re-run it and ingest the report")));
+    } else if !stale.is_empty() {
+        notes.push(format!("{} stale claim(s) (not gating — pass --fail-on-stale)", stale.len()));
     }
-
-    // 3) Baseline-free existence sweep: an exact-path anchor whose file is
-    //    gone fails even before any reconcile baseline exists. Globs are
-    //    completeness's domain (get_health), not a gate. Test anchors sweep
-    //    too, under their namespaced key — a claim's attached test that no
-    //    longer exists is exactly what a CI gate is for.
-    let mut keyed: Vec<(String, &Vec<scryer_core::SourceLocation>)> = working
-        .source_map
+    // A surviving mutant marks the code a mutation run broke (per node), or
+    // the test a probe or Stryker named (per claim).
+    let survivors: Vec<String> = status
+        .nodes
         .iter()
-        .map(|(k, v)| (k.clone(), v))
-        .chain(working.test_map.iter().map(|(k, v)| (scryer_core::test_key(k), v)))
+        .filter(|(_, n)| n.probe == Some(ProbeMark::Crosshair))
+        .map(|(id, _)| crate::helpers::breadcrumb(&tree.planned, id))
+        .chain(status.claims.iter().filter(|c| c.probe == Some(ProbeMark::Crosshair)).map(|c| at(&c.resp_id)))
         .collect();
-    keyed.sort_by(|a, b| a.0.cmp(&b.0));
-    for (key, locs) in keyed {
-        for loc in locs {
-            if loc.pattern.contains(['*', '?', '[']) {
-                continue;
-            }
-            if swept.contains(&(key.clone(), loc.pattern.clone())) {
-                continue; // already reported off its fingerprint
-            }
-            if !project.join(&loc.pattern).exists() {
-                failures.push(format!("anchor: '{}' → {} — file does not exist", key, loc.pattern));
-            }
-        }
+    if gates.mutants {
+        failures.extend(survivors.iter().map(|s| format!("surviving mutant: {s}")));
+    } else if !survivors.is_empty() {
+        notes.push(format!(
+            "{} place(s) with a surviving mutant or break (not gating — pass --fail-on-mutants)",
+            survivors.len()
+        ));
     }
-
-    // 4) Scope drift (mtime ∩ git-diff when the anchor carries a commit, so a
-    //    fresh CI checkout doesn't false-alarm).
-    if r.sync_path().exists() {
-        let sync = scryer_core::read_sync_state(r);
-        let scopes = scryer_core::drift::drifted_scopes(&committed, project, &sync);
-        if !scopes.is_empty() {
-            if fail_on_drift {
-                for s in &scopes {
-                    let mut preview = s.changed_files.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
-                    if s.changed_files.len() > 3 {
-                        preview.push_str(&format!(", … {} more", s.changed_files.len() - 3));
-                    }
-                    failures.push(format!(
-                        "drift: '{}' — {} changed file(s): {}",
-                        s.node_name,
-                        s.changed_files.len(),
-                        preview
-                    ));
-                }
-            } else {
-                notes.push(format!(
-                    "{} drifted scope(s) (not gating — pass --fail-on-drift)",
-                    scopes.len()
-                ));
-            }
-        }
-    } else if fail_on_drift {
-        notes.push(
-            "drift unverifiable — no reconcile anchor (.scryer/.sync). A reconcile writes it; \
-             commit it for CI to measure against."
-                .into(),
-        );
+    for v in &tree.style_violations {
+        failures.push(format!("structural: {} ({})", v.detail, v.file));
     }
-
-    // 5) Test evidence on COMMITTED claims — the gate the fold enforces,
-    //    re-checked in CI: a testable claim on a code-backed host with no test
-    //    attached, a failing/errored verdict, or a stale one (fingerprints no
-    //    longer match) fails by default. `--no-fail-on-tests` demotes them to
-    //    notes for repos adopting incrementally. No results cache at all is a
-    //    NOTE, never a pass — nothing has been verified.
-    {
-        let has_test = |id: &str| {
-            working.test_map.get(id).is_some_and(|l| !l.is_empty())
-        };
-        let mut untested: Vec<String> = Vec::new();
-        for n in &committed.nodes {
-            if n.kind == scryer_core::Kind::Person || n.external == Some(true) {
-                continue;
-            }
-            for resp in &n.responsibilities {
-                if scryer_core::ears::classify(&resp.statement).testable() && !has_test(&resp.id) {
-                    untested.push(format!("{} ({})", resp.id, n.name));
-                }
-            }
-        }
-        let mut failing: Vec<String> = Vec::new();
-        let mut stale: Vec<String> = Vec::new();
-        if r.test_results_path().exists() {
-            let committed_ids: std::collections::HashSet<&str> = committed
-                .nodes
-                .iter()
-                .flat_map(|n| n.responsibilities.iter())
-                .map(|resp| resp.id.as_str())
-                .collect();
-            for s in scryer_extract::test_status::test_statuses(r)? {
-                if !committed_ids.contains(s.resp_id.as_str()) {
-                    continue; // a plan-only claim's verdict is the fold's business
-                }
-                if s.stale {
-                    stale.push(s.resp_id.clone());
-                } else if s.outcome != scryer_core::test_results::TestOutcome::Passed {
-                    failing.push(format!("{} ({:?})", s.resp_id, s.outcome));
-                }
-            }
-        } else if !committed.test_map.is_empty() {
-            notes.push(
-                "test verdicts unverified — no results cache (.scryer/.test-results.json). Run the \
-                 attached tests with a JUnit reporter and ingest_test_report; commit the cache for \
-                 CI to check against."
-                    .into(),
-            );
-        }
-        let mut lines: Vec<(String, String)> = Vec::new();
-        for u in &untested {
-            lines.push(("untested".into(), format!("{u} — testable committed claim with no attached test")));
-        }
-        for f in &failing {
-            lines.push(("failing".into(), format!("{f} — current verdict is not passing")));
-        }
-        for s in &stale {
-            lines.push(("stale".into(), format!("{s} — verdict fingerprints no longer match the tree; re-run and ingest")));
-        }
-        if fail_on_tests {
-            failures.extend(lines.iter().map(|(k, l)| format!("{k}: {l}")));
-        } else if !lines.is_empty() {
-            notes.push(format!(
-                "{} untested, {} failing, {} stale claim(s) (not gating — --no-fail-on-tests)",
-                untested.len(),
-                failing.len(),
-                stale.len()
-            ));
-        }
+    failures.extend(lint_tree(tree).iter().map(|f| format!("lint: {}", lint_line(f))));
+    let planned = in_state(ClaimState::Planned).count();
+    if planned > 0 {
+        notes.push(format!("{planned} todo test(s) — planned work, not a failure"));
     }
-
-    // 6) Outstanding plan work.
-    let pending = pending_changes(&committed, &planned);
-    if !pending.is_empty() {
-        if fail_on_pending {
-            for ch in pending.iter().take(10) {
-                failures.push(format!("pending: {} '{}'", kind_label(&ch.kind), ch.label));
-            }
-            if pending.len() > 10 {
-                failures.push(format!("pending: … {} more", pending.len() - 10));
-            }
-        } else {
-            notes.push(format!(
-                "{} pending plan item(s) (not gating — pass --fail-on-pending)",
-                pending.len()
-            ));
-        }
+    if status.claims.is_empty() {
+        notes.push("no claims: no behaviour test carries a description yet".into());
     }
-
-    Ok(CheckReport { failures, notes })
+    CheckReport { failures, notes }
 }
 
-fn kind_label(k: &scryer_core::diff::ElementKind) -> &'static str {
-    use scryer_core::diff::ElementKind as EK;
-    match k {
-        EK::Node => "node",
-        EK::Link => "link",
-        EK::Responsibility => "responsibility",
-        EK::Property => "property",
-        EK::Group => "group",
-    }
-}
-
-/// Outcome of a statusline install attempt.
-pub(crate) enum StatuslineInstall {
-    /// Written (fresh, or an idempotent refresh of our own entry).
-    Installed(PathBuf),
-    /// A foreign statusline is configured — left untouched; the caller prints
-    /// how to compose instead.
-    ForeignExists(PathBuf),
-}
-
-/// Is this `statusLine` entry ours? Identified by the command invoking the
-/// scryer-mcp binary's `statusline` subcommand — the marker
-/// [`install_statusline`] writes (mirrors `is_scryer_hook_entry` in the app).
-fn is_scryer_statusline(entry: &serde_json::Value) -> bool {
-    entry["command"]
-        .as_str()
-        .is_some_and(|c| c.contains("scryer-mcp") && c.trim_end().ends_with(" statusline"))
-}
-
-/// Register `scryer-mcp statusline` as the Claude Code statusline for this
-/// project, in the personal settings file (same conventions as the app's hook
-/// install: absolute binary path, refuse to overwrite invalid JSON). Unlike
-/// hooks, `statusLine` is a SINGLE slot — a whole-line replacement — so a
-/// foreign entry is never clobbered: the caller tells the user how to append
-/// our segment to their own script instead.
-pub(crate) fn install_statusline(
-    project: &Path,
-    binary_path: &str,
-) -> Result<StatuslineInstall, String> {
-    let claude_dir = project.join(".claude");
-    let settings_path = claude_dir.join("settings.local.json");
-    let mut root: serde_json::Value = if settings_path.exists() {
-        let contents = std::fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
-        serde_json::from_str(&contents).map_err(|e| {
-            format!(
-                "{} is not valid JSON ({e}); refusing to overwrite it — fix the file and retry.",
-                settings_path.display()
-            )
-        })?
-    } else {
-        serde_json::json!({})
+/// `scryer-mcp setup [on|off]`: switch agent integration for the project on
+/// or off, or with no argument print what is installed. The project is the
+/// nearest directory holding `.scryer/` above the cwd, else the cwd itself.
+/// `on` registers this very binary.
+pub(crate) fn run_setup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    use scryer_core::agent_setup;
+    let cwd = std::env::current_dir()?;
+    let project = find_project(&cwd).unwrap_or(cwd);
+    let detected = agent_setup::detect_tools();
+    let status = match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+        [] => agent_setup::setup_status(&project, &detected),
+        ["on"] => {
+            let binary = std::env::current_exe()?.canonicalize()?.to_string_lossy().to_string();
+            agent_setup::setup_on(&project, &detected, &binary)?
+        }
+        ["off"] => agent_setup::setup_off(&project, &detected)?,
+        _ => {
+            eprintln!("usage: scryer-mcp setup [on|off]");
+            std::process::exit(2);
+        }
     };
-
-    let existing = root.get("statusLine");
-    if existing.is_some_and(|e| !e.is_null() && !is_scryer_statusline(e)) {
-        return Ok(StatuslineInstall::ForeignExists(settings_path));
-    }
-
-    root["statusLine"] = serde_json::json!({
-        "type": "command",
-        "command": format!("\"{binary_path}\" statusline"),
-    });
-    std::fs::create_dir_all(&claude_dir).map_err(|e| e.to_string())?;
-    std::fs::write(
-        &settings_path,
-        serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(StatuslineInstall::Installed(settings_path))
+    print!("{}", agent_setup::render_setup_status(&status));
+    Ok(())
 }
 
-pub(crate) fn status_line(c: &StatusCounts) -> String {
-    // "2 changes in flight" — the ledger's in-progress workstreams; silent in
-    // the serial (unfiled) workflow.
-    let changes = match c.open_changes {
-        0 => String::new(),
-        1 => " · 1 change in flight".to_string(),
-        n => format!(" · {n} changes in flight"),
-    };
-    // Both altitudes, always together: the ELEMENT queue (what the agent's own
-    // header and get_pending report — a node with three reworded claims counts
-    // three) and the carriers it lands on (the cards the canvas draws).
-    // Reporting only carriers is what let this line read "5 pending" while the
-    // agent in the same terminal read 23.
-    let pending = pending_phrase(c);
-    // Test verdicts only when red or stale — verified-green stays silent.
-    let tests = crate::helpers::tests_phrase(c);
-    let structural = crate::helpers::structural_phrase(c);
-    match &c.baseline {
-        None => format!("scryer: {pending} · no reconcile anchor yet{tests}{structural}{changes}"),
-        Some(b) => format!(
-            "scryer: {pending} · {} drift scope(s) · anchors: {} broken, {} changed{tests}{structural}{changes}",
-            b.drift_scopes, b.anchors_broken, b.anchors_changed
-        ),
+/// The ambient one-liner: claims by status, then surviving mutants when there
+/// are any. "scryer: 120 proven · 3 stale · 0 failing · 2 planned".
+pub(crate) fn status_line(t: &DerivedCounts) -> String {
+    let mut line = format!(
+        "scryer: {} proven · {} stale · {} failing · {} planned",
+        t.proven, t.stale, t.failing, t.planned
+    );
+    if t.surviving_mutants > 0 {
+        line.push_str(&format!(
+            " · {} surviving mutant{}",
+            t.surviving_mutants,
+            if t.surviving_mutants == 1 { "" } else { "s" }
+        ));
     }
+    line
 }
 
-/// "23 pending across 8 nodes" — the shared phrasing for outstanding plan work.
-/// An empty plan drops the breakdown: "0 pending across 0 nodes" is noise.
-/// Mirrors `planCountLabel` (src/changeMarks.ts).
-pub(crate) fn pending_phrase(c: &StatusCounts) -> String {
-    if c.pending == 0 {
-        return "0 pending".to_string();
-    }
-    format!(
-        "{} pending across {} node{}",
-        c.pending,
-        c.carriers,
-        if c.carriers == 1 { "" } else { "s" }
-    )
-}
-
-fn status_json(c: &StatusCounts) -> String {
-    // `pending` is the element queue — the same number get_pending returns —
-    // with `carriers` beside it for the node/group altitude the canvas draws.
-    let v = serde_json::json!({
-        "pending": c.pending,
-        "carriers": c.carriers,
-        "openChanges": c.open_changes,
-        "driftScopes": c.baseline.as_ref().map(|b| b.drift_scopes),
-        "anchorsBroken": c.baseline.as_ref().map(|b| b.anchors_broken),
-        "anchorsChanged": c.baseline.as_ref().map(|b| b.anchors_changed),
-        "testsRecorded": c.tests.as_ref().map(|t| t.recorded),
-        "testsFailing": c.tests.as_ref().map(|t| t.failing),
-        "testsStale": c.tests.as_ref().map(|t| t.stale),
-        "statusLine": status_line(c),
-    });
+fn status_json(t: &DerivedCounts) -> String {
+    let mut v = serde_json::to_value(t).unwrap_or_default();
+    v["statusLine"] = serde_json::json!(status_line(t));
     serde_json::to_string_pretty(&v).unwrap_or_else(|_| "{}".into())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scryer_core::{Kind, ModelRef, Node, ScryModel};
-
-    fn node(id: &str, kind: Kind, name: &str, parent: Option<&str>) -> Node {
-        let kind_str = match kind {
-            Kind::Person => "person",
-            Kind::System => "system",
-            Kind::Container => "container",
-            Kind::Component => "component",
-            Kind::Symbol => "symbol",
-        };
-        // Every container declares a style; the fixtures use the smallest one.
-        let style = (kind == Kind::Container).then_some("core-shell");
-        serde_json::from_value(serde_json::json!({
-            "id": id, "kind": kind_str, "name": name, "parentId": parent, "style": style,
-        }))
-        .unwrap()
-    }
+    use crate::tools::fixture::{project, write};
 
     /// The walk stops at the FIRST `.scryer` — a nested project must never
-    /// report its parent's model — and finds it from a deep subdirectory.
+    /// report its parent's — and finds it from a deep subdirectory.
     #[test]
     fn find_project_stops_at_the_nearest_scryer_dir() {
         let dir = tempfile::tempdir().unwrap();
@@ -576,213 +449,6 @@ mod tests {
         assert_eq!(find_project(&outer.join("docs")).as_deref(), Some(outer));
     }
 
-    /// A never-reconciled model reports its pending count and says the drift
-    /// baseline does not exist yet — no fake zeros.
-    #[test]
-    fn status_line_before_any_reconcile_admits_no_baseline() {
-        let dir = tempfile::tempdir().unwrap();
-        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
-        let committed = ScryModel::new();
-        scryer_core::write_model_at(&r, &committed).unwrap();
-        let mut plan = ScryModel::new();
-        plan.nodes.push(node("sys", Kind::System, "Acme", None));
-        scryer_core::write_planned_at(&r, &plan).unwrap();
-
-        let c = status_counts(&r).unwrap();
-        assert_eq!(status_line(&c), "scryer: 1 pending across 1 node · no reconcile anchor yet");
-    }
-
-    /// The line reports BOTH altitudes, because they differ: three reworded
-    /// claims on one node are three items in the agent's queue and one card on
-    /// the canvas. Quoting only the carrier count is what made the terminal
-    /// read "1 pending" beside an agent reading 3.
-    #[test]
-    fn status_line_reports_elements_and_the_carriers_they_sit_on() {
-        let dir = tempfile::tempdir().unwrap();
-        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
-        let mut committed = ScryModel::new();
-        let mut sys = node("sys", Kind::System, "Acme", None);
-        for i in 1..=3 {
-            sys.responsibilities.push(
-                serde_json::from_value(serde_json::json!({
-                    "id": format!("r{i}"), "statement": format!("does thing {i}"),
-                }))
-                .unwrap(),
-            );
-        }
-        committed.nodes.push(sys.clone());
-        scryer_core::write_model_at(&r, &committed).unwrap();
-
-        let mut plan = ScryModel::new();
-        let mut planned_sys = sys;
-        for (i, resp) in planned_sys.responsibilities.iter_mut().enumerate() {
-            resp.statement = format!("does thing {}, revised", i + 1);
-        }
-        plan.nodes.push(planned_sys);
-        scryer_core::write_planned_at(&r, &plan).unwrap();
-
-        let c = status_counts(&r).unwrap();
-        assert_eq!(c.pending, 3);
-        assert_eq!(c.carriers, 1);
-        assert_eq!(status_line(&c), "scryer: 3 pending across 1 node · no reconcile anchor yet");
-    }
-
-    /// A clean, fully-anchored model passes — and the unverifiable anchor
-    /// dimension is NAMED in the notes, never silently vacuous. Pending work
-    /// is a note by default and a listed failure under --fail-on-pending.
-    #[test]
-    fn check_gates_pending_only_when_asked() {
-        let dir = tempfile::tempdir().unwrap();
-        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
-        std::fs::create_dir_all(dir.path().join("src")).unwrap();
-        std::fs::write(dir.path().join("src/auth.rs"), "fn verify() {}\n").unwrap();
-        let mut m = ScryModel::new();
-        m.nodes.push(node("sys", Kind::System, "Acme", None));
-        let mut api = node("api", Kind::Container, "API", Some("sys"));
-        api.responsibilities = vec![serde_json::from_value(
-            serde_json::json!({ "id": "r-1", "statement": "verifies requests" }),
-        )
-        .unwrap()];
-        m.nodes.push(api);
-        m.source_map.insert(
-            "r-1".into(),
-            vec![serde_json::from_value(serde_json::json!({ "pattern": "src/auth.rs" })).unwrap()],
-        );
-        scryer_core::write_model_at(&r, &m).unwrap();
-
-        let rep = check_report(&r, false, false, true).unwrap();
-        assert!(rep.failures.is_empty(), "clean model: {:?}", rep.failures);
-        assert!(
-            rep.notes.iter().any(|n| n.contains("no baseline")),
-            "unverified anchors must be named: {:?}",
-            rep.notes
-        );
-
-        // Add a pending plan item: a note by default, a failure when gating.
-        let mut plan = m.clone();
-        plan.nodes.push(node("worker", Kind::Container, "Worker", Some("sys")));
-        plan.links.push(scryer_core::Link {
-            kind: None,
-            id: "l-1".into(),
-            src: "api".into(),
-            dst: "worker".into(),
-            label: "enqueues".into(),
-            method: None,
-        });
-        scryer_core::write_planned_at(&r, &plan).unwrap();
-        let rep = check_report(&r, false, false, true).unwrap();
-        assert!(rep.failures.is_empty(), "{:?}", rep.failures);
-        assert!(rep.notes.iter().any(|n| n.contains("pending plan item")));
-        let rep = check_report(&r, false, true, true).unwrap();
-        assert!(
-            rep.failures.iter().any(|f| f.starts_with("pending: node 'Worker'")),
-            "{:?}",
-            rep.failures
-        );
-    }
-
-    /// A claim's attached test that no longer exists gates like any exact-path
-    /// anchor, under its `test:` key — a "test-backed" claim whose test is
-    /// gone is exactly what a CI gate exists to catch.
-    #[test]
-    fn check_fails_on_missing_attached_test_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
-        std::fs::create_dir_all(dir.path().join("src")).unwrap();
-        std::fs::write(dir.path().join("src/auth.rs"), "fn verify() {}\n").unwrap();
-        let mut m = ScryModel::new();
-        m.nodes.push(node("sys", Kind::System, "Acme", None));
-        let mut api = node("api", Kind::Container, "API", Some("sys"));
-        api.responsibilities = vec![serde_json::from_value(
-            serde_json::json!({ "id": "r-1", "statement": "verifies requests" }),
-        )
-        .unwrap()];
-        m.nodes.push(api);
-        m.source_map.insert(
-            "r-1".into(),
-            vec![serde_json::from_value(serde_json::json!({ "pattern": "src/auth.rs" })).unwrap()],
-        );
-        m.test_map.insert(
-            "r-1".into(),
-            vec![serde_json::from_value(serde_json::json!({ "pattern": "tests/gone.rs" }))
-                .unwrap()],
-        );
-        scryer_core::write_model_at(&r, &m).unwrap();
-
-        let rep = check_report(&r, false, false, true).unwrap();
-        assert!(
-            rep.failures
-                .iter()
-                .any(|f| f.contains("test:r-1") && f.contains("tests/gone.rs")),
-            "missing attached test gates: {:?}",
-            rep.failures
-        );
-    }
-
-    /// An exact-path anchor whose file is gone fails the gate even with no
-    /// fingerprint baseline — and with a baseline, the same anchor is reported
-    /// once off its fingerprint, not twice.
-    #[test]
-    fn check_fails_on_missing_anchor_files_without_duplicates() {
-        let dir = tempfile::tempdir().unwrap();
-        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
-        std::fs::create_dir_all(dir.path().join("src")).unwrap();
-        std::fs::write(dir.path().join("src/auth.rs"), "fn verify() {}\n").unwrap();
-        let mut m = ScryModel::new();
-        m.nodes.push(node("sys", Kind::System, "Acme", None));
-        let mut api = node("api", Kind::Container, "API", Some("sys"));
-        api.responsibilities = vec![serde_json::from_value(
-            serde_json::json!({ "id": "r-1", "statement": "verifies requests" }),
-        )
-        .unwrap()];
-        m.nodes.push(api);
-        m.source_map.insert(
-            "r-1".into(),
-            vec![serde_json::from_value(serde_json::json!({ "pattern": "src/auth.rs" })).unwrap()],
-        );
-        scryer_core::write_model_at(&r, &m).unwrap();
-
-        // No baseline: the existence sweep catches the deleted file.
-        std::fs::remove_file(dir.path().join("src/auth.rs")).unwrap();
-        let rep = check_report(&r, false, false, true).unwrap();
-        let hits = rep.failures.iter().filter(|f| f.contains("src/auth.rs")).count();
-        assert_eq!(hits, 1, "sweep reports the gone file once: {:?}", rep.failures);
-
-        // With a baseline: reported off the fingerprint, still exactly once.
-        std::fs::write(dir.path().join("src/auth.rs"), "fn verify() {}\n").unwrap();
-        scryer_extract::anchors::write_baseline(&r).unwrap();
-        std::fs::remove_file(dir.path().join("src/auth.rs")).unwrap();
-        let rep = check_report(&r, false, false, true).unwrap();
-        let hits: Vec<&String> =
-            rep.failures.iter().filter(|f| f.contains("src/auth.rs")).collect();
-        assert_eq!(hits.len(), 1, "fingerprint + sweep must not double-report: {:?}", rep.failures);
-        assert!(hits[0].contains("file is gone"), "{:?}", hits);
-    }
-
-    /// Validator warnings gate by default — here a source-map entry pointing
-    /// at an id the model doesn't hold.
-    #[test]
-    fn check_fails_on_validator_warnings() {
-        let dir = tempfile::tempdir().unwrap();
-        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
-        let mut m = ScryModel::new();
-        m.nodes.push(node("sys", Kind::System, "Acme", None));
-        m.source_map.insert(
-            "ghost-id".into(),
-            vec![serde_json::from_value(serde_json::json!({ "pattern": "src/x.rs" })).unwrap()],
-        );
-        scryer_core::write_model_at(&r, &m).unwrap();
-
-        let rep = check_report(&r, false, false, true).unwrap();
-        assert!(
-            rep.failures.iter().any(|f| f.starts_with("validator:") && f.contains("ghost-id")),
-            "{:?}",
-            rep.failures
-        );
-    }
-
-    /// The statusline start dir prefers the workspace's project dir, falls
-    /// through its variants, and rejects a non-payload stdin.
     #[test]
     fn statusline_start_dir_prefers_project_dir() {
         let full = serde_json::json!({
@@ -797,168 +463,54 @@ mod tests {
         assert_eq!(statusline_start_dir("not json"), None);
     }
 
-    /// Install is idempotent on our own entry, preserves the rest of the
-    /// settings file, and never clobbers a foreign statusline — the single
-    /// slot belongs to the user.
+    /// When the status line is printed, counts claims by status, and names surviving mutants only if there are some.
     #[test]
-    fn statusline_install_is_idempotent_and_never_clobbers() {
-        let dir = tempfile::tempdir().unwrap();
-        let project = dir.path();
-        let settings = project.join(".claude/settings.local.json");
-        std::fs::create_dir_all(project.join(".claude")).unwrap();
-        std::fs::write(
-            &settings,
-            serde_json::json!({ "permissions": { "allow": ["mcp__scryer"] } }).to_string(),
-        )
-        .unwrap();
-
-        // Fresh install, then a refresh from a moved binary: still one entry,
-        // pointing at the new path, other settings intact.
-        for path in ["/opt/scryer/scryer-mcp", "/usr/local/bin/scryer-mcp"] {
-            match install_statusline(project, path).unwrap() {
-                StatuslineInstall::Installed(p) => assert_eq!(p, settings),
-                StatuslineInstall::ForeignExists(_) => panic!("our own entry must refresh"),
-            }
-        }
-        let root: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
-        assert_eq!(
-            root["statusLine"]["command"],
-            "\"/usr/local/bin/scryer-mcp\" statusline"
-        );
-        assert_eq!(root["permissions"]["allow"][0], "mcp__scryer");
-
-        // A foreign statusline is reported, not replaced.
-        std::fs::write(
-            &settings,
-            serde_json::json!({
-                "statusLine": { "type": "command", "command": "my-fancy-prompt.sh" }
-            })
-            .to_string(),
-        )
-        .unwrap();
-        match install_statusline(project, "/opt/scryer/scryer-mcp").unwrap() {
-            StatuslineInstall::ForeignExists(p) => assert_eq!(p, settings),
-            StatuslineInstall::Installed(_) => panic!("foreign statusline was clobbered"),
-        }
-        let root: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
-        assert_eq!(root["statusLine"]["command"], "my-fancy-prompt.sh");
-
-        // Invalid JSON is refused, not overwritten.
-        std::fs::write(&settings, "{ not json").unwrap();
-        assert!(install_statusline(project, "/opt/scryer/scryer-mcp").is_err());
+    fn the_status_line_counts_claims_by_status() {
+        let mut t = DerivedCounts { proven: 3, stale: 2, failing: 1, planned: 4, ..Default::default() };
+        assert_eq!(status_line(&t), "scryer: 3 proven · 2 stale · 1 failing · 4 planned");
+        t.surviving_mutants = 2;
+        assert!(status_line(&t).ends_with(" · 2 surviving mutants"));
+        let dir = project();
+        let (_, s) = derived_status(dir.path()).unwrap();
+        assert_eq!(status_line(&s.totals), "scryer: 0 proven · 3 stale · 0 failing · 1 planned");
     }
 
-    /// With a reconcile baseline in place, the line carries real drift and
-    /// anchor counts (all quiet here — nothing changed since the baseline).
+    /// With no report ingested, claims are stale: a note by default, a
+    /// failure under --fail-on-stale. A todo test is never a failure; a
+    /// container with no declared style always is.
     #[test]
-    fn status_line_after_reconcile_reports_counts() {
-        let dir = tempfile::tempdir().unwrap();
-        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
-        let mut m = ScryModel::new();
-        m.nodes.push(node("sys", Kind::System, "Acme", None));
-        scryer_core::write_model_at(&r, &m).unwrap();
-        scryer_core::write_sync_state(&r, &scryer_core::drift::SyncState::anchored_now(None))
-            .unwrap();
-        scryer_extract::anchors::write_baseline(&r).unwrap();
-
-        let c = status_counts(&r).unwrap();
-        assert_eq!(
-            status_line(&c),
-            "scryer: 0 pending · 0 drift scope(s) · anchors: 0 broken, 0 changed"
-        );
+    fn check_gates_stale_claims_only_when_asked() {
+        let dir = project();
+        let (tree, status) = derived_status(dir.path()).unwrap();
+        let lenient = check_report(&tree, &status, &Gates::default());
+        let structural = |r: &CheckReport| r.failures.iter().filter(|f| f.starts_with("structural: ")).count();
+        assert_eq!(structural(&lenient), 1, "the unstyled crate: {:?}", lenient.failures);
+        assert_eq!(lenient.failures.len(), 1, "{:?}", lenient.failures);
+        assert!(lenient.notes.iter().any(|n| n.contains("3 stale")), "{:?}", lenient.notes);
+        assert!(lenient.notes.iter().any(|n| n.contains("1 todo test")), "{:?}", lenient.notes);
+        let strict = check_report(&tree, &status, &Gates { stale: true, mutants: false });
+        assert_eq!(strict.failures.iter().filter(|f| f.starts_with("stale: ")).count(), 3, "{:?}", strict.failures);
     }
 
-    /// The CI gate re-checks the fold's evidence rule on COMMITTED claims: a
-    /// testable claim with no attached test fails by default, demotes to a
-    /// note under --no-fail-on-tests, and a person/external host is exempt.
-    /// A missing results cache is a note, never a pass.
+    /// A description that breaks the claim grammar fails check and lint.
     #[test]
-    fn check_fails_on_untested_committed_claims_unless_opted_out() {
-        let dir = tempfile::tempdir().unwrap();
-        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
-        std::fs::create_dir_all(dir.path().join("src")).unwrap();
-        std::fs::write(dir.path().join("src/auth.rs"), "fn verify() {}\n").unwrap();
-        let mut m = ScryModel::new();
-        m.nodes.push(node("sys", Kind::System, "Acme", None));
-        let mut api = node("api", Kind::Container, "API", Some("sys"));
-        api.responsibilities = vec![
-            serde_json::from_value(serde_json::json!({ "id": "r-1", "statement": "**When** a request arrives, **verify** it" })).unwrap(),
-            serde_json::from_value(serde_json::json!({ "id": "r-2", "statement": "serves requests" })).unwrap(),
-        ];
-        m.nodes.push(api);
-        let mut dev = node("dev", Kind::Person, "Developer", None);
-        dev.responsibilities = vec![serde_json::from_value(
-            serde_json::json!({ "id": "r-p", "statement": "**When** a build finishes, **review** it" }),
-        )
-        .unwrap()];
-        m.nodes.push(dev);
-        m.source_map.insert(
-            "r-1".into(),
-            vec![serde_json::from_value(serde_json::json!({ "pattern": "src/auth.rs" })).unwrap()],
+    fn check_and_lint_fail_on_a_malformed_claim() {
+        let dir = project();
+        write(
+            dir.path(),
+            "crates/notes/src/sync.rs",
+            "pub fn sync() {}\n#[cfg(test)]\nmod tests {\n    /// Retries the sync when the network drops\n    #[test]\n    fn retries() {}\n}\n",
         );
-        scryer_core::write_model_at(&r, &m).unwrap();
-
-        let rep = check_report(&r, false, false, true).unwrap();
+        let (tree, status) = derived_status(dir.path()).unwrap();
+        let lint = lint_tree(&tree);
+        assert_eq!(lint.len(), 1);
+        assert_eq!(lint[0].code, "trailing-condition");
+        assert!(lint[0].at.starts_with("crates/notes/src/sync.rs:"));
+        let report = check_report(&tree, &status, &Gates::default());
         assert!(
-            rep.failures.iter().any(|f| f.starts_with("untested:") && f.contains("r-1")),
+            report.failures.iter().any(|f| f.starts_with("lint: ") && f.contains("trailing-condition")),
             "{:?}",
-            rep.failures
+            report.failures
         );
-        assert!(!rep.failures.iter().any(|f| f.contains("r-2")), "ubiquitous claims are not gated");
-        assert!(!rep.failures.iter().any(|f| f.contains("r-p")), "a person never expects tests");
-
-        let rep = check_report(&r, false, false, false).unwrap();
-        assert!(rep.failures.iter().all(|f| !f.starts_with("untested:")), "{:?}", rep.failures);
-        assert!(rep.notes.iter().any(|n| n.contains("1 untested") && n.contains("--no-fail-on-tests")), "{:?}", rep.notes);
-
-        // Attach a test but never ingest a report: the cache is missing, so the
-        // gate says so instead of passing vacuously.
-        m.test_map.insert(
-            "r-1".into(),
-            vec![serde_json::from_value(serde_json::json!({ "pattern": "src/auth.rs", "symbol": "verify" })).unwrap()],
-        );
-        scryer_core::write_model_at(&r, &m).unwrap();
-        let rep = check_report(&r, false, false, true).unwrap();
-        assert!(!rep.failures.iter().any(|f| f.starts_with("untested:")), "{:?}", rep.failures);
-        assert!(rep.notes.iter().any(|n| n.contains("no results cache")), "{:?}", rep.notes);
-    }
-
-    /// A recorded verdict the tree has since moved past fails as `stale`; a
-    /// red one fails as `failing`.
-    #[test]
-    fn check_fails_on_stale_and_failing_verdicts() {
-        let dir = tempfile::tempdir().unwrap();
-        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
-        std::fs::create_dir_all(dir.path().join("src")).unwrap();
-        std::fs::create_dir_all(dir.path().join("tests")).unwrap();
-        std::fs::write(dir.path().join("src/auth.rs"), "fn verify() {\n    let ok = true;\n}\n").unwrap();
-        std::fs::write(dir.path().join("tests/auth.rs"), "#[test]\nfn verifies() {\n    assert!(true);\n}\n").unwrap();
-        let mut m = ScryModel::new();
-        m.nodes.push(node("sys", Kind::System, "Acme", None));
-        let mut api = node("api", Kind::Container, "API", Some("sys"));
-        api.responsibilities = vec![serde_json::from_value(
-            serde_json::json!({ "id": "r-1", "statement": "**When** a request arrives, **verify** it" }),
-        )
-        .unwrap()];
-        m.nodes.push(api);
-        m.source_map.insert("r-1".into(), vec![serde_json::from_value(serde_json::json!({ "pattern": "src/auth.rs", "symbol": "verify" })).unwrap()]);
-        m.test_map.insert("r-1".into(), vec![serde_json::from_value(serde_json::json!({ "pattern": "tests/auth.rs", "symbol": "verifies" })).unwrap()]);
-        scryer_core::write_model_at(&r, &m).unwrap();
-
-        let pass = r#"<testsuites><testsuite name="a"><testcase classname="tests/auth.rs" name="verifies"/></testsuite></testsuites>"#;
-        scryer_extract::test_status::ingest_report(&r, pass).unwrap();
-        let rep = check_report(&r, false, false, true).unwrap();
-        assert!(rep.failures.is_empty(), "verified claim passes: {:?}", rep.failures);
-
-        std::fs::write(dir.path().join("src/auth.rs"), "fn verify() {\n    let ok = false;\n}\n").unwrap();
-        let rep = check_report(&r, false, false, true).unwrap();
-        assert!(rep.failures.iter().any(|f| f.starts_with("stale:") && f.contains("r-1")), "{:?}", rep.failures);
-
-        let fail = r#"<testsuites><testsuite name="a"><testcase classname="tests/auth.rs" name="verifies"><failure message="boom"/></testcase></testsuite></testsuites>"#;
-        scryer_extract::test_status::ingest_report(&r, fail).unwrap();
-        let rep = check_report(&r, false, false, true).unwrap();
-        assert!(rep.failures.iter().any(|f| f.starts_with("failing:") && f.contains("r-1")), "{:?}", rep.failures);
     }
 }

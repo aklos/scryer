@@ -1,3 +1,7 @@
+/**
+ * The shared dropdown control, optionally searchable, styled to match Input.
+ */
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 

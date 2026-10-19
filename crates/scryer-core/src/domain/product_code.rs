@@ -1,6 +1,9 @@
 //! Which files count as product code, and the annotated tree a reader sees.
-//! Deciding it is a question about a path, not about the disk — walking the
-//! project is `infrastructure::scan`.
+//! Product code is a parseable source file that can carry architecture — not a
+//! `*.d.ts` mirror, a `stubs/` double, a build descriptor or generated source;
+//! the tree marks manifests, infrastructure and environment templates by file
+//! name. Deciding either is a question about a path, not about the disk —
+//! walking the project is `infrastructure::scan`.
 
 use std::collections::BTreeMap;
 use std::path::Path;

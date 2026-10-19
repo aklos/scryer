@@ -1,9 +1,9 @@
 ---
 title: Welcome to scryer
-description: Visual architecture models that AI agents build from.
+description: What's true about your codebase — a C4 model derived from your code and tests, with every claim verified.
 hero:
   title: scryer
-  tagline: Visual architecture models that AI agents build from.
+  tagline: What's true about your codebase.
   actions:
     - text: Get started
       link: /scryer/getting-started/installation/
@@ -14,48 +14,31 @@ hero:
       icon: external
 ---
 
-Scryer is a visual architecture tool for working with AI coding assistants. You draw C4 diagrams in a drag-and-drop editor — AI agents read, modify, and implement from the same model through [MCP](https://modelcontextprotocol.io/).
+Coding agents write faster than you can read. After a week of agents working in parallel, nobody can say with confidence what is implemented, what was only planned, and what quietly broke.
 
-The core idea: **natural language is a lossy way to tell an AI what to build.** A visual model forces the kind of precision that prose can't. You see the same architecture the agent sees — misalignment gets caught before code gets written.
+Scryer answers that with evidence. It reads your repository and derives a [C4](https://c4model.com/) model of it: containers from packaging, components from modules, links from imports, and claims from your behaviour tests. Nothing in the model is written by hand or by an agent; it is computed from the repo, so it cannot drift.
 
 ## How it works
 
-1. **Model your architecture** — drag nodes onto the canvas, draw relationships, drill into detail
-2. **Connect your AI tool** — Claude Code, Codex, or any MCP-compatible agent
-3. **The agent reads your model** — it sees exactly what you see: systems, containers, components, data flows
-4. **You iterate visually** — the agent proposes changes, you see them on the canvas in real-time
-5. **Implementation follows the model** — `get_task` feeds the agent one piece of work at a time, ordered by dependencies
+- **[The claim is the test.](/scryer/concepts/claims/)** A behaviour test's description is an EARS claim about the code it tests: *When a save fails, keeps the draft.*
+- **The level is the test level.** An e2e test claims for the system, an integration test for its container, a unit test for its component.
+- **[Status is derived.](/scryer/concepts/status/)** A claim is proven when its test is green and nothing it exercises changed since; planned when the test is a todo; stale when the code moved under it; failing when red.
+- **[Styles are structural claims.](/scryer/concepts/structure/)** A container declares its architecture style in `.scryer/structure.toml`, and the import graph is checked against it.
+- **Planning is writing todo tests.** An agent plans a change by writing the claims it will satisfy as todo tests. You read a column of sentences and watch them flip to proven.
 
 ## The C4 hierarchy
 
-Scryer uses a C4-based hierarchy. Each level zooms in further:
+| Level | Comes from | Claims from |
+|-------|------------|-------------|
+| **System** | `structure.toml` | end-to-end tests |
+| ↳ **Container** | a package (crate, npm/pnpm workspace package, pyproject, csproj) | integration tests at its boundary |
+| &nbsp;&nbsp;↳ **Component** | a module or directory inside it | unit tests |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ **Symbol** | the code's definitions | — |
 
-| Level | What it represents |
-|-------|-------------------|
-| **Person** | Users and actors |
-| **System** | Software systems |
-| ↳ **Container** | Apps, services, data stores |
-| &nbsp;&nbsp;↳ **Component** | Logical modules |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ **Operation** | Functions & handlers |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ **Process** | Multi-step workflows |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ **Model** | Data structures |
-
-**Person** and **System** are top-level. Select a system and click the expand button to see its containers. Expand a container to see its components. Components contain the code-level detail: operations (functions), processes (workflows), and models (data structures).
-
-## What you can do
-
-- **Drag-and-drop editor** with multiple node shapes, auto-layout, and zoom controls
-- **Behavioral flows** — model user journeys and data pipelines with branching
-- **Contracts** — tell AI agents *exactly* how to implement each piece, with pass/fail tracking
-- **Status tracking** — four statuses: <span class="status-pill status-proposed">Proposed</span> <span class="status-pill status-implemented">Implemented</span> <span class="status-pill status-verified">Verified</span> <span class="status-pill status-vagrant">Vagrant</span>
-- **Source mapping** — link architecture nodes to files in your codebase
-- **Drift detection** — Scryer watches your code and flags when the architecture model goes stale
-- **Fill with AI** — let an agent scan your codebase and populate empty systems or containers
-- **AI advisor** — optional LLM review that flags structural issues in your diagrams
-- **Themes** — customize every color in the app
+People and external systems are named in `structure.toml`; links are the import graph.
 
 ## Next steps
 
-- [Install scryer](/scryer/getting-started/installation/) and create your first model
-- Learn about [the canvas](/scryer/editor/canvas/) and how to navigate your diagrams
-- Set up [AI tool integration](/scryer/getting-started/connecting-ai/) with Claude Code or Codex
+- [Install scryer](/scryer/getting-started/installation/) and open a project
+- [Connect your coding agent](/scryer/getting-started/connecting-ai/)
+- Learn how to [write claims](/scryer/concepts/claims/)

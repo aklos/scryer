@@ -1,4 +1,6 @@
-//! Reading the shape of a project directory.
+//! Reading the shape of a project directory: whether it looks like a codebase
+//! (a `.git` or a root manifest), which subdirectories carry a manifest, and
+//! the annotated tree of its product files.
 
 use crate::infrastructure::scan;
 use std::path::Path;

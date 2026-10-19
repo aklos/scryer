@@ -1,10 +1,12 @@
-// Left-Right (Brandes 2009) planarity test, ported faithfully from the
-// canonical NetworkX implementation (networkx/algorithms/planarity.py:
-// LRPlanarity, ConflictPair, Interval, PlanarEmbedding).
-//
-// Produces a combinatorial planar embedding (rotation system) when planar.
-// Pure TypeScript, no dependencies. Recursive DFS replaced with the same
-// explicit-stack iterative DFS NetworkX uses.
+/**
+ * Left-Right (Brandes 2009) planarity test, ported faithfully from the
+ * canonical NetworkX implementation (networkx/algorithms/planarity.py:
+ * LRPlanarity, ConflictPair, Interval, PlanarEmbedding).
+ *
+ * Reports whether a graph is planar and, when it is, a combinatorial planar
+ * embedding (rotation system). Pure TypeScript, no dependencies; the recursive
+ * DFS is replaced with the same explicit-stack iterative DFS NetworkX uses.
+ */
 
 export type EdgePair = [string, string];
 export type Embedding = Map<string, string[]>;

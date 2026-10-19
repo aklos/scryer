@@ -7,7 +7,8 @@
 
 import type { ScryModel, Link, Node, Responsibility } from "./viewmodel";
 import { effectiveTestMap } from "./viewmodel";
-import { earsTestable } from "../../features/markup/markup";
+import { earsTestable } from "./markup";
+import type { Completeness } from "./completeness";
 
 /** Health counters over one scope — a node's own content, or a whole subtree. */
 export interface HealthCounts {
@@ -83,7 +84,7 @@ export interface AnchorObservation {
 
 /** Evidence rating of one declared model link: how many import edges cross
  *  from the src subtree into the dst subtree. 0 = asserted-only. */
-import type { StyleDef } from "./styles";
+import { builtinStyles, type StyleDef } from "./styles";
 
 export interface LinkAudit {
   linkId: string;
@@ -164,58 +165,19 @@ export interface DerivedGraph {
   resolvedEdges: ResolvedEdge[];
 }
 
-/** A node's build completeness — how much of its AUTHORED subtree (committed +
- *  planned) reads through to real code. Distinct from HealthCounts (a lens over
- *  the committed model): completeness is defined from greenfield onward, the
- *  denominator being intent. The unit is the anchorable primitive — a node's
- *  boundary box (counted only when its glob owns a real file), a leaf
- *  responsibility, or a data shape. A structural node's own responsibilities are
- *  not primitives (they discharge through the subtree). */
-export interface Completeness {
-  /** Anchored primitives in the subtree. */
-  anchored: number;
-  /** Authored primitives in the subtree — the denominator. */
-  total: number;
-  /** Leaf primitives (responsibilities + data shapes) in the subtree. When 0 the
-   *  node is unmeasured (a bare box) and `pct` is absent. */
-  leafTotal: number;
-  /** Rounded 0–100 percent, or absent ("—") when there is nothing to measure. */
-  pct?: number;
-}
-
-/** The glanceable form of a node's completeness: `label` is the % ("42%"), or
- *  "—" when unmeasured (a bare box with no leaf primitives). `grounded` = the
- *  node has at least one anchored primitive (its box or a leaf reads through to
- *  real code) — the anchorage signal. Returns null when there is nothing to say
- *  (no primitives at all), so callers can skip the badge entirely. */
-export interface CompletenessBadge {
-  label: string;
-  grounded: boolean;
-  measured: boolean;
-}
-
-export function completenessBadge(
-  c: Completeness | undefined,
-): CompletenessBadge | null {
-  if (!c || c.total === 0) return null;
-  const grounded = c.anchored > 0;
-  if (c.pct === undefined) return { label: "—", grounded, measured: false };
-  return { label: `${c.pct}%`, grounded, measured: true };
-}
-
 export interface ModelHealthReport {
   health: ModelHealth;
   /** Per-node build completeness, keyed by node id. */
   completeness: Record<string, Completeness>;
-  /** Anchors whose code changed/broke since the last reconcile. */
-  anchors: AnchorObservation[];
-  /** Anchors silently healed this pass (symbol moved, content unchanged). */
-  reanchored: number;
+  /** Test anchors whose code changed or broke, when a report carries them. */
+  anchors?: AnchorObservation[];
   derived: DerivedGraph;
   /** Structural violations: code-time conformance to each declared style over the same resolved import graph. */
   structural: StyleReport;
   /** The project's style table (built-ins plus `.scryer/styles/*.json`). */
   styles?: StyleDef[];
+  /** Every claim's derived state and probe mark, and the health counts. */
+  derivedStatus: import("./derived").DerivedStatus;
 }
 
 /** Per-claim state of the ATTACHED TEST's fingerprint, from the test-namespaced
@@ -264,6 +226,9 @@ export interface ClaimProbeStatus {
   /** The code moved on since these probes ran — the result describes a past. */
   stale: boolean;
   recordedAt: number;
+  /** `"mutation"` when the breaks came from an ingested mutation report,
+   *  which carries no fingerprints and so holds as of its ingest. */
+  source?: string;
 }
 
 /** respId → probe result, for row lookups. */
@@ -317,11 +282,16 @@ export function testLaneGlyph(
 export function probeTitle(probe: ClaimProbeStatus | undefined): string {
   const mark = probeMark(probe);
   if (mark === "none" || !probe) return "";
+  // A mutation report is not fingerprinted: it holds as of its ingest.
+  const asOf =
+    probe.source === "mutation"
+      ? ` (mutation report, as of ${new Date(probe.recordedAt * 1000).toLocaleString()})`
+      : "";
   if (mark === "hollow") {
     const lines = probe.survivors.map((s) => `  • ${s}`).join("\n");
-    return `\nPROBE: ${probe.survived} of ${probe.probes} deliberate break(s) went UNCAUGHT — this test does not hold the claim:\n${lines}`;
+    return `\nPROBE${asOf}: ${probe.survived} of ${probe.probes} deliberate break(s) went UNCAUGHT — this test does not hold the claim:\n${lines}`;
   }
-  return `\nPROBE: all ${probe.probes} deliberate break(s) were caught. A sample, not a proof.`;
+  return `\nPROBE${asOf}: all ${probe.probes} deliberate break(s) were caught. A sample, not a proof.`;
 }
 
 /** respId → verdict, for row lookups. */
@@ -787,4 +757,11 @@ export function structuralNotice(
     unstyledOnly: false,
     text: `Structurally invalid (${n} violation${n === 1 ? "" : "s"}) — ${ask}`,
   };
+}
+
+/** The style table to render with: the report's (project-complete) when it
+ *  has one, else the built-ins. Keyed by name. */
+export function styleTable(report: ModelHealthReport | null): ReadonlyMap<string, StyleDef> {
+  const defs = report?.styles?.length ? report.styles : builtinStyles;
+  return new Map(defs.map((d) => [d.name, d]));
 }

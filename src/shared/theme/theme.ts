@@ -1,5 +1,6 @@
 /**
- * Theme system — lets users swap Tailwind color palettes for each semantic role.
+ * Theme system — lets users swap Tailwind color palettes for each semantic role,
+ * and switch light / dark / system color mode (kept in sync with the OS).
  *
  * The trick: Tailwind v4 compiles `bg-blue-500` to `background-color: var(--color-blue-500)`.
  * By overriding `--color-blue-*` CSS variables on `:root`, ALL Tailwind utility classes

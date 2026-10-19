@@ -1,5 +1,5 @@
 /**
- * The two pending numbers (`src/changeMarks.ts`) — the canvas side of what
+ * The two pending numbers (`src/features/change-marks/changeMarks.ts`) — the canvas side of what
  * `pending_elements` / `plan_carrier_count` count in Rust.
  *
  * The bug these pin: the app reported only CARRIERS while the agent's header

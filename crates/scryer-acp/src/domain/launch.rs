@@ -1,6 +1,7 @@
 //! The launch vocabulary: which agent harness, which ACP dialect, and how a
-//! resolved agent is spawned. Pure data — probing PATH for a binary is the
-//! composition layer's job.
+//! resolved agent is spawned — CLI print mode, Copilot's own ACP-serving
+//! binary, or a generic `{name}-acp` adapter. Pure data — probing PATH for a
+//! binary is the composition layer's job.
 
 /// Which agent harness we're dealing with.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]

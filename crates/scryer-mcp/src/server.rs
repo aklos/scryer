@@ -1,3 +1,8 @@
+//! The MCP server: one stdio process per agent session, advertising the read
+//! and testing tools — their input schemas stripped of generator noise once at
+//! construction — and the connect-time instructions. The session it serves is
+//! the one its harness process last bound, else the one named in the env.
+
 use crate::instructions::INSTRUCTIONS;
 use rmcp::{
     handler::server::{router::tool::ToolRouter, tool::ToolCallContext},
@@ -23,14 +28,7 @@ pub struct ScryerServer {
 
 impl ScryerServer {
     pub fn new() -> Self {
-        let tool_router = Self::tool_router_read()
-            + Self::tool_router_nodes()
-            + Self::tool_router_links()
-            + Self::tool_router_misc()
-            + Self::tool_router_generation()
-            + Self::tool_router_intent()
-            + Self::tool_router_testing()
-            + Self::tool_router_notes();
+        let tool_router = Self::tool_router_read() + Self::tool_router_testing();
         let tools = tool_router
             .list_all()
             .into_iter()
@@ -89,13 +87,6 @@ impl ScryerServer {
         #[cfg(not(unix))]
         let _ = model_ref;
         std::env::var("CLAUDE_CODE_SESSION_ID").ok().filter(|s| !s.is_empty())
-    }
-
-    /// The open change this session's plan writes land in, if one exists yet.
-    pub(crate) fn session_change(&self, model_ref: &scryer_core::ModelRef) -> Option<String> {
-        let sid = self.session_id(model_ref)?;
-        let plan = scryer_core::read_planned_at(model_ref).ok()?;
-        scryer_core::changes::session_change(&plan, &sid).map(|c| c.id.clone())
     }
 }
 
@@ -156,9 +147,7 @@ impl ServerHandler for ScryerServer {
     }
 
     fn get_info(&self) -> ServerInfo {
-        // The connect-time block is kept tight and imperative on purpose: it is
-        // always-loaded context, so it leads with the working loop and points at
-        // `get_rules` for the rule text rather than inlining the rules index.
+        // Always-loaded context: one paragraph, the loop and the claim grammar.
         ServerInfo {
             instructions: Some(INSTRUCTIONS.into()),
             capabilities: ServerCapabilities::builder().enable_tools().build(),
@@ -179,139 +168,73 @@ impl ServerHandler for ScryerServer {
 }
 
 #[cfg(test)]
-mod rule_wiring {
-    //! The tool surface is a rule GRAPH: the instructions are the root, each
-    //! tool description ends with a `Rules:` line, and rule bodies cite each
-    //! other as [[slug]]. These tests keep the graph closed (every citation
-    //! resolves), connected (every rule is reachable), and small (the
-    //! always-loaded surface stays inside its token budget).
+mod surface {
+    //! The always-loaded surface — instructions, descriptions, schemas — stays
+    //! small, and serves no rule bodies: what an agent needs is inlined where
+    //! it acts.
     use super::*;
-    use scryer_core::rules;
 
     fn descriptions() -> Vec<(String, String)> {
         ScryerServer::new()
             .tools()
             .iter()
             .cloned()
-            .map(|t| {
-                (
-                    t.name.to_string(),
-                    t.description.map(|d| d.to_string()).unwrap_or_default(),
-                )
-            })
+            .map(|t| (t.name.to_string(), t.description.map(|d| d.to_string()).unwrap_or_default()))
             .collect()
     }
 
-    /// The slugs a description names on its trailing `Rules:` line.
-    fn rules_line(desc: &str) -> Option<Vec<&str>> {
-        let last = desc.lines().last()?;
-        let rest = last.strip_prefix("Rules: ")?;
-        Some(rest.split(',').map(str::trim).filter(|s| !s.is_empty()).collect())
-    }
-
-    fn cites_a_rule_number(text: &str) -> bool {
-        let lower = text.to_lowercase();
-        ["rule ", "rules "].iter().any(|k| {
-            lower
-                .match_indices(k)
-                .any(|(i, _)| lower[i + k.len()..].starts_with(|c: char| c.is_ascii_digit()))
-        })
-    }
-
+    /// The daily set and nothing else: reads of the derived tree and the
+    /// test loop.
     #[test]
-    fn every_description_ends_with_a_rules_line_that_resolves() {
+    fn the_surface_is_the_daily_set() {
+        let mut names: Vec<String> = descriptions().into_iter().map(|(n, _)| n).collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                "close_probe",
+                "get_test_radius",
+                "ingest_mutation_report",
+                "ingest_test_report",
+                "locate",
+                "open_probe",
+                "orient",
+                "read_model",
+                "search_model",
+            ]
+        );
+    }
+
+    /// Nothing points the agent at a rule to fetch: no `Rules:` lines, no
+    /// `[[slug]]` citations, no tool that serves them.
+    #[test]
+    fn nothing_on_the_surface_cites_a_rule() {
+        assert!(!INSTRUCTIONS.contains("[["), "instructions cite a rule");
+        assert!(!INSTRUCTIONS.contains("get_rules"));
         for (name, desc) in descriptions() {
-            let slugs = rules_line(&desc)
-                .unwrap_or_else(|| panic!("{name}: description has no trailing `Rules:` line"));
-            assert!(!slugs.is_empty(), "{name}: empty Rules line");
-            for s in slugs {
-                assert!(rules::get(s).is_some(), "{name} cites unknown rule slug `{s}`");
-            }
-        }
-        for s in rules::citations(INSTRUCTIONS) {
-            assert!(rules::get(s).is_some(), "instructions cite unknown [[{s}]]");
+            assert!(!desc.contains("Rules:") && !desc.contains("[["), "{name} cites a rule");
         }
     }
 
+    /// The instructions carry what an agent needs before writing a stub: the
+    /// EARS patterns and which test level carries which claim.
     #[test]
-    fn every_rule_is_reachable_from_the_surface() {
-        let mut cited: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        let descs = descriptions();
-        for (_, d) in &descs {
-            for s in rules_line(d).unwrap_or_default() {
-                cited.insert(rules::get(s).unwrap().slug);
-            }
+    fn the_instructions_carry_the_claim_grammar_and_the_levels() {
+        for must in ["When <", "While <", "If <", "then <", "e2e", "integration", "unit", "todo test", "get_test_radius"] {
+            assert!(INSTRUCTIONS.contains(must), "instructions lack {must:?}");
         }
-        for s in rules::citations(INSTRUCTIONS) {
-            cited.insert(rules::get(s).unwrap().slug);
-        }
-        for r in rules::RULES {
-            for s in rules::citations(r.body) {
-                cited.insert(rules::get(s).unwrap().slug);
-            }
-        }
-        let orphans: Vec<&str> = rules::RULES
-            .iter()
-            .map(|r| r.slug)
-            .filter(|s| !cited.contains(s))
-            .collect();
-        assert!(orphans.is_empty(), "rules nothing cites: {orphans:?}");
-    }
-
-    #[test]
-    fn nothing_on_the_surface_cites_a_rule_by_number() {
-        assert!(!cites_a_rule_number(INSTRUCTIONS), "instructions cite a rule number");
-        for (name, desc) in descriptions() {
-            assert!(!cites_a_rule_number(&desc), "{name} cites a rule number");
-        }
-        for r in rules::RULES {
-            assert!(!cites_a_rule_number(r.body), "rule {} cites a rule number", r.slug);
-        }
-        assert!(cites_a_rule_number("see rule 22"));
-        assert!(!cites_a_rule_number("the rule is"));
     }
 
     /// The always-loaded prose. Grows only by deliberate choice: raise the
     /// numbers here in the same change that adds the text.
-    /// The styles axis (the `scaffold` tool; `style`, `layer` and `kind` on the
-    /// write schemas) is what the current headroom above main's baseline pays for;
-    /// the +200 on descriptions buys agent-side drift verdicts (`resolve_drift`,
-    /// moved off the user) and progress notes (`note_claims`).
     #[test]
     fn instructions_and_descriptions_stay_within_budget() {
-        assert!(
-            INSTRUCTIONS.len() <= 4_400,
-            "instructions are {} chars (budget 4400, ~1k tokens)",
-            INSTRUCTIONS.len()
-        );
+        assert!(INSTRUCTIONS.len() <= 1_800, "instructions are {} chars (budget 1800)", INSTRUCTIONS.len());
         let descs = descriptions();
         let total: usize = descs.iter().map(|(_, d)| d.len()).sum();
-        assert!(total <= 16_700, "descriptions total {total} chars (budget 16700)");
+        assert!(total <= 4_500, "descriptions total {total} chars (budget 4500)");
         for (name, d) in &descs {
-            assert!(d.len() <= 800, "{name} description is {} chars (max 800)", d.len());
-        }
-    }
-
-    /// Every schema string a client sees, with the JSON path it sits at.
-    fn schema_strings(v: &serde_json::Value, path: &str, out: &mut Vec<(String, String)>) {
-        match v {
-            serde_json::Value::Object(map) => {
-                for (k, val) in map {
-                    let p = format!("{path}/{k}");
-                    if k == "description" {
-                        if let Some(s) = val.as_str() {
-                            out.push((p.clone(), s.to_string()));
-                        }
-                    }
-                    schema_strings(val, &p, out);
-                }
-            }
-            serde_json::Value::Array(items) => {
-                for (i, item) in items.iter().enumerate() {
-                    schema_strings(item, &format!("{path}/{i}"), out);
-                }
-            }
-            _ => {}
+            assert!(d.len() <= 600, "{name} description is {} chars (max 600)", d.len());
         }
     }
 
@@ -347,39 +270,18 @@ mod rule_wiring {
         );
     }
 
-    /// The schemas are the bulk of the always-loaded surface. Budgets are
-    /// on the advertised (slimmed) list, as a client sees it.
+    /// The schemas are the bulk of the always-loaded surface; budgets are on
+    /// the advertised (slimmed) list, as a client sees it.
     #[test]
     fn tool_schemas_stay_within_budget() {
-        let server = ScryerServer::new();
         let mut total = 0;
-        for t in server.tools() {
-            let schema = serde_json::Value::Object((*t.input_schema).clone());
-            let text = serde_json::to_string(&schema).unwrap();
-            let desc = t.description.as_deref().unwrap_or("").len();
+        for t in ScryerServer::new().tools() {
+            let text = serde_json::to_string(&serde_json::Value::Object((*t.input_schema).clone())).unwrap();
             total += text.len();
-            assert!(
-                text.len() + desc <= 4_500,
-                "{}: {} schema + {desc} description chars (max 4500)",
-                t.name,
-                text.len()
-            );
             for noise in ["\"$schema\"", "\"nullable\"", "\"format\"", "\"minimum\"", "\"title\"", "\"default\":null"] {
                 assert!(!text.contains(noise), "{}: schema still carries {noise}", t.name);
             }
-            let mut strings = Vec::new();
-            schema_strings(&schema, "", &mut strings);
-            for (path, s) in strings {
-                assert!(
-                    s.len() <= 160,
-                    "{}: schema description at {path} is {} chars (max 160): {s}",
-                    t.name,
-                    s.len()
-                );
-            }
         }
-        // +200 for `resolve_drift` and `note_claims` (see the descriptions budget).
-        // +100 for get_test_radius's `command` (the per-project radius command).
-        assert!(total <= 33_300, "schemas total {total} chars (budget 33300)");
+        assert!(total <= 5_000, "schemas total {total} chars (budget 5000)");
     }
 }

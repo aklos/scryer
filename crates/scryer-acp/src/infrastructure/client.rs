@@ -1,3 +1,8 @@
+//! The ACP client side of a session: forwards the agent's messages, thoughts,
+//! tool calls and plans as `AgentEvent`s, and answers permission requests by
+//! auto-approving every tool (allow-always over allow-once) except `get_task`,
+//! which is rejected so the agent never starts an implementation loop.
+
 use agent_client_protocol::{
     self as acp, Client, ContentBlock, RequestPermissionRequest, RequestPermissionResponse,
     SelectedPermissionOutcome, SessionNotification, SessionUpdate,
@@ -162,8 +167,7 @@ mod tests {
         }
     }
 
-    /// Every other tool is auto-approved — allow-always preferred, allow-once
-    /// when that's all the agent offers.
+    /// When any other tool asks permission, approves it with allow-always, or allow-once where that is all the agent offers.
     #[tokio::test]
     async fn any_other_tool_is_auto_approved() {
         let (client, _rx) = client();

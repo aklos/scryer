@@ -3,9 +3,9 @@
  * recorded outcome, re-verified against the working tree) and keeps it
  * current, alongside `get_probe_statuses` (what each claim's attached test
  * caught when deliberately broken). Refreshes on open, on every busy→idle edge
- * (an in-app agent run ended), and whenever the `.test-results.json` cache
- * changes on disk — an agent over MCP ingesting a report or ending a probe
- * mid-session lights the badges live.
+ * (an in-app agent run ended), on demand, and whenever the `.test-results.json`
+ * cache changes on disk — an agent over MCP ingesting a report or ending a
+ * probe mid-session lights the badges live.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
