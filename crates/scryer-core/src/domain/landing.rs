@@ -25,7 +25,8 @@ pub struct LandingClaim {
 #[serde(rename_all = "camelCase")]
 pub struct LandingSession {
     pub session: String,
-    /// The task the session oriented on, else its id.
+    /// The task the session oriented on, else the display name of the first
+    /// component it touched; empty when it has neither.
     pub title: String,
     pub started_at: u64,
     pub ended_at: u64,
@@ -54,6 +55,11 @@ pub struct SharedComponent {
 #[serde(rename_all = "camelCase")]
 pub struct Landing {
     pub since: u64,
+    /// The open checkout's branch (`None` when detached or not a git
+    /// repository): the landing titles a session that has neither a task
+    /// nor a touched component by it and the session's time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
     /// The project's live git worktrees, each with its branch and how many
     /// sessions it had in the window; empty for a single checkout.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -152,6 +158,13 @@ pub fn take_prefixed(
         .collect()
 }
 
+/// The display name of the first component a session touched, in touch
+/// order: its title when the agent never oriented on a task.
+fn first_component_name(touched: &[String], tree: &DerivedTree) -> Option<String> {
+    let id = touched.iter().find_map(|f| tree.file_nodes.get(f))?;
+    tree.planned.nodes.iter().find(|n| &n.id == id).map(|n| n.name.clone())
+}
+
 /// The landing view for sessions active since `since`. A planned claim is a
 /// session's newly planned work when the session's log records it as a stub
 /// it wrote; other planned claims its edits reach are still planned.
@@ -185,7 +198,7 @@ pub fn landing(
         };
         let mut s = LandingSession {
             session: id.clone(),
-            title: log.title().map(str::to_string).unwrap_or_else(|| format!("Session {}", &id[..id.len().min(8)])),
+            title: log.task.clone().or_else(|| first_component_name(&log.touched, tree)).unwrap_or_default(),
             started_at: start,
             ended_at: end,
             newly_proven: Vec::new(),
@@ -284,6 +297,9 @@ mod tests {
     #[test]
     fn sessions_since_last_look_sort_their_claims() {
         let mut planned = ScryModel::new();
+        planned.nodes.push(
+            serde_json::from_value(serde_json::json!({"id": "comp", "kind": "component", "name": "drafts"})).unwrap(),
+        );
         planned.source_map.insert(
             "exercised".into(),
             vec![SourceLocation { pattern: "src/a.rs".into(), symbol: None, line: None, end_line: None }],
@@ -345,9 +361,29 @@ mod tests {
         assert_eq!(ids(&a.newly_stale_or_failing), vec!["exercised"]);
         assert_eq!(a.surviving_mutants, 2);
         assert_eq!(a.new_dark_files, vec!["src/a.rs"]);
-        assert_eq!(l.sessions[0].title, "Session bbbbbbbb");
+        assert_eq!(l.sessions[0].title, "drafts", "no task: the first component it touched");
         assert!(l.sessions[0].newly_proven.is_empty(), "verdicts before its window are not its doing");
         assert_eq!(l.shared, vec![SharedComponent { node_id: "comp".into(), sessions: vec!["aaaaaaaa-1".into(), "bbbbbbbb-2".into()] }]);
+    }
+
+    /// When a session neither oriented on a task nor touched a file of any
+    /// component, its title is left empty, for the page to name it by branch
+    /// and time.
+    #[test]
+    fn a_session_without_task_or_component_has_no_title() {
+        let sessions = vec![("dddddddd-4".to_string(), vec![touch(10, "README.md")])];
+        let tree = DerivedTree {
+            fingerprint: 0,
+            committed: ScryModel::new(),
+            planned: ScryModel::new(),
+            claims: Vec::new(),
+            file_nodes: BTreeMap::new(),
+            dark_files: Vec::new(),
+            style_violations: Vec::new(),
+            layer_exempt: Vec::new(),
+        };
+        let l = landing(&sessions, &tree, &DerivedStatus::default(), 0);
+        assert_eq!(l.sessions[0].title, "");
     }
 
     /// When sessions come from several worktrees, each is labelled with its

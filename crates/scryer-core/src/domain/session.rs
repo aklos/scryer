@@ -30,9 +30,6 @@ pub enum SessionEvent {
     /// The task the agent oriented on, in its own words — the session's
     /// title. Only the first is kept.
     Task { text: String },
-    /// The developer's first prompt, clipped: the session's title when the
-    /// agent never oriented. Only the first is kept.
-    Prompt { text: String },
     /// A shell command is about to run: files modified after `ns` (unix
     /// nanoseconds) and before it finishes are the session's edits. `tool` is
     /// the harness's tool-call id, so concurrent commands pair up.
@@ -84,8 +81,6 @@ pub struct SessionLog {
     pub shell_starts: Vec<(Option<String>, u64)>,
     /// The first task the agent oriented on.
     pub task: Option<String>,
-    /// The developer's first prompt.
-    pub prompt: Option<String>,
     /// The todo tests last recorded (at start or the last stop), as
     /// [`test_key`]s; `None` until the first record.
     pub planned_seen: Option<Vec<String>>,
@@ -133,11 +128,6 @@ impl SessionLog {
                     self.task = Some(text.clone());
                 }
             }
-            SessionEvent::Prompt { text } => {
-                if self.prompt.is_none() {
-                    self.prompt = Some(text.clone());
-                }
-            }
         }
     }
 
@@ -154,12 +144,6 @@ impl SessionLog {
                     && !self.stubs.iter().any(|(f, t)| f == file && t == test)
             })
             .collect()
-    }
-
-    /// What the session is called: the task it oriented on, else the
-    /// developer's first prompt.
-    pub fn title(&self) -> Option<&str> {
-        self.task.as_deref().or(self.prompt.as_deref())
     }
 
     /// When the shell command `tool` started: its own start when the harness

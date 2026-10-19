@@ -109,23 +109,6 @@ pub fn record_task(r: &ModelRef, session: &str, task: &str) -> Result<(), String
     session_store::append(r, session, SessionEvent::Task { text: task.to_string() })
 }
 
-/// The longest first prompt kept as a title.
-const PROMPT_TITLE_CHARS: usize = 120;
-
-/// Record the developer's first prompt, clipped, as the session's fallback
-/// title. Later prompts are not kept.
-pub fn record_prompt(r: &ModelRef, session: &str, prompt: &str) -> Result<(), String> {
-    let line = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
-    if line.is_empty() || session_log(r, session).prompt.is_some() {
-        return Ok(());
-    }
-    let mut text: String = line.chars().take(PROMPT_TITLE_CHARS).collect();
-    if line.chars().count() > PROMPT_TITLE_CHARS {
-        text.push('…');
-    }
-    session_store::append(r, session, SessionEvent::Prompt { text })
-}
-
 /// The task the session first oriented on, if any.
 pub fn session_task(r: &ModelRef, session: &str) -> Option<String> {
     session_log(r, session).task
@@ -196,7 +179,7 @@ pub fn bind_pid(r: &ModelRef, session: &str, pid: u32) -> Result<(), String> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LiveSession {
     pub id: String,
-    /// Its title: the task it oriented on, else its first prompt.
+    /// The task it oriented on.
     pub task: Option<String>,
     pub touched: Vec<String>,
     /// The todo tests it owns, `(file, junit_name)`.
@@ -233,7 +216,7 @@ pub fn live_sessions(r: &ModelRef, except: Option<&str>) -> Vec<LiveSession> {
                 return None;
             }
             let log = SessionLog::from_events(&entries);
-            let task = log.title().map(str::to_string);
+            let task = log.task.clone();
             Some(LiveSession { id, task, touched: log.touched, stubs: log.stubs })
         })
         .collect()
@@ -289,23 +272,6 @@ mod tests {
         stop(&r, "s", None, Vec::new()).unwrap();
         let stops = session_store::read(&r, "s").into_iter().filter(|e| e.event == SessionEvent::Stop).count();
         assert_eq!(stops, 2);
-    }
-
-    /// When a session's first prompt arrives it becomes the session's title,
-    /// clipped to 120 characters, unless the agent orients on a task; later
-    /// prompts are not kept.
-    #[test]
-    fn the_first_prompt_titles_a_session_without_a_task() {
-        let (_dir, r) = project();
-        let long = "fix the landing page ".repeat(10);
-        record_prompt(&r, "s", &long).unwrap();
-        record_prompt(&r, "s", "something else").unwrap();
-        let log = session_log(&r, "s");
-        let title = log.title().unwrap();
-        assert_eq!(title.chars().count(), 121, "{title}");
-        assert!(title.starts_with("fix the landing page fix") && title.ends_with('…'));
-        record_task(&r, "s", "Queue offline saves").unwrap();
-        assert_eq!(session_log(&r, "s").title(), Some("Queue offline saves"));
     }
 
     /// At a stop, the todo tests the session wrote since its start in files

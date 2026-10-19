@@ -8,9 +8,8 @@
 //! against the project's derived tree and the session's log
 //! (`.scryer/sessions/<session_id>.jsonl`); the desktop app need not be open.
 //!
-//! - UserPromptSubmit  → bind the harness process to the session and keep the
-//!                       first prompt, clipped, as its fallback title; say
-//!                       nothing
+//! - UserPromptSubmit  → bind the harness process to the session; the prompt
+//!                       is never read; say nothing
 //! - PostToolUse read  → inject what the tree says about the file — its node,
 //!                       description and claims (once per session until it
 //!                       changes)
@@ -447,19 +446,14 @@ fn render_overlay(overlay: &serde_json::Value) -> Option<String> {
 }
 
 /// Bind the harness process to the session, so an MCP server it spawned
-/// before a `/clear` follows the session to its new id, and keep the first
-/// prompt, clipped, as the session's fallback title. Silent.
+/// before a `/clear` follows the session to its new id. The prompt itself is
+/// never read: scryer does not record what the developer types. Silent.
 fn user_prompt_submit(r: &ModelRef, event: &serde_json::Value) {
     let Some(session) = session_id(event) else { return };
     for pid in ancestor_pids() {
         let _ = scryer_core::session::bind_pid(r, session, pid);
     }
-    // The first prompt, clipped, titles the session when the agent never
-    // orients on a task. Nothing is said back.
-    if let Some(prompt) = event["prompt"].as_str() {
-        let _ = scryer_core::session::record_prompt(r, session, prompt);
-    }
-    // The first prompt notes the todo tests already there, so the stubs this
+    // The first submit notes the todo tests already there, so the stubs this
     // session writes can be told apart at its stops.
     let _ = scryer_core::session::begin(r, session, || {
         crate::derived::load_tree(r).map(|t| crate::derived::planned_tests(&t)).unwrap_or_default()

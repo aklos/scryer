@@ -18,7 +18,9 @@ pub fn landing_across_worktrees(project: &Path, since: u64) -> Result<Landing, S
     let worktrees = scryer_core::worktree::list_worktrees(project);
     if worktrees.len() <= 1 {
         let (tree, status) = derived_status(&r)?;
-        return Ok(landing_at(&r, &tree, &status, since));
+        let mut out = landing_at(&r, &tree, &status, since);
+        out.branch = worktrees.into_iter().next().and_then(|w| w.branch);
+        return Ok(out);
     }
     let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
     let here = canon(project);
@@ -65,7 +67,9 @@ pub fn landing_across_worktrees(project: &Path, since: u64) -> Result<Landing, S
             (wt, part)
         })
         .collect();
-    Ok(merge_worktrees(since, parts))
+    let mut out = merge_worktrees(since, parts);
+    out.branch = out.worktrees.iter().find(|w| w.current).and_then(|w| w.branch.clone());
+    Ok(out)
 }
 
 #[cfg(test)]

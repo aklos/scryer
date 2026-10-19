@@ -1,6 +1,7 @@
 /**
  * Landing — what changed since you last looked. One card per agent session
- * active since the project was last opened, newest first, titled by its task:
+ * active since the project was last opened, newest first, titled by its task
+ * (else the first component it touched, else its branch and start time):
  * the claims its edits newly proved, newly planned or left planned, the ones
  * now stale or failing, surviving mutants and new dark files in what it
  * touched. Beside them, the components more than one session touched. Rows
@@ -58,6 +59,8 @@ interface Landing {
   since: number;
   sessions: LandingSession[];
   shared: { nodeId: string; sessions: string[] }[];
+  /** The open checkout's branch. */
+  branch?: string;
   /** The project's live worktrees; absent for a single checkout. */
   worktrees?: LandingWorktree[];
 }
@@ -107,10 +110,15 @@ export function LandingPage({
   }, [load]);
 
   const names = useMemo(() => new Map(model.nodes.map((n) => [n.id, n.name])), [model]);
-  const titles = useMemo(
-    () => new Map((landing?.sessions ?? []).map((s) => [s.session, s.title])),
-    [landing],
-  );
+  // A session with no task and no touched component is named by its branch
+  // and start time; scryer never records the developer's prompts.
+  const titles = useMemo(() => {
+    const branchOf = (s: LandingSession) =>
+      landing?.worktrees?.find((w) => w.path === s.worktree)?.branch ?? landing?.branch ?? "detached";
+    return new Map(
+      (landing?.sessions ?? []).map((s) => [s.session, s.title || `${branchOf(s)} · ${when(s.startedAt)}`]),
+    );
+  }, [landing]);
 
   // Open the claim's page and flash the claim once it renders.
   const openClaim = (c: LandingClaim) => {
@@ -191,6 +199,7 @@ export function LandingPage({
                           <SessionCard
                             key={s.session}
                             s={s}
+                            title={titles.get(s.session) ?? s.title}
                             names={names}
                             branch={w.branch ?? "detached"}
                             onOpenClaim={openClaim}
@@ -202,7 +211,7 @@ export function LandingPage({
                   );
                 })
               : landing?.sessions.map((s) => (
-                  <SessionCard key={s.session} s={s} names={names} onOpenClaim={openClaim} onSelectNode={onSelectNode} />
+                  <SessionCard key={s.session} s={s} title={titles.get(s.session) ?? s.title} names={names} onOpenClaim={openClaim} onSelectNode={onSelectNode} />
                 ))}
           </>
         )}
@@ -213,12 +222,14 @@ export function LandingPage({
 
 function SessionCard({
   s,
+  title,
   names,
   branch,
   onOpenClaim,
   onSelectNode,
 }: {
   s: LandingSession;
+  title: string;
   names: Map<string, string>;
   /** The worktree's branch, shown beside the session's time span. */
   branch?: string;
@@ -234,7 +245,7 @@ function SessionCard({
   const quiet = groups.every(([, rows]) => rows.length === 0) && s.survivingMutants === 0 && s.newDarkFiles.length === 0;
   return (
     <PageSection
-      title={s.title}
+      title={title}
       right={
         <span className="text-xs text-[var(--text-muted)]">
           {branch && <span className="mr-2 font-mono text-[var(--text-tertiary)]">{branch}</span>}
