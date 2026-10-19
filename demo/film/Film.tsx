@@ -8,7 +8,7 @@
 import { useEffect, useState } from "react";
 import { AbsoluteFill, continueRender, delayRender, useCurrentFrame } from "remotion";
 import { Caption } from "./Caption";
-import { Cursor } from "./Cursor";
+import { Cursor, FILM_ROOT } from "./Cursor";
 import { EVENTS } from "./events";
 import { Shell } from "./Shell";
 import { state } from "./state";
@@ -33,7 +33,10 @@ export function Film() {
   const [main, second] = s.terminals;
   const half = (TERMS.height - TERMS.gap) / 2;
   return (
-    <AbsoluteFill style={{ background: "radial-gradient(ellipse at 30% 20%, #1c2333 0%, #0b0d12 70%)" }}>
+    <AbsoluteFill
+      {...{ [FILM_ROOT]: "" }}
+      style={{ background: "radial-gradient(ellipse at 30% 20%, #1c2333 0%, #0b0d12 70%)" }}
+    >
       <div
         style={{
           position: "absolute",
@@ -52,7 +55,7 @@ export function Film() {
             transform: `scale(${s.camera.scale})`,
           }}
         >
-          <Shell fixture={s.fixture} view={s.view} selection={s.selection} lens={s.lens} flash={s.flash} frame={frame} />
+          <Shell fixture={s.fixture} version={s.version} view={s.view} selection={s.selection} lens={s.lens} frame={frame} />
         </div>
       </div>
       <div style={{ position: "absolute", left: TERMS.left, top: TERMS.top, width: TERMS.width, height: second ? half : TERMS.height }}>

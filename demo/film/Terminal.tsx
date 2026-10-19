@@ -11,6 +11,7 @@
  */
 
 import { interpolate, useCurrentFrame } from "remotion";
+import { AGENT_NAME } from "../fixture";
 import type { TermLine, TerminalState } from "./state";
 import "./terminal.css";
 
@@ -135,7 +136,7 @@ export function Terminal({ state }: { state: TerminalState }) {
             <pre className="term-logo">{ROBOT}</pre>
             <div className="term-banner-titles">
               <div className="term-banner-kicker">AI CODING AGENT</div>
-              <div className="term-banner-name">GIPPITEE 3000</div>
+              <div className="term-banner-name">{AGENT_NAME}</div>
             </div>
           </div>
           <div className="term-banner-hint">

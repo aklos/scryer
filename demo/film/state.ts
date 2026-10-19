@@ -12,6 +12,7 @@ import {
   BASE_PROBES,
   BASE_STATES,
   layout,
+  NOW,
   sessions as baseSessions,
   statusOf,
   structure,
@@ -84,9 +85,19 @@ export interface Caption {
   since: number;
 }
 
-export interface CursorState {
+/** Where the pointer aims: the centre of the first element `target` selects
+ *  in the mounted app, else the fixed point (film pixels). */
+export interface CursorPoint {
   x: number;
   y: number;
+  target?: string;
+}
+
+export interface CursorState {
+  /** The glide in progress, `t` from 0 to 1 (eased). */
+  from: CursorPoint;
+  to: CursorPoint;
+  t: number;
   visible: boolean;
   /** The frame of the last click, for its ripple. */
   clickAt?: number;
@@ -96,6 +107,9 @@ export interface FilmState {
   frame: number;
   /** What the app sees through the invoke stub. */
   fixture: Fixture;
+  /** How many fixture changes are applied — the stub tells the app to
+   *  re-read when this moves. */
+  version: number;
   view: View;
   selection?: string;
   /** The concern lens, e.g. `persistence`. */
@@ -104,8 +118,6 @@ export interface FilmState {
   caption: Caption | null;
   cursor: CursorState;
   terminals: [TerminalState, TerminalState?];
-  /** A claim row that just changed, flashed for a moment. */
-  flash?: { ids: string[]; since: number };
 }
 
 // --- Events ------------------------------------------------------------------------
@@ -118,7 +130,7 @@ export type FilmEvent = At &
     | { kind: "lens"; concern?: string }
     | { kind: "camera"; to: Camera; dur: number }
     | { kind: "caption"; text: string | null; style?: Caption["style"]; sub?: string }
-    | { kind: "cursor"; x: number; y: number; dur: number; click?: boolean; hide?: boolean }
+    | { kind: "cursor"; x: number; y: number; target?: string; dur: number; click?: boolean; hide?: boolean }
     | { kind: "term.show"; term: 0 | 1; cwd: string }
     | { kind: "term.type"; term: 0 | 1; text: string; dur: number }
     | { kind: "term.submit"; term: 0 | 1 }
@@ -155,6 +167,8 @@ export function state(events: FilmEvent[], frame: number): FilmState {
   let claims: DerivedClaim[] = BASE_CLAIMS.map((c) => ({ ...c }));
   const states: Record<string, ClaimState> = { ...BASE_STATES };
   const probes: Record<string, ProbeMark> = { ...BASE_PROBES };
+  const recorded: Record<string, number> = {};
+  let version = 0;
   let violations: DerivedViolation[] = [];
   const sessions: SessionLog[] = baseSessions.map((s) => ({ ...s, entries: [...s.entries] }));
 
@@ -163,13 +177,17 @@ export function state(events: FilmEvent[], frame: number): FilmState {
   let lens: string | undefined;
   let tween = { from: HOME, to: HOME, at: 0, dur: 0 };
   let caption: Caption | null = null;
-  let glide = { from: { x: 900, y: 600 }, to: { x: 900, y: 600 }, at: 0, dur: 0 };
-  let cursor: CursorState = { x: 900, y: 600, visible: false };
+  const rest: CursorPoint = { x: 900, y: 600 };
+  let glide = { from: rest, to: rest, at: 0, dur: 0 };
+  let visible = false;
+  let clickAt: number | undefined;
   const terminals: [TerminalState, TerminalState?] = [terminal("~/aperture-pay", 0)];
-  let flash: FilmState["flash"];
 
   for (const e of events) {
     if (e.at > frame) break;
+    if (e.kind.startsWith("claims.") || e.kind === "probe" || e.kind === "violation" || e.kind === "session") {
+      version += 1;
+    }
     switch (e.kind) {
       case "view":
         view = e.view;
@@ -189,10 +207,10 @@ export function state(events: FilmEvent[], frame: number): FilmState {
         caption = e.text === null ? null : { text: e.text, style: e.style ?? "headline", sub: e.sub, since: e.at };
         break;
       case "cursor": {
-        const t = ease(progress(e.at, glide.at, glide.dur));
-        const now = { x: glide.from.x + (glide.to.x - glide.from.x) * t, y: glide.from.y + (glide.to.y - glide.from.y) * t };
-        glide = { from: now, to: { x: e.x, y: e.y }, at: e.at, dur: e.dur };
-        cursor = { ...cursor, visible: !e.hide, clickAt: e.click ? e.at + e.dur : cursor.clickAt };
+        // A new glide starts from where the last one was headed.
+        glide = { from: glide.to, to: { x: e.x, y: e.y, target: e.target }, at: e.at, dur: e.dur };
+        visible = !e.hide;
+        if (e.click) clickAt = e.at + e.dur;
         break;
       }
       case "term.show":
@@ -235,7 +253,6 @@ export function state(events: FilmEvent[], frame: number): FilmState {
         break;
       case "claims.add":
         claims = [...claims, ...e.claims.map((c) => ({ ...c }))];
-        flash = { ids: e.claims.map((c) => c.id), since: e.at };
         break;
       case "claims.remove":
         claims = claims.filter((c) => !e.ids.includes(c.id));
@@ -243,15 +260,14 @@ export function state(events: FilmEvent[], frame: number): FilmState {
       case "claims.state":
         for (const id of e.ids) {
           states[id] = e.state;
+          recorded[id] = NOW;
           const c = claims.find((c) => c.id === id);
           if (c) c.planned = e.state === "planned" || undefined;
         }
-        flash = { ids: e.ids, since: e.at };
         break;
       case "probe":
         if (e.mark) probes[e.id] = e.mark;
         else delete probes[e.id];
-        flash = { ids: [e.id], since: e.at };
         break;
       case "violation":
         violations = e.violation ? [e.violation] : [];
@@ -268,21 +284,16 @@ export function state(events: FilmEvent[], frame: number): FilmState {
   }
 
   const tree = treeOf(claims, violations);
-  const glideT = ease(progress(frame, glide.at, glide.dur));
   return {
     frame,
-    fixture: { tree, status: statusOf(tree, states, probes), structure, sessions, layout },
+    fixture: { tree, status: statusOf(tree, states, probes, recorded), structure, sessions, layout },
+    version,
     view,
     selection,
     lens,
     camera: mix(tween.from, tween.to, progress(frame, tween.at, tween.dur)),
     caption,
-    cursor: {
-      ...cursor,
-      x: glide.from.x + (glide.to.x - glide.from.x) * glideT,
-      y: glide.from.y + (glide.to.y - glide.from.y) * glideT,
-    },
+    cursor: { from: glide.from, to: glide.to, t: ease(progress(frame, glide.at, glide.dur)), visible, clickAt },
     terminals,
-    flash,
   };
 }

@@ -63,13 +63,21 @@ const run = (command: string, tests: TestResult[], secs: number, term: 0 | 1 = 0
   tests,
   dur: Math.round(secs * FPS),
 });
-const cursor = (x: number, y: number, secs: number, click = false): Loose => ({
+/** Glide to the element `target` selects in the app (falling back to the
+ *  point), clicking on arrival when asked. */
+const cursor = (target: string, x: number, y: number, secs: number, click = false): Loose => ({
   kind: "cursor",
+  target,
   x,
   y,
   dur: Math.round(secs * FPS),
   click,
 });
+const hideCursor: Loose = { kind: "cursor", x: 0, y: 0, dur: 0, hide: true };
+
+/** The app's elements the pointer aims at. */
+const ROW = (claim: string) => `#resp-${claim}`;
+const LENS = '[title^="Concern lens"]';
 /** A line of a session's log, as its hooks write it. */
 const log = (session: string, entry: SessionEvent): Loose => ({
   kind: "session",
@@ -94,8 +102,7 @@ export const EVENTS: FilmEvent[] = ([
   // 1. Plans without essays.
   ...act(ACTS.plans, [
     [0, clear],
-    [0, { kind: "view", view: { kind: "tree" } }],
-    [0, { kind: "select", node: "ledger" }],
+    [0, { kind: "view", view: { kind: "node", node: "ledger" } }],
     [0.4, type("add partial refunds to the ledger", 1.6)],
     [2.2, { kind: "term.submit", term: 0 }],
     [2.2, log(SESSION_REFUNDS, { event: "task", text: "add partial refunds to the ledger" })],
@@ -114,14 +121,15 @@ export const EVENTS: FilmEvent[] = ([
       [" ", "… 3 more"],
     ])],
     [4.8, ok()],
-    [4.6, cam(580, 200, 1.04, 1.4)],
+    [4.8, cam(700, 500, 1.18, 1.2)],
+    [8.6, cam(580, 500, 1, 0.8)],
     [5.4, say("Five todo tests. Delete any you don't want, then say go.")],
     [5.6, { kind: "term.idle", term: 0 }],
     [6.5, headline("The plan is a column of claims. Read it in ten seconds.")],
-    [9.0, cursor(720, 336, 1.0)],
-    [10.4, cursor(1181, 336, 0.8, true)],
+    [9.0, cursor(ROW("c-ref-4"), 700, 400, 1.0)],
+    [10.4, cursor(ROW("c-ref-5"), 700, 440, 0.8, true)],
     [11.3, { kind: "claims.remove", ids: ["c-ref-5"] }],
-    [11.8, { kind: "cursor", x: 1181, y: 336, dur: 0, hide: true }],
+    [11.8, hideCursor],
     [12.4, type("go", 0.4)],
     [13.2, { kind: "term.submit", term: 0 }],
     [13.6, say("Building the four.")],
@@ -136,21 +144,21 @@ export const EVENTS: FilmEvent[] = ([
     [0.2, cam(580, 500, 1, 2.2)],
     [2.6, { kind: "view", view: { kind: "diagram", level: "containers" } }],
     [5.0, { kind: "view", view: { kind: "diagram", level: "component", focus: "ledger" } }],
-    [5.2, cam(580, 560, 1.06, 1.4)],
+    [5.2, cam(580, 500, 1, 0.1)],
     [7.0, tool("write", "ledger/src/domain/refund.rs")],
     [7.4, diff("ledger/src/domain/refund.rs", [
-      ["+", "use crate::adapters::postgres::PgStore;"],
+      ["+", "use crate::infrastructure::postgres::PgStore;"],
       ["+", "pub fn refund(store: &PgStore, capture: CaptureId, amount: Money)"],
     ])],
     [7.6, ok()],
     [7.6, log(SESSION_REFUNDS, { event: "touch", file: "ledger/src/domain/refund.rs" })],
     [8.0, { kind: "violation", violation: REFUND_VIOLATION }],
     [9.0, headline("Styles the agent builds to, and cannot drift from.")],
-    [10.6, say("domain can't import adapters — moving the store behind a port.")],
-    [11.2, tool("write", "ledger/src/ports/refunds.rs")],
+    [10.6, say("domain can't import infrastructure — moving the store behind a port.")],
+    [11.2, tool("write", "ledger/src/application/refunds.rs")],
     [11.8, diff("ledger/src/domain/refund.rs", [
-      ["-", "use crate::adapters::postgres::PgStore;"],
-      ["+", "use crate::ports::RefundLedger;"],
+      ["-", "use crate::infrastructure::postgres::PgStore;"],
+      ["+", "use crate::application::RefundLedger;"],
     ])],
     [12.2, ok()],
     [13.0, { kind: "violation" }],
@@ -164,6 +172,7 @@ export const EVENTS: FilmEvent[] = ([
     [0, { kind: "view", view: { kind: "node", node: "ledger" } }],
     [0.6, tool("get_test_radius", "ledger/src/domain/refund.rs")],
     [1.2, ok()],
+    [1.2, cam(700, 520, 1.22, 1.0)],
     [1.6, run("cargo test --test refunds", refundTests("fail"), 1.4)],
     [3.0, { kind: "claims.state", ids: BUILT, state: "failing" }],
     [3.6, tool("write", "ledger/src/domain/refund.rs")],
@@ -178,13 +187,13 @@ export const EVENTS: FilmEvent[] = ([
     [6.8, tool("ingest_test_report", ".scryer/reports/radius.xml")],
     [7.2, ok()],
     [7.2, log(SESSION_REFUNDS, { event: "reached", ids: [...BUILT, "c-led-1", "c-led-3", "c-led-5"] })],
+    [7.2, cam(580, 500, 1, 0.8)],
     [7.6, headline("Every claim is a test. Scan down a component, or across a concern.")],
-    [9.6, { kind: "view", view: { kind: "tree" } }],
-    [9.6, { kind: "select" }],
-    [10.0, cursor(98, 110, 1.0, true)],
-    [11.1, { kind: "lens", concern: "persistence" }],
-    [11.6, { kind: "cursor", x: 98, y: 110, dur: 0, hide: true }],
-    [16.4, { kind: "lens" }],
+    [9.6, cursor(LENS, 160, 130, 1.0, true)],
+    [10.8, { kind: "lens", concern: "persistence" }],
+    [11.4, hideCursor],
+    [12.6, { kind: "view", view: { kind: "diagram", level: "containers" } }],
+    [16.6, { kind: "lens" }],
   ]),
 
   // 4. Deterministic checks and probing.
@@ -194,6 +203,7 @@ export const EVENTS: FilmEvent[] = ([
     [0.8, say("Probing the over-refund guard before I stop.")],
     [1.2, tool("open_probe", "rejects_over_refund")],
     [1.8, ok()],
+    [2.0, cam(1100, 470, 1.3, 1.2)],
     [2.2, diff("worktree: ledger/src/domain/refund.rs", [
       ["-", "if amount > capture.refundable() {"],
       ["+", "if amount > capture.refundable() * 2 {"],
@@ -217,6 +227,7 @@ export const EVENTS: FilmEvent[] = ([
     [12.8, ok()],
     [13.0, { kind: "probe", id: "c-ref-2", mark: "doubleCheck" }],
     [13.4, { kind: "term.idle", term: 0 }],
+    [15.0, cam(580, 500, 1, 1.0)],
   ]),
 
   // 5. Overwatch and swarms.
