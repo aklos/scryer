@@ -1,16 +1,15 @@
 /**
  * The application top bar: the scryer logo on the left is the app action menu
- * (open / close project, settings); the project name sits beside it for
- * context, and search lives on the right. Page content lives below; this bar
- * is app chrome only.
+ * (open / close project, settings) with the project name beside it; search sits
+ * dead-centre; the Wiki / Map view switch (plus Recent, when the host passes a
+ * session page), theme toggle and window controls are on the right. Page
+ * content lives below; this bar is app chrome only.
  *
  * The window is frameless (`decorations: false`), so this bar IS the titlebar:
  * every non-interactive part of it carries `data-tauri-drag-region` to move the
- * window, and the minimize / maximize / close controls live at its right edge.
- * The attribute does not inherit — each element the cursor can land on needs
- * its own, so the flex wings and the project path carry it too.
- *
- * Top window chrome: project switcher, view toggle, search launcher, theme toggle, and window controls
+ * window. The attribute does not inherit — each element the cursor can land on
+ * needs its own. On macOS the OS draws its own traffic lights and the bar leaves
+ * room for them; elsewhere the bar draws minimize / maximize / close.
  */
 
 import { useEffect, useState } from "react";

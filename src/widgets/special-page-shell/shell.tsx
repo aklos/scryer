@@ -1,7 +1,6 @@
 /**
- * Shared scrollable content column every special (non-node) page renders inside
- *
- * Provides the shared header and scrollable body column every special page renders inside
+ * The shell every special (non-node) page renders inside: a header and a
+ * scrollable body column.
  */
 
 import { PAGE_COL } from "../../shared/ui/pagekit";

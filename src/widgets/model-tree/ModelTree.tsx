@@ -1,19 +1,12 @@
 /**
- * Left explorer — the definition surface. An IDE-style tree of the full node
- * hierarchy (persons, systems, containers, components, symbols) with groups
- * rendered as folders that wrap their members. Every node is reachable and
- * first-class. A change-letter gutter (A/M/D/R from the plan diff, Q/X for
- * drift) marks each row at a glance and rolls up onto collapsed branches; agent
- * activity is reflected on the rows. Right-click for
- * structural edits (add child, rename, delete, group membership).
- *
- * Renders the whole model as a navigable, filterable tree with plan/drift marks and inline structural editing
- *
- * Renders the whole model as a navigable, filterable tree with plan/drift marks, test tallies, structural violation counts, and inline structural editing
- *
- * Shows per-row untested/failing/hollow test tallies
- *
- * Shows untested/failing/hollow test counts per tree row
+ * Left explorer — an IDE-style tree of the full derived hierarchy (persons,
+ * systems, containers, components, symbols), with groups rendered as folders
+ * that wrap their members. A change-letter gutter (A/M/D/R from the plan diff,
+ * Q/X for drift) marks each row and rolls up onto collapsed branches, beside
+ * per-subtree test tallies (untested, failing, hollow) and structural
+ * violation counts. Type-to-filter, the Planned / Tests lenses and the concern
+ * lens narrow it. The structure is the code's, so right-click offers only what
+ * lands in code: add a claim (a todo test), or rename a container.
  */
 
 import { useRef, useState } from "react";

@@ -1,5 +1,9 @@
 /**
- * Lists a node's claims grouped by concern, each rendered as a diff row with its verdict actions
+ * The node page's claims: a node's or group's claims grouped by concern, each
+ * a diff row against the committed tree — its marker, statement (word-diffed
+ * when reworded), inline source locations, and attached tests with their
+ * recorded verdict and probe result. Edit mode is a list form, committed on
+ * Done, with EARS lint and a live markup preview.
  */
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";

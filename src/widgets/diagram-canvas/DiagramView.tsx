@@ -1,25 +1,21 @@
 /**
- * The secondary Diagram view — a navigational projection of the model. It
- * renders one level at a time (the children of a focus node) and shares the
- * workspace selection with the tree and the wiki page:
+ * The Diagram view — a navigational projection of the tree. It renders one
+ * level at a time (the children of a focus node) and shares the workspace
+ * selection with the tree and the wiki page:
  *
  *   - single-click a node      → select it (drives the shared selection)
  *   - double-click a container → drill into it (descend a level)
  *   - the ↗ button on a card   → drill into it (same)
  *   - breadcrumb               → ascend to any ancestor level
- *   - drag a card (arch tiers) → place it manually; the spot persists on the
- *     node (`position`) and auto-layout only places the unpinned rest
+ *   - click a red edge         → list its structural violations
  *   - drag a dot (code tier)   → tug the live constellation apart (a resident
  *     d3-force sim, `useDotSim`) to trace connectivity; nothing persists
  *
- * Two render modes, chosen by `buildDiagramScene`: the architecture tiers draw
- * as the ported C4 cards-and-edges (planar layout + handle routing); the symbol
- * tier draws as a force-directed dot graph. All semantic editing stays in the
- * tree and the page — this surface navigates, places, and untangles.
- *
- * Builds the current level's scene, lays out nodes/edges, and wires selection, drag, and live physics for the code tier
- *
- * Top-level diagram surface — hosts React Flow, the conformance overlay toggle, and drill-down navigation
+ * `buildDiagramScene` picks the drawing: architecture tiers as the ported C4
+ * cards and edges (planar layout + handle routing), a styled level inside its
+ * style's regions, the symbol tier as a force-directed dot graph. Cards carry
+ * change marks, completeness and violation counts, and dim under the concern
+ * lens. Dragging a card to pin it works only when the host passes `onMoveNode`.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";

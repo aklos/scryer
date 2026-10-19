@@ -1,5 +1,6 @@
 /**
- * Page title, breadcrumb, type line, and action buttons shared by every full page
+ * A page's header: breadcrumb (`Crumbs` over `ancestorChain`), the
+ * title with in-place rename, the type line, and the page's action buttons.
  */
 
 import type { ScryModel, Node } from "../../entities/model/viewmodel";

@@ -1,5 +1,6 @@
 /**
- * Lists and edits a node's declared data-shape fields as a diff against the committed model
+ * A data-shape symbol's fields, listed as a diff against the committed tree
+ * (matched by exact label) and edited as a list form committed on Done.
  */
 
 import { Plus, Trash2 } from "lucide-react";
