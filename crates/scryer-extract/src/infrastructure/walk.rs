@@ -131,7 +131,14 @@ pub fn parse_sources(project: &Path, all_files: &[PathBuf]) -> (Vec<ParsedFile>,
                     parse
                 }
             };
-            (!parse.defs.is_empty()).then_some(ParsedFile {
+            // A file that defines nothing can still reach code: a test file
+            // of `describe`/`it` calls, a barrel that only re-exports. Only a
+            // file with nothing to say at all is dropped.
+            let says_something = !parse.defs.is_empty()
+                || !parse.imports.is_empty()
+                || !parse.paths.is_empty()
+                || !parse.test_blocks.is_empty();
+            says_something.then_some(ParsedFile {
                 rel_path,
                 parse,
                 source,

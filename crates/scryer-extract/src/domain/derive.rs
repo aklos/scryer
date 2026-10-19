@@ -591,6 +591,31 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
             }
         }
     }
+    // A barrel (mod.rs, lib.rs, index.ts, __init__.py) is reached when
+    // anything it re-exports is: tests import the module's items, which
+    // resolve past the barrel to the files defining them. What it re-exports
+    // is what it imports, and for a Rust module root also every file of the
+    // module it declares. Nested barrels settle over a few passes.
+    let barrels: Vec<&str> = file_nodes.keys().map(String::as_str).filter(|f| is_barrel(f)).collect();
+    loop {
+        let mut grew = false;
+        for &b in &barrels {
+            if reached.contains(b) {
+                continue;
+            }
+            let module_dir = b.rsplit_once('/').map(|(dir, _)| format!("{dir}/")).unwrap_or_default();
+            let rust_root = b.ends_with(".rs");
+            let reexported = edges_from.get(b).into_iter().flatten().any(|d| reached.contains(d))
+                || (rust_root && reached.iter().any(|r| *r != b && r.starts_with(&module_dir) && r.ends_with(".rs")));
+            if reexported {
+                reached.insert(b);
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
     let dark_files: Vec<String> =
         file_nodes.keys().filter(|f| !reached.contains(f.as_str())).cloned().collect();
     DerivedTree {
@@ -603,6 +628,15 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         style_violations: Vec::new(),
         layer_exempt,
     }
+}
+
+/// A file whose job is to gather and re-export a module: a Rust module or
+/// crate root, a TS/JS index, a Python package init.
+fn is_barrel(rel: &str) -> bool {
+    matches!(
+        file_name(rel),
+        "mod.rs" | "lib.rs" | "index.ts" | "index.tsx" | "index.js" | "index.jsx" | "index.mjs" | "__init__.py"
+    )
 }
 
 /// The product container a test project exercises: the one its name drops

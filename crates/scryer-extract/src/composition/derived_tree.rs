@@ -130,12 +130,12 @@ mod tests {
         let store = by_name("store");
         assert!(m.links.iter().any(|l| l.src == draft.id && l.dst == store.id), "links: {:?}", m.links);
 
-        // A unit claim anchors the file it exercises; files no test reaches
-        // by import are dark.
+        // A unit claim anchors the file it exercises; the crate root only
+        // declares modules a test reaches, so nothing is dark.
         let keeps = tree.claims.iter().find(|c| c.identifier == "keeps_draft").unwrap();
         assert_eq!(m.source_map[&keeps.id][0].pattern, "crates/core/src/draft.rs");
         assert_eq!(tree.file_nodes["crates/core/src/store/mod.rs"], store.id);
-        assert_eq!(tree.dark_files, vec!["crates/core/src/lib.rs".to_string()]);
+        assert!(tree.dark_files.is_empty(), "{:?}", tree.dark_files);
     }
 
     /// When a file inside a directory component has a module doc and claims
@@ -268,6 +268,38 @@ mod tests {
             "{:?}",
             tree.style_violations
         );
+    }
+
+    /// When a file is reached only by its colocated test's import, or is a
+    /// barrel whose re-exports are reached, it is not dark; a file nothing
+    /// reaches still is.
+    #[test]
+    fn colocated_tests_and_barrels_reach_code() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "web/package.json", "{\"name\": \"web\"}\n");
+        write(d, "web/src/shared/api.ts", "export type Fetcher = () => void;\nexport function fetchWith(f: Fetcher) { f(); }\n");
+        write(
+            d,
+            "web/src/shared/api.test.ts",
+            "import { fetchWith, type Fetcher } from \"./api\";\ndescribe(\"api\", () => {\n  it(\"Calls the fetcher\", () => { const f: Fetcher = () => {}; fetchWith(f); });\n});\n",
+        );
+        write(d, "web/src/shared/cache.ts", "export function keep() { return 1; }\n");
+        write(d, "web/src/shared/index.ts", "export { fetchWith, type Fetcher } from \"./api\";\nexport { keep } from \"./cache\";\n");
+        write(d, "Cargo.toml", "[package]\nname = \"core\"\nversion = \"0.1.0\"\n");
+        write(d, "src/lib.rs", "pub mod domain;\n");
+        write(d, "src/domain/mod.rs", "pub mod money;\n");
+        write(
+            d,
+            "src/domain/money.rs",
+            "pub fn add(a: u32, b: u32) -> u32 { a + b }\n#[cfg(test)]\nmod tests {\n    /// Adds two amounts\n    #[test]\n    fn adds() { assert_eq!(super::add(1, 2), 3); }\n}\n",
+        );
+        let tree = derived_tree_uncached(d).unwrap();
+        let dark: BTreeSet<&str> = tree.dark_files.iter().map(String::as_str).collect();
+        for lit in ["web/src/shared/api.ts", "web/src/shared/index.ts", "src/lib.rs", "src/domain/mod.rs"] {
+            assert!(!dark.contains(lit), "{lit} is reached: {dark:?}");
+        }
+        assert!(dark.contains("web/src/shared/cache.ts"), "{dark:?}");
     }
 
     /// When no file changed, the cached tree is returned; touching a file
