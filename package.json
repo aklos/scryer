@@ -12,7 +12,6 @@
     "demo:derive": "node demo/derive.mjs",
     "demo:studio": "remotion studio demo/index.ts --config=demo/remotion.config.ts",
     "demo:render": "remotion render demo/index.ts film demo/out/film.mp4 --codec=h264 --config=demo/remotion.config.ts",
-    "demo:poster": "remotion still demo/index.ts film demo/out/poster.png --frame=45 --config=demo/remotion.config.ts",
     "export-html": "node scripts/export-html.mjs",
     "tauri": "tauri"
   },
