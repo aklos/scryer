@@ -42,7 +42,7 @@ export function Cover({ f }: { f: number }) {
           width={span(7) - 40}
           height={760}
           fit={36}
-          film={{ title: 30, count: 22, label: 26, flag: 2, edge: 2 }}
+          film={{ title: 25, count: 20, label: 26, flag: 2, edge: 2 }}
         />
       </Figure>
       <Rule y={986} n={5} style={{ opacity: prog(f, s(1), s(0.6)) }} />
