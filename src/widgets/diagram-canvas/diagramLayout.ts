@@ -309,6 +309,19 @@ export async function buildDiagramScene(
       ghostIds.add(e.ghost);
       addEdge("implied:" + e.source + ">" + e.target, "×" + e.count, undefined, e.source, e.target);
     }
+    // A declared link to a person or an external (a container's `uses` in
+    // structure.toml) has no import behind it, so it ghosts that node here.
+    for (const link of model.links) {
+      const srcChild = liftToLevel(link.src);
+      const dstChild = liftToLevel(link.dst);
+      if ((srcChild !== null) === (dstChild !== null)) continue;
+      const outside = byId.get(srcChild !== null ? link.dst : link.src);
+      if (!outside || outside.parentId || (outside.kind !== "person" && !outside.external)) continue;
+      ghostIds.add(outside.id);
+      const source = srcChild ?? outside.id;
+      const target = dstChild ?? outside.id;
+      addEdge(link.id, link.label ?? "", link.method, source, target, link.kind);
+    }
   }
   const edges = [...edgeMap.values()];
 

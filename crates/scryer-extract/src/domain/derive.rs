@@ -3,7 +3,8 @@
 //! definitions, links the import graph between them. Claims are the lifted
 //! test descriptions, placed by test level: e2e under the system, integration
 //! under its container, unit under its component. Nothing here is authored
-//! except the little `structure.toml` adds.
+//! except the little `structure.toml` adds: the persons and externals, and
+//! the relationships declared between them and the system.
 
 use crate::domain::claims::FileLift;
 use crate::domain::context::{ContainerFacts, Edge, FileContext};
@@ -182,15 +183,23 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
     let system_name = s.system.name.clone().unwrap_or_else(|| input.project_name.to_string());
     let system_id = stable_id("node", "system", &mut taken);
     model.nodes.push(node(&system_id, Kind::System, &system_name, None));
+    // The context level's nodes by their structure.toml name, for the
+    // declared relationships between them.
+    let mut context_ids: HashMap<&str, String> = HashMap::new();
     for person in &s.system.persons {
         let id = stable_id("node", &format!("person:{person}"), &mut taken);
         model.nodes.push(node(&id, Kind::Person, person, None));
+        context_ids.insert(person, id);
     }
     for external in &s.system.externals {
         let id = stable_id("node", &format!("external:{external}"), &mut taken);
         let mut n = node(&id, Kind::System, external, None);
         n.external = Some(true);
         model.nodes.push(n);
+        context_ids.insert(external, id);
+    }
+    if let Some(name) = s.system.name.as_deref() {
+        context_ids.insert(name, system_id.clone());
     }
 
     let mut container_ids: HashMap<&str, String> = HashMap::new();
@@ -531,14 +540,32 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
             // its own modules is no dependency.
             if let (Some(ca), Some(cb)) = (ca, cb) {
                 if ca != cb {
-                    push_link(&mut model, &mut seen, &mut taken, ca, cb, Some(LinkKind::Depends));
+                    push_link(&mut model, &mut seen, &mut taken, ca, cb, Some(LinkKind::Depends), "");
                 }
             }
             continue;
         }
         let (sa, sb) = (&container_ids[da], &container_ids[db]);
-        push_link(&mut model, &mut seen, &mut taken, sa, sb, None);
-        push_link(&mut model, &mut seen, &mut taken, ca.unwrap_or(sa), cb.unwrap_or(sb), Some(LinkKind::Depends));
+        push_link(&mut model, &mut seen, &mut taken, sa, sb, None, "");
+        push_link(&mut model, &mut seen, &mut taken, ca.unwrap_or(sa), cb.unwrap_or(sb), Some(LinkKind::Depends), "");
+    }
+
+    // Declared links: the context relationships structure.toml gives, and
+    // the externals a container says it is the one to talk to. Facts the
+    // config states, not read off imports; a container's use of an external
+    // is the system's too, with its label, unless the config relates the two
+    // itself.
+    for (src, dst, label) in s.relationships() {
+        let (Some(a), Some(b)) = (context_ids.get(src), context_ids.get(dst)) else { continue };
+        push_link(&mut model, &mut seen, &mut taken, a, b, None, label.unwrap_or_default());
+    }
+    for c in &containers_sorted {
+        let Some(config) = s.container(&c.name, &c.dir) else { continue };
+        for u in &config.uses {
+            let Some(external) = context_ids.get(u.to()) else { continue };
+            push_link(&mut model, &mut seen, &mut taken, &container_ids[c.dir.as_str()], external, None, u.label().unwrap_or_default());
+            push_link(&mut model, &mut seen, &mut taken, &system_id, external, None, u.label().unwrap_or_default());
+        }
     }
 
     scryer_core::concerns::register_concerns(&mut model);
@@ -770,6 +797,7 @@ fn push_link(
     src: &str,
     dst: &str,
     kind: Option<LinkKind>,
+    label: &str,
 ) {
     if !seen.insert((src.to_string(), dst.to_string())) {
         return;
@@ -779,7 +807,7 @@ fn push_link(
         id,
         src: src.to_string(),
         dst: dst.to_string(),
-        label: String::new(),
+        label: label.to_string(),
         method: None,
         kind,
     });
