@@ -335,9 +335,9 @@ export function Style({ f }: { f: number }) {
           t={step.t}
           width={W_HEX}
           height={824}
-          fit={40}
-          extra={30}
-          clipLeft={-270}
+          fit={28}
+          extra={10}
+          clipLeft={-232}
           film={FILM_TEXT}
           hideImplied
           selected={f >= FIX + s(3.2) ? MEMORY : undefined}

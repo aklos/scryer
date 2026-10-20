@@ -37,7 +37,8 @@ const LENS_ROWS: { text: string; tagged: boolean }[] = [
 ];
 
 export function Concern({ f }: { f: number }) {
-  const lens = prog(f, s(2.3), s(0.5));
+  // The lens is on persistence; the claims it does not hold dim under it.
+  const lens = prog(f, s(1.2), s(0.6));
   const rows: Row[] = LENS_ROWS.filter((r) => fixture.tree.claims.some((c) => c.description === r.text)).map((r, i) => ({
     claim: claim(r.text),
     state: "proven",
@@ -57,12 +58,9 @@ export function Concern({ f }: { f: number }) {
             <span>Concern lens</span>
             <span
               className="rounded border px-1.5 py-0.5 font-mono"
-              style={{
-                borderColor: lens > 0.5 ? "var(--accent)" : "var(--border)",
-                color: lens > 0.5 ? "var(--accent)" : "var(--text-tertiary)",
-              }}
+              style={{ borderColor: "var(--accent)", color: "var(--accent)" }}
             >
-              {lens > 0.5 ? "persistence · 10" : "none"}
+              persistence · 10
             </span>
           </div>
           <ClaimRows host={LEDGER} rows={rows} />

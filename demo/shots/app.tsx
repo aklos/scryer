@@ -28,12 +28,16 @@ export function claim(text: string): DerivedClaim {
   return c;
 }
 
-/** In aperture-pay the Payments DB is an external system beside the banks,
- *  so the context map sets the three externals in one column. */
+/** The context map's placements: the people, the platform, and its three
+ *  external systems (in aperture-pay the Payments DB is one, beside the
+ *  banks) in three close columns, so the map fills its figure. */
 const FILM_PLACEMENTS: Record<string, { x: number; y: number }> = {
-  "Acquiring Bank": { x: 940, y: 40 },
-  "Card Networks": { x: 940, y: 290 },
-  "Payments DB": { x: 940, y: 540 },
+  Cardholder: { x: 100, y: 110 },
+  Merchant: { x: 100, y: 400 },
+  "Aperture Pay": { x: 450, y: 255 },
+  "Acquiring Bank": { x: 800, y: 20 },
+  "Card Networks": { x: 800, y: 255 },
+  "Payments DB": { x: 800, y: 490 },
 };
 
 /** The base's model with the story's placements (by node name) pinned on
