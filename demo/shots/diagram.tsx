@@ -78,6 +78,7 @@ export function Diagram({
   hideImplied = true,
   selected,
   tint,
+  place,
   style,
 }: {
   scenes: SceneSpec[];
@@ -101,6 +102,9 @@ export function Diagram({
   hideImplied?: boolean;
   /** A card the shot is about, drawn selected. */
   selected?: string;
+  /** Where to set cards by name, over the scene's own placement: reference
+   *  cards (the app never pins those) included. Layout only. */
+  place?: Record<string, { x: number; y: number }>;
   /** A ring whose label takes a colour (a layer name), and the colour. */
   tint?: { layer: string; color: string };
   style?: CSSProperties;
@@ -108,7 +112,9 @@ export function Diagram({
   const [scenes, setScenes] = useState<DiagramScene[] | null>(null);
   const [handle] = useState(() => delayRender("diagram scenes"));
   useEffect(() => {
-    void Promise.all(specs.map((s) => buildDiagramScene(s.model, s.focusId, reportOf(s.violations ?? []), new Set()))).then(setScenes);
+    void Promise.all(specs.map((s) => buildDiagramScene(s.model, s.focusId, reportOf(s.violations ?? []), new Set()))).then((built) =>
+      setScenes(built.map((sc) => (place ? { ...sc, nodes: sc.nodes.map((n) => (place[n.name] ? { ...n, ...place[n.name] } : n)) } : sc))),
+    );
     // The specs are fixed for a beat; build once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

@@ -28,6 +28,13 @@ function ledgerModel(memory?: "domain" | "infrastructure"): ScryModel {
   return { ...placedModel, nodes };
 }
 
+/** The containers level, the external systems it uses (drawn as reference
+ *  cards) set clear of it: the bank beside Ledger, the DB beneath. */
+const CONTAINER_PLACES: Record<string, { x: number; y: number }> = {
+  "Acquiring Bank": { x: 80, y: 330 },
+  "Payments DB": { x: 420, y: 580 },
+};
+
 const FILM_TEXT = { title: 22, count: 18, label: 26, flag: 2.2, edge: 3 };
 
 // --- 5. The model you can read ------------------------------------------------------
@@ -91,6 +98,7 @@ export function Model({ f }: { f: number }) {
                 height={FIG.h}
                 fit={i === 2 ? 50 : 80}
                 extra={i === 2 ? 40 : 0}
+                place={i === 1 ? CONTAINER_PLACES : undefined}
                 film={FILM_TEXT}
                 selected={pick(i)}
               />
