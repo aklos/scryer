@@ -20,7 +20,9 @@ import { enableTailwind } from "@remotion/tailwind-v4";
 
 Config.setVideoImageFormat("jpeg");
 Config.setOverwriteOutput(true);
-Config.setConcurrency(null);
+// Each render tab mounts the whole app bundle; eight of them (the default,
+// half the cores) ran a 27 GB machine out of memory. Three is plenty.
+Config.setConcurrency(3);
 
 const browser = process.env.REMOTION_BROWSER;
 if (browser) {
