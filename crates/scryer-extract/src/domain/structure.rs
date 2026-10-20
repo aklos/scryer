@@ -1,7 +1,8 @@
 //! `.scryer/structure.toml`: the little the code cannot say about its own
-//! shape — the system's name, its persons and externals, which test globs are
-//! e2e or integration, and each container's display name, style and layers.
-//! Everything in it is optional; an absent file means sensible defaults.
+//! shape — the system's name, its persons and externals and how they relate,
+//! which test globs are e2e or integration, and each container's display
+//! name, style, layers and the externals it talks to. Everything in it is
+//! optional; an absent file means sensible defaults.
 
 use glob::{MatchOptions, Pattern};
 use serde::Deserialize;
@@ -22,6 +23,41 @@ pub struct Structure {
     /// Keyed by container directory or name (crate/package name).
     #[serde(default)]
     pub containers: BTreeMap<String, ContainerConfig>,
+    /// Context-level relationships, keyed by the source's name: the system,
+    /// a person or an external. Declared, not read off the code.
+    #[serde(default)]
+    pub relationships: BTreeMap<String, Vec<Relation>>,
+}
+
+/// One relationship's target: a bare name, or `{ to, label }`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum Relation {
+    To(String),
+    Labelled(LabelledRelation),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LabelledRelation {
+    pub to: String,
+    pub label: Option<String>,
+}
+
+impl Relation {
+    pub fn to(&self) -> &str {
+        match self {
+            Relation::To(to) => to,
+            Relation::Labelled(r) => &r.to,
+        }
+    }
+
+    pub fn label(&self) -> Option<&str> {
+        match self {
+            Relation::To(_) => None,
+            Relation::Labelled(r) => r.label.as_deref(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -51,6 +87,9 @@ pub struct ContainerConfig {
     pub style: Option<String>,
     #[serde(default)]
     pub layers: Vec<String>,
+    /// The externals this container is the one to talk to.
+    #[serde(default)]
+    pub uses: Vec<Relation>,
 }
 
 const DEFAULT_E2E: &[&str] = &["**/e2e/**", "**/*.e2e.*", "**/*.e2e-spec.*"];
@@ -64,7 +103,53 @@ const GLOB_OPTS: MatchOptions = MatchOptions {
 
 impl Structure {
     pub fn parse(text: &str) -> Result<Self, String> {
-        toml::from_str(text).map_err(|e| format!("structure.toml: {e}"))
+        let s: Structure = toml::from_str(text).map_err(|e| format!("structure.toml: {e}"))?;
+        s.check_names()?;
+        Ok(s)
+    }
+
+    /// Every name a relationship or a `uses` gives must be declared under
+    /// `[system]`, the way a misspelt key is an error.
+    fn check_names(&self) -> Result<(), String> {
+        let known = |name: &str| {
+            self.system.name.as_deref() == Some(name)
+                || self.system.persons.iter().any(|p| p == name)
+                || self.system.externals.iter().any(|e| e == name)
+        };
+        let unknown = |name: &str| {
+            format!(
+                "structure.toml: [relationships] names \"{name}\", which is not the system's name, a person or an external under [system]"
+            )
+        };
+        for (src, targets) in &self.relationships {
+            if !known(src) {
+                return Err(unknown(src));
+            }
+            for t in targets {
+                if !known(t.to()) {
+                    return Err(unknown(t.to()));
+                }
+                if t.to() == src {
+                    return Err(format!("structure.toml: [relationships] relates \"{src}\" to itself"));
+                }
+            }
+        }
+        for (key, c) in &self.containers {
+            if let Some(t) = c.uses.iter().find(|t| !self.system.externals.iter().any(|e| e == t.to())) {
+                return Err(format!(
+                    "structure.toml: [containers.{key}] uses \"{}\", which is not an external under [system]",
+                    t.to()
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// The declared context relationships as (source, target, label).
+    pub fn relationships(&self) -> impl Iterator<Item = (&str, &str, Option<&str>)> {
+        self.relationships
+            .iter()
+            .flat_map(|(src, targets)| targets.iter().map(move |t| (src.as_str(), t.to(), t.label())))
     }
 
     /// The configured level a test file sits at, if a glob places it.
@@ -213,5 +298,57 @@ layers = ["domain", "application", "composition", "infrastructure"]
     #[test]
     fn rejects_unknown_keys() {
         assert!(Structure::parse("[system]\nnmae = \"x\"\n").is_err());
+    }
+
+    const SYSTEM: &str = "[system]\nname = \"Pay\"\npersons = [\"merchant\", \"cardholder\"]\nexternals = [\"bank\", \"db\"]\n";
+
+    /// When relationships name the system, persons and externals, bare and
+    /// labelled targets both parse, in declaration order per source.
+    #[test]
+    fn parses_relationships() {
+        let s = Structure::parse(&format!(
+            "{SYSTEM}\n[relationships]\ncardholder = [\"Pay\"]\nmerchant = [{{ to = \"Pay\", label = \"integrates\" }}]\n\"Pay\" = [\"bank\", \"db\"]\n"
+        ))
+        .unwrap();
+        let rels: Vec<_> = s.relationships().collect();
+        assert_eq!(
+            rels,
+            vec![
+                ("Pay", "bank", None),
+                ("Pay", "db", None),
+                ("cardholder", "Pay", None),
+                ("merchant", "Pay", Some("integrates")),
+            ]
+        );
+    }
+
+    /// When a relationship or a container's uses names something not declared
+    /// under [system], or a target has a misspelt key, parsing fails.
+    #[test]
+    fn rejects_unknown_relationship_names() {
+        for bad in [
+            "[relationships]\nmerchant = [\"Payy\"]\n",
+            "[relationships]\nshopper = [\"Pay\"]\n",
+            "[relationships]\nmerchant = [{ too = \"Pay\" }]\n",
+            "[relationships]\nbank = [\"bank\"]\n",
+            "[containers.ledger]\nuses = [\"merchant\"]\n",
+        ] {
+            let err = Structure::parse(&format!("{SYSTEM}\n{bad}")).err();
+            assert!(err.is_some(), "accepted: {bad}");
+        }
+        let err = Structure::parse(&format!("{SYSTEM}\n[relationships]\nmerchant = [\"Payy\"]\n")).unwrap_err();
+        assert!(err.contains("\"Payy\""), "{err}");
+    }
+
+    /// When a container says which externals it uses, they parse with their
+    /// labels.
+    #[test]
+    fn parses_a_containers_uses() {
+        let s = Structure::parse(&format!(
+            "{SYSTEM}\n[containers.ledger]\nuses = [\"db\", {{ to = \"bank\", label = \"settles with\" }}]\n"
+        ))
+        .unwrap();
+        let uses = &s.container("ledger", "crates/ledger").unwrap().uses;
+        assert_eq!(uses.iter().map(|u| (u.to(), u.label())).collect::<Vec<_>>(), vec![("db", None), ("bank", Some("settles with"))]);
     }
 }

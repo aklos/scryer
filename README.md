@@ -65,13 +65,18 @@ Download the latest release for your platform from the [releases page](https://g
 
 1. Open your project in the app. Scryer derives the tree from your packaging and tests on the spot; a project with no behaviour tests shows its containers and components with nothing proven yet.
 2. Flip **Agent integration** on in settings (or run `scryer-mcp setup on`). This writes the MCP entry and session hooks for whichever of Claude Code, Codex and Copilot CLI you have, and nothing else.
-3. Add `.scryer/structure.toml` to name the system, its people and external systems, which directories hold e2e and integration tests, and each container's style:
+3. Add `.scryer/structure.toml` to name the system, its people and external systems and how they relate, which directories hold e2e and integration tests, and each container's style:
 
    ```toml
    [system]
    name = "aperture-pay"
    persons = ["cardholder", "merchant"]
-   externals = ["acquiring bank", "card networks"]
+   externals = ["acquiring bank", "card networks", "payments-db"]
+
+   [relationships]
+   cardholder = ["aperture-pay"]
+   merchant = [{ to = "aperture-pay", label = "integrates" }]
+   "aperture-pay" = ["acquiring bank", "card networks"]
 
    [levels]
    e2e = ["tests/e2e/**"]
@@ -79,6 +84,7 @@ Download the latest release for your platform from the [releases page](https://g
 
    [containers.ledger]
    style = "hexagonal"
+   uses = ["payments-db"]
    ```
 
 4. Give your agent a task. It orients, writes the claims it will satisfy as todo tests, builds, runs the radius, and ingests the report. Open scryer's landing page to see what changed since you last looked: newly proven, still planned, newly stale, and which components more than one session touched.

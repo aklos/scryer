@@ -270,6 +270,37 @@ mod tests {
         );
     }
 
+    /// When structure.toml relates persons, the system and externals, and a
+    /// container says which external it uses, each becomes a link with its
+    /// label, the container's use lifted to the system too; none needs an
+    /// import behind it, and none is a style finding.
+    #[test]
+    fn declared_relationships_become_context_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n");
+        write(d, "crates/ledger/Cargo.toml", "[package]\nname = \"ledger\"\nversion = \"0.1.0\"\n");
+        write(d, "crates/ledger/src/lib.rs", "pub mod domain;\n");
+        write(d, "crates/ledger/src/domain/mod.rs", "pub fn post() {}\n");
+        write(
+            d,
+            ".scryer/structure.toml",
+            "[system]\nname = \"Pay\"\npersons = [\"merchant\"]\nexternals = [\"bank\", \"db\"]\n\n\
+             [relationships]\nmerchant = [{ to = \"Pay\", label = \"integrates\" }]\n\"Pay\" = [\"bank\"]\n\n\
+             [containers.ledger]\nstyle = \"library\"\nuses = [{ to = \"db\", label = \"stores entries in\" }]\n",
+        );
+        let tree = derived_tree_uncached(d).unwrap();
+        let m = &tree.committed;
+        let id = |name: &str| m.nodes.iter().find(|n| n.name == name).unwrap().id.clone();
+        let link = |a: &str, b: &str| m.links.iter().find(|l| l.src == id(a) && l.dst == id(b)).map(|l| l.label.as_str());
+        assert_eq!(link("merchant", "Pay"), Some("integrates"));
+        assert_eq!(link("Pay", "bank"), Some(""));
+        assert_eq!(link("ledger", "db"), Some("stores entries in"));
+        assert_eq!(link("Pay", "db"), Some("stores entries in"));
+        assert_eq!(link("Pay", "merchant"), None);
+        assert!(tree.style_violations.is_empty(), "{:?}", tree.style_violations);
+    }
+
     /// When a file is reached only by its colocated test's import, or is a
     /// barrel whose re-exports are reached, it is not dark; a file nothing
     /// reaches still is.
