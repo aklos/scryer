@@ -15,7 +15,7 @@
 
 use crate::lang;
 use scryer_core::scan;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use crate::domain::context::Container;
 use std::path::Path;
 
@@ -80,12 +80,23 @@ pub fn discover_containers_from_files(
 ) -> Vec<Container> {
     // Group every build/deploy signal by its directory.
     let mut by_dir: BTreeMap<String, Vec<Signal>> = BTreeMap::new();
+    // Every file, project-relative, and the directories holding an app entry.
+    let mut rels: BTreeSet<String> = BTreeSet::new();
+    let mut app_dirs: BTreeSet<String> = BTreeSet::new();
 
     for path in files {
         let Ok(rel) = path.strip_prefix(project) else {
             continue;
         };
+        let rel_text = rel.to_string_lossy().replace('\\', "/");
         let filename = rel.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if is_app_entry(filename) {
+            let dir = rel_text.rsplit_once('/').map_or("", |(d, _)| d);
+            if !dir.is_empty() && !scan::is_dot_path(dir) && !in_test_dir(dir) {
+                app_dirs.insert(dir.to_string());
+            }
+        }
+        rels.insert(rel_text);
         let deploy = match manifest_role(filename) {
             Some(role) => role,
             None => continue,
@@ -173,9 +184,100 @@ pub fn discover_containers_from_files(
             go_module: None,
             clj_paths: Vec::new(),
             packages: Vec::new(),
+            entries: Vec::new(),
         });
     }
+
+    // A directory with an app entry of its own (an `index.html`, a bundler
+    // config) inside a package is an app of its own, not a part of the
+    // package — when it holds source code.
+    for dir in app_dirs {
+        let prefix = format!("{dir}/");
+        if containers.iter().any(|c| c.dir == dir)
+            || !rels.iter().any(|r| r.starts_with(&prefix) && scan::is_product_code(r))
+        {
+            continue;
+        }
+        containers.push(Container {
+            name: basename(Path::new(&dir)).unwrap_or_else(|| dir.clone()),
+            dir,
+            technology: None,
+            dep_dirs: Vec::new(),
+            go_module: None,
+            clj_paths: Vec::new(),
+            packages: Vec::new(),
+            entries: Vec::new(),
+        });
+    }
+    containers.sort_by(|a, b| a.dir.cmp(&b.dir));
+
+    // The module scripts a unit's `index.html` loads are its entries.
+    for c in &mut containers {
+        let html = if c.dir.is_empty() { "index.html".to_string() } else { format!("{}/index.html", c.dir) };
+        if !rels.contains(&html) {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(project.join(&html)) else { continue };
+        for src in html_module_scripts(&text) {
+            if let Some(entry) = resolve_script(&c.dir, &src, &rels) {
+                c.entries.push(entry);
+            }
+        }
+        c.entries.sort();
+        c.entries.dedup();
+    }
     containers
+}
+
+/// A file that makes its directory an app: a page (`index.html`) or a
+/// bundler's config (`vite.config.ts`, `webpack.config.js`,
+/// `remotion.config.ts`, `next.config.mjs`).
+fn is_app_entry(filename: &str) -> bool {
+    filename == "index.html"
+        || ["vite", "webpack", "remotion", "next"].iter().any(|tool| {
+            filename
+                .strip_prefix(tool)
+                .and_then(|r| r.strip_prefix(".config."))
+                .is_some_and(|ext| matches!(ext, "js" | "ts" | "mjs" | "cjs" | "mts" | "cts"))
+        })
+}
+
+/// A directory of test code or fixtures, whose apps are test material.
+fn in_test_dir(dir: &str) -> bool {
+    dir.split('/').any(|d| matches!(d, "tests" | "test" | "__tests__" | "e2e" | "fixtures" | "__fixtures__" | "testdata"))
+}
+
+/// The `src` of every `<script type="module" src="…">` in a page.
+fn html_module_scripts(html: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for tag in html.split("<script").skip(1) {
+        let Some(head) = tag.split('>').next() else { continue };
+        if !head.contains("module") {
+            continue;
+        }
+        for quote in ['"', '\''] {
+            if let Some(rest) = head.split(&format!("src={quote}")).nth(1) {
+                if let Some(src) = rest.split(quote).next() {
+                    out.push(src.to_string());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The file a page's script `src` names: relative to the page, or — for a
+/// root-absolute `/…` — to the page's directory or the project root,
+/// whichever holds it.
+fn resolve_script(dir: &str, src: &str, rels: &BTreeSet<String>) -> Option<String> {
+    if src.contains("://") {
+        return None;
+    }
+    let candidates = match src.strip_prefix('/') {
+        Some(abs) => vec![resolve_rel(dir, abs), resolve_rel("", abs)],
+        None => vec![resolve_rel(dir, src)],
+    };
+    candidates.into_iter().flatten().find(|c| rels.contains(c))
 }
 
 /// `Some(true)` = deploy manifest, `Some(false)` = code manifest, `None` = not a
@@ -247,6 +349,7 @@ fn scan_dir(project: &Path, dir: &str, signals: &[Signal]) -> DirScan {
     let mut go_module: Option<String> = None;
     let mut clj_paths: Vec<String> = Vec::new();
     let mut packages: Vec<String> = Vec::new();
+    let mut entries: Vec<String> = Vec::new();
     // A real unit unless the only thing we saw is a Cargo workspace root.
     let mut is_unit = false;
 
@@ -262,6 +365,7 @@ fn scan_dir(project: &Path, dir: &str, signals: &[Signal]) -> DirScan {
                 CargoManifest::Package {
                     pkg_name,
                     names,
+                    targets,
                     deps,
                     ws_deps,
                     ws_table,
@@ -270,6 +374,7 @@ fn scan_dir(project: &Path, dir: &str, signals: &[Signal]) -> DirScan {
                     name = name.or(pkg_name);
                     dep_dirs.extend(deps);
                     packages.extend(names);
+                    entries.extend(targets);
                     scan.cargo_ws_deps.extend(ws_deps);
                     scan.cargo_ws_table.extend(ws_table);
                 }
@@ -284,6 +389,7 @@ fn scan_dir(project: &Path, dir: &str, signals: &[Signal]) -> DirScan {
                 name = name.or(npm.name);
                 dep_dirs.extend(npm.path_deps);
                 packages.extend(npm.names);
+                entries.extend(npm.entries);
                 scan.npm_name_deps.extend(npm.name_deps);
             }
             "pyproject.toml" => {
@@ -353,6 +459,8 @@ fn scan_dir(project: &Path, dir: &str, signals: &[Signal]) -> DirScan {
     clj_paths.dedup();
     packages.sort();
     packages.dedup();
+    entries.sort();
+    entries.dedup();
     scan.container = Some(Container {
         dir: dir.to_string(),
         name,
@@ -361,6 +469,7 @@ fn scan_dir(project: &Path, dir: &str, signals: &[Signal]) -> DirScan {
         go_module,
         clj_paths,
         packages,
+        entries,
     });
     scan
 }
@@ -437,6 +546,9 @@ enum CargoManifest {
         pkg_name: Option<String>,
         /// Every dependency's name, from every dependency table.
         names: Vec<String>,
+        /// The `path` of each declared `[lib]`, `[[bin]]` and `[[example]]`
+        /// target, resolved.
+        targets: Vec<String>,
         /// Resolved in-repo path deps.
         deps: Vec<String>,
         /// `{ workspace = true }` dep names, resolved in pass 2 through the
@@ -525,9 +637,24 @@ fn parse_cargo(text: &str, manifest_dir: &str) -> CargoManifest {
             }
         }
     }
+    let mut targets: Vec<String> = Vec::new();
+    let mut target_path = |t: &toml::Value| {
+        if let Some(path) = t.get("path").and_then(|p| p.as_str()).and_then(|p| resolve_rel(manifest_dir, p)) {
+            targets.push(path);
+        }
+    };
+    if let Some(lib) = value.get("lib") {
+        target_path(lib);
+    }
+    for kind in ["bin", "example"] {
+        for t in value.get(kind).and_then(|b| b.as_array()).into_iter().flatten() {
+            target_path(t);
+        }
+    }
     CargoManifest::Package {
         pkg_name,
         names,
+        targets,
         deps,
         ws_deps,
         ws_table,
@@ -564,6 +691,8 @@ struct NpmManifest {
     name_deps: Vec<String>,
     /// Every dependency's name.
     names: Vec<String>,
+    /// `main`, `module`, `exports` and `bin` targets, resolved.
+    entries: Vec<String>,
 }
 
 fn parse_package_json(text: &str, manifest_dir: &str) -> NpmManifest {
@@ -577,6 +706,22 @@ fn parse_package_json(text: &str, manifest_dir: &str) -> NpmManifest {
             .map(|s| s.to_string()),
         ..Default::default()
     };
+    // Every path an entry field names; `exports` and `bin` may nest maps.
+    fn paths(v: &serde_json::Value, out: &mut Vec<String>) {
+        match v {
+            serde_json::Value::String(s) => out.push(s.clone()),
+            serde_json::Value::Object(m) => m.values().for_each(|v| paths(v, out)),
+            serde_json::Value::Array(a) => a.iter().for_each(|v| paths(v, out)),
+            _ => {}
+        }
+    }
+    let mut named = Vec::new();
+    for field in ["main", "module", "exports", "bin"] {
+        if let Some(v) = value.get(field) {
+            paths(v, &mut named);
+        }
+    }
+    out.entries = named.iter().filter(|p| !p.contains('*')).filter_map(|p| resolve_rel(manifest_dir, p)).collect();
 
     for table in ["dependencies", "devDependencies"] {
         let Some(obj) = value.get(table).and_then(|t| t.as_object()) else {

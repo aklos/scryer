@@ -407,6 +407,7 @@ mod tests {
                 detail: "x".into(),
             }],
             layer_exempt: Vec::new(),
+            tooling: Default::default(),
         }
     }
 

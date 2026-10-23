@@ -6,7 +6,8 @@
 
 use glob::{MatchOptions, Pattern};
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use crate::domain::context::Container;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub use scryer_core::derived_tree::ClaimLevel;
 
@@ -189,6 +190,33 @@ impl Structure {
     /// Whether the test radius includes e2e tests (`radius = "all"`).
     pub fn radius_includes_e2e(&self) -> bool {
         self.radius.as_deref() == Some("all")
+    }
+
+    /// Make a container of every directory `[containers."<dir>"]` declares
+    /// that no manifest made one: a key naming no discovered container's
+    /// directory or package, under which the project has files. Named after
+    /// the directory; the section's `name` still applies.
+    pub fn promote_declared_dirs(&self, containers: &mut Vec<Container>, files: &BTreeSet<String>) {
+        for key in self.containers.keys() {
+            let prefix = format!("{key}/");
+            if key.is_empty()
+                || containers.iter().any(|c| &c.dir == key || &c.name == key)
+                || !files.iter().any(|f| f.starts_with(&prefix))
+            {
+                continue;
+            }
+            containers.push(Container {
+                dir: key.clone(),
+                name: key.rsplit('/').next().unwrap_or(key).to_string(),
+                technology: None,
+                dep_dirs: Vec::new(),
+                go_module: None,
+                clj_paths: Vec::new(),
+                packages: Vec::new(),
+                entries: Vec::new(),
+            });
+        }
+        containers.sort_by(|a, b| a.dir.cmp(&b.dir));
     }
 
     /// The config for a container, looked up by directory, then by name

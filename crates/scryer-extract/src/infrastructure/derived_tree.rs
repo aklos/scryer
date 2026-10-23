@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 /// Bumped whenever derivation changes, so a cache from an older binary is
 /// never mistaken for current.
-const DERIVE_VERSION: u32 = 10;
+const DERIVE_VERSION: u32 = 11;
 
 thread_local! {
     static PARSER: RefCell<tree_sitter::Parser> = RefCell::new(tree_sitter::Parser::new());
@@ -94,7 +94,13 @@ pub fn derived_tree_uncached(project: &Path) -> Result<DerivedTree, String> {
 
 fn derive_uncached(project: &Path, files: &[PathBuf], print: u64) -> Result<DerivedTree, String> {
     let structure = read_structure(project)?;
-    let containers = manifest::discover_containers_from_files(project, files);
+    let all_files: BTreeSet<String> = files
+        .iter()
+        .filter_map(|p| p.strip_prefix(project).ok())
+        .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+        .collect();
+    let mut containers = manifest::discover_containers_from_files(project, files);
+    structure.promote_declared_dirs(&mut containers, &all_files);
     let ts_aliases = tsconfig::discover_ts_aliases(project, files);
     let (parsed, _) = walk::parse_sources(project, files);
     let project_name = project
@@ -102,11 +108,6 @@ fn derive_uncached(project: &Path, files: &[PathBuf], print: u64) -> Result<Deri
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "project".to_string());
     let ctx = context::build_context(&project_name, &containers, &parsed, &ts_aliases);
-    let all_files: BTreeSet<String> = files
-        .iter()
-        .filter_map(|p| p.strip_prefix(project).ok())
-        .map(|rel| rel.to_string_lossy().replace('\\', "/"))
-        .collect();
     let lifts: BTreeMap<String, FileLift> = all_files
         .par_iter()
         .filter(|rel| scan::is_product_code(rel))

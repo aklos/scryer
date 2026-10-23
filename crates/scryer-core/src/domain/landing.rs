@@ -326,6 +326,7 @@ mod tests {
             dark_files: vec!["src/a.rs".into()],
             style_violations: Vec::new(),
             layer_exempt: Vec::new(),
+            tooling: Default::default(),
         };
         let status = DerivedStatus {
             claims: vec![
@@ -385,6 +386,7 @@ mod tests {
             dark_files: Vec::new(),
             style_violations: Vec::new(),
             layer_exempt: Vec::new(),
+            tooling: Default::default(),
         };
         let l = landing(&sessions, &tree, &DerivedStatus::default(), 0);
         assert_eq!(l.sessions[0].title, "");

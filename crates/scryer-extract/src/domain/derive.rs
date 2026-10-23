@@ -117,6 +117,16 @@ fn is_test_container(c: &ContainerFacts) -> bool {
     })
 }
 
+/// Where a file sits inside its container: `crates/x/src/lib.rs` in
+/// `crates/x` is `src/lib.rs`.
+fn inner_of<'p>(container_dir: &str, rel: &'p str) -> &'p str {
+    if container_dir.is_empty() {
+        rel
+    } else {
+        rel.strip_prefix(container_dir).and_then(|r| r.strip_prefix('/')).unwrap_or(rel)
+    }
+}
+
 /// Where a file sits inside its container, the source root stripped:
 /// `crates/x/src/domain/model.rs` reads (`crates/x/src`, `domain/model.rs`).
 fn inner_path<'p>(container_dir: &str, rel: &'p str) -> (&'p str, &'p str) {
@@ -282,18 +292,76 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
             })
     };
 
-    // Components: every product file's module or top directory.
+    let mut edges_from: HashMap<&str, Vec<&str>> = HashMap::new();
+    for e in input.file_edges.iter().filter(|e| !e.guessed) {
+        edges_from.entry(e.src.as_str()).or_default().push(e.dst.as_str());
+    }
+
+    // A package's components are the directories its entry points reach
+    // through the import graph: the entries its manifest or page names, and
+    // Cargo's conventional targets. An entry's top directory in the package
+    // is a source root, all of it reached (a Rust module tree is declared,
+    // not imported). A package with no entry found keeps every directory.
+    let mut product_paths: HashMap<&str, HashSet<String>> = HashMap::new();
+    for c in &containers_sorted {
+        let owned = |f: &str| owner(f).is_some_and(|o| o.dir == c.dir);
+        let within = |f: &'_ str| -> String { inner_of(&c.dir, f).to_string() };
+        let cargo_target = |f: &str| {
+            let inner = within(f);
+            matches!(inner.as_str(), "src/lib.rs" | "src/main.rs")
+                || inner.starts_with("src/bin/")
+                || inner.starts_with("examples/")
+        };
+        let seeds: BTreeSet<&str> = input
+            .lifts
+            .keys()
+            .map(String::as_str)
+            .filter(|f| owned(f) && !is_test_file(f))
+            .filter(|f| {
+                c.entries.iter().any(|e| e == f) || (cargo_dirs.contains(c.dir.as_str()) && f.ends_with(".rs") && cargo_target(f))
+            })
+            .collect();
+        if seeds.is_empty() {
+            continue;
+        }
+        let roots: BTreeSet<String> =
+            seeds.iter().filter_map(|f| within(f).split_once('/').map(|(top, _)| format!("{top}/"))).collect();
+        let mut reached: HashSet<&str> = input
+            .lifts
+            .keys()
+            .map(String::as_str)
+            .filter(|f| owned(f) && roots.iter().any(|r| within(f).starts_with(r.as_str())))
+            .chain(seeds.iter().copied())
+            .collect();
+        let mut queue: Vec<&str> = reached.iter().copied().collect();
+        while let Some(f) = queue.pop() {
+            for dst in edges_from.get(f).into_iter().flatten() {
+                if reached.insert(dst) {
+                    queue.push(dst);
+                }
+            }
+        }
+        let paths = reached.iter().filter(|f| owned(f)).map(|f| component_of(&c.dir, f).0).collect();
+        product_paths.insert(c.dir.as_str(), paths);
+    }
+
+    // Components: every product file's module or top directory. What no
+    // entry reaches, and a tool's config, is the container's tooling.
     let mut components: BTreeMap<String, Component> = BTreeMap::new();
     let mut file_component: HashMap<&str, String> = HashMap::new();
+    let mut tooling: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for rel in input.lifts.keys() {
         if is_test_file(rel) || crate_root(rel) {
             continue;
         }
         let Some(c) = owner(rel) else { continue };
-        if !container_ids.contains_key(c.dir.as_str()) || is_tool_config(&c.dir, rel) {
+        let Some(container_id) = container_ids.get(c.dir.as_str()) else { continue };
+        let (path, name) = component_of(&c.dir, rel);
+        let unreached = product_paths.get(c.dir.as_str()).is_some_and(|paths| !paths.contains(&path));
+        if unreached || is_tool_config(&c.dir, rel) {
+            tooling.entry(container_id.clone()).or_default().push(rel.clone());
             continue;
         }
-        let (path, name) = component_of(&c.dir, rel);
         let comp = components.entry(path.clone()).or_insert_with(|| Component {
             id: String::new(),
             name,
@@ -308,10 +376,6 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
     }
 
     // Where each test file's claims go, by level.
-    let mut edges_from: HashMap<&str, Vec<&str>> = HashMap::new();
-    for e in input.file_edges.iter().filter(|e| !e.guessed) {
-        edges_from.entry(e.src.as_str()).or_default().push(e.dst.as_str());
-    }
     let mut homes: Vec<(&String, &FileLift, ClaimLevel, Home)> = Vec::new();
     for (rel, lift) in input.lifts {
         if lift.tests.is_empty() {
@@ -772,6 +836,7 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         dark_files,
         style_violations: Vec::new(),
         layer_exempt,
+        tooling,
     }
 }
 

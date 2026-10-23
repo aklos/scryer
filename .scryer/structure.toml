@@ -17,6 +17,8 @@ agent = [{ to = "MCP Server", label = "orients, reads the tree and reports test 
 "claude code" = [{ to = "MCP Server", label = "launches as its MCP server and session hook" }]
 codex = [{ to = "MCP Server", label = "launches as its MCP server and session hook" }]
 "copilot cli" = [{ to = "MCP Server", label = "launches as its MCP server and session hook" }]
+"Desktop App Host" = [{ to = "Preview Server", label = "runs with node as its preview sidecar" }]
+"Desktop App UI" = [{ to = "Preview Server", label = "frames component previews from" }]
 
 [levels]
 e2e = ["e2e/**", "tests/e2e/**"]
@@ -77,3 +79,8 @@ style = "core-shell"
 [containers.docs]
 name = "Docs Site"
 style = "astro"
+
+# The node sidecar the Rust host runs to render component previews. It has no
+# manifest of its own, so it is declared a container here.
+[containers.preview]
+name = "Preview Server"

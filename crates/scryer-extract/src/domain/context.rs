@@ -45,6 +45,12 @@ pub struct Container {
     /// Every package the manifest declares a dependency on, by name: Cargo's
     /// dependency tables, package.json's `dependencies`/`devDependencies`.
     pub packages: Vec<String>,
+    /// The files the unit declares as its entry points, project-relative:
+    /// package.json `main`/`module`/`exports`/`bin`, the module scripts its
+    /// `index.html` loads, Cargo `[lib]`/`[[bin]]`/`[[example]]` paths.
+    /// Cargo's conventional targets are not listed; they follow from the
+    /// files present.
+    pub entries: Vec<String>,
 }
 
 /// The flattened alias table governing one directory subtree.
@@ -159,6 +165,9 @@ pub struct ContainerFacts {
     /// Every package the manifest declares a dependency on, by name.
     #[serde(skip)]
     pub packages: Vec<String>,
+    /// The files the unit declares as its entry points. See [`Container::entries`].
+    #[serde(skip)]
+    pub entries: Vec<String>,
 }
 
 /// `SeedUnit` is scryer-core's own plain projection of these facts (the model
@@ -344,6 +353,7 @@ pub fn build_context(
             technology: c.technology.clone(),
             dep_dirs: c.dep_dirs.clone(),
             packages: c.packages.clone(),
+            entries: c.entries.clone(),
         })
         .collect();
 
@@ -2098,6 +2108,7 @@ mod tests {
             go_module: None,
             clj_paths: Vec::new(),
             packages: Vec::new(),
+            entries: Vec::new(),
         }
     }
 
