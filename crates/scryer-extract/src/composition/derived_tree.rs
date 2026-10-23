@@ -637,6 +637,29 @@ mod tests {
         assert_eq!(parent.parent_id.as_deref(), Some(preview.id.as_str()));
     }
 
+    /// When a test file's tests are all todos, or it imports a file's types alone, the file it names stays dark, while a running test's value import reaches its file; a todo file's claims still land on the component its imports name.
+    #[test]
+    fn only_running_tests_and_value_imports_reach_code() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "package.json", "{\"name\": \"web\"}\n");
+        write(d, "src/ledger/post.ts", "export function post() { return 1; }\n");
+        write(d, "src/money/amount.ts", "export type Amount = { cents: number };\nexport function zero(): Amount { return { cents: 0 }; }\n");
+        write(d, "src/rates/rate.ts", "export function rate() { return 2; }\n");
+        write(d, "tests/post.test.ts", "import { post } from \"../src/ledger/post\";\nit.todo(\"Posts a refund\");\n");
+        write(d, "tests/amount.test.ts", "import type { Amount } from \"../src/money/amount\";\nit(\"Keeps cents whole\", () => { const a: Amount = { cents: 1 }; expect(a.cents).toBe(1); });\n");
+        write(d, "tests/rate.test.ts", "import { rate } from \"../src/rates/rate\";\nit(\"Doubles\", () => { expect(rate()).toBe(2); });\n");
+        let tree = derived_tree_uncached(d).unwrap();
+        let dark: BTreeSet<&str> = tree.dark_files.iter().map(String::as_str).collect();
+        assert_eq!(dark, BTreeSet::from(["src/ledger/post.ts", "src/money/amount.ts"]));
+        let home = |desc: &str| {
+            let c = tree.claims.iter().find(|c| c.description == desc).unwrap();
+            tree.planned.nodes.iter().find(|n| n.id == c.node_id).unwrap().name.clone()
+        };
+        assert_eq!(home("Posts a refund"), "ledger");
+        assert_eq!(home("Keeps cents whole"), "money");
+    }
+
     /// When a file is reached only by its colocated test's import, or is a
     /// barrel whose re-exports are reached, it is not dark; a file nothing
     /// reaches still is.

@@ -189,6 +189,11 @@ pub struct ImportRef {
     /// heads rather than resolved here. `None` everywhere else: a TS namespace
     /// import or a Go package qualifier is already carried in `names`.
     pub alias: Option<String>,
+    /// A TypeScript import of types alone — `import type { X }`, `export type
+    /// { X } from`, or `import { type X, type Y }` with every specifier a type.
+    /// It names code without running it: evidence of coupling, never of a
+    /// test exercising what it names.
+    pub type_only: bool,
 }
 
 /// One imported symbol: the name in the SOURCE module (what an edge targets)
@@ -1215,6 +1220,7 @@ fn collect_go_imports(node: Node, bytes: &[u8], out: &mut Vec<ImportRef>) {
                 spec,
                 line: n.start_position().row as u32 + 1,
                 alias: None,
+                type_only: false,
             });
             continue;
         }
@@ -1813,6 +1819,7 @@ fn push_clj_ns_spec(node: Node, bytes: &[u8], prefix: &str, line: u32, out: &mut
                 names: Vec::new(),
                 line,
                 alias: None,
+                type_only: false,
             });
         }
         return;
@@ -1891,6 +1898,7 @@ fn push_clj_ns_spec(node: Node, bytes: &[u8], prefix: &str, line: u32, out: &mut
         names,
         line,
         alias,
+        type_only: false,
     });
 }
 
@@ -1910,6 +1918,7 @@ fn push_clj_class_spec(node: Node, bytes: &[u8], line: u32, out: &mut Vec<Import
             names: vec![ImportedSym::same(class)],
             line,
             alias: None,
+            type_only: false,
         });
         return;
     }
@@ -1938,6 +1947,7 @@ fn push_clj_class_spec(node: Node, bytes: &[u8], line: u32, out: &mut Vec<Import
         names,
         line,
         alias: None,
+        type_only: false,
     });
 }
 
@@ -2258,6 +2268,7 @@ fn collect_py_imports(root: Node, bytes: &[u8], out: &mut Vec<ImportRef>) {
                             names: Vec::new(),
                             line,
                             alias: None,
+                            type_only: false,
                         });
                     }
                 }
@@ -2304,6 +2315,7 @@ fn collect_py_imports(root: Node, bytes: &[u8], out: &mut Vec<ImportRef>) {
                     names,
                     line: n.start_position().row as u32 + 1,
                     alias: None,
+                    type_only: false,
                 });
                 continue;
             }
@@ -2338,6 +2350,7 @@ fn collect_ts_imports(root: Node, bytes: &[u8], out: &mut Vec<ImportRef>) {
                         names,
                         line: n.start_position().row as u32 + 1,
                         alias: None,
+                        type_only: ts_type_only(n),
                     });
                 }
                 continue; // nothing else importable inside
@@ -2366,6 +2379,7 @@ fn collect_ts_imports(root: Node, bytes: &[u8], out: &mut Vec<ImportRef>) {
                         names,
                         line: n.start_position().row as u32 + 1,
                         alias: None,
+                        type_only: ts_type_only(n),
                     });
                     continue;
                 }
@@ -2382,6 +2396,7 @@ fn collect_ts_imports(root: Node, bytes: &[u8], out: &mut Vec<ImportRef>) {
                             names: ts_binding_names(n, bytes),
                             line: n.start_position().row as u32 + 1,
                             alias: None,
+                            type_only: false,
                         });
                     }
                 }
@@ -2397,6 +2412,41 @@ fn collect_ts_imports(root: Node, bytes: &[u8], out: &mut Vec<ImportRef>) {
 /// Names bound by an import clause: the default-import local binding and each
 /// named specifier (`{ a as b }` -> source `a`, local `b`). A namespace import
 /// (`* as ns`) binds the whole module, not a symbol — contributes none.
+/// Whether an `import` / `export … from` statement brings in types alone:
+/// `import type …`, `export type … from`, or named specifiers that are each
+/// `type X` with no default or namespace binding beside them.
+fn ts_type_only(statement: Node) -> bool {
+    if has_token(statement, "type") {
+        return true;
+    }
+    let mut specifiers = 0;
+    let mut types = 0;
+    for child in named_children(statement) {
+        let items: Vec<Node> = match child.kind() {
+            "import_clause" => {
+                let mut items = Vec::new();
+                for part in named_children(child) {
+                    match part.kind() {
+                        "named_imports" => items.extend(named_children(part)),
+                        // A default or namespace binding is a value.
+                        _ => return false,
+                    }
+                }
+                items
+            }
+            "export_clause" => named_children(child),
+            _ => continue,
+        };
+        for item in items.into_iter().filter(|i| matches!(i.kind(), "import_specifier" | "export_specifier")) {
+            specifiers += 1;
+            if has_token(item, "type") {
+                types += 1;
+            }
+        }
+    }
+    specifiers > 0 && specifiers == types
+}
+
 fn ts_import_clause_names(clause: Node, bytes: &[u8], names: &mut Vec<ImportedSym>) {
     for child in named_children(clause) {
         match child.kind() {
@@ -2547,6 +2597,19 @@ mod tests {
 
     fn names(parse: &FileParse) -> Vec<&str> {
         parse.defs.iter().map(|d| d.name.as_str()).collect()
+    }
+
+    /// When a TypeScript import or re-export brings in types alone — `import type`, `export type … from`, or named specifiers that are every one `type X` — it is type-only, and one binding a value beside them is not.
+    #[test]
+    fn typescript_type_only_imports_are_marked() {
+        let src = "import type { A } from \"./a\";\nimport { type B, type C } from \"./b\";\nimport { type D, e } from \"./d\";\nimport F, { type G } from \"./f\";\nimport * as h from \"./h\";\nexport type { I } from \"./i\";\nexport { j } from \"./j\";\n";
+        let p = parse_file(Path::new("src/x.ts"), src).unwrap();
+        let mut got: Vec<(&str, bool)> = p.imports.iter().map(|i| (i.spec.as_str(), i.type_only)).collect();
+        got.sort();
+        assert_eq!(
+            got,
+            vec![("./a", true), ("./b", true), ("./d", false), ("./f", false), ("./h", false), ("./i", true), ("./j", false)]
+        );
     }
 
     fn def<'p>(parse: &'p FileParse, name: &str) -> &'p Def {

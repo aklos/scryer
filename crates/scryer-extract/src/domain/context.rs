@@ -239,6 +239,10 @@ pub struct Edge {
     /// follow) — evidence for a link, never proof of a violation.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub guessed: bool,
+    /// A file edge only type-only imports make (`import type { X }`): the
+    /// source names the target's types without running its code.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub type_only: bool,
 }
 
 /// One import of something OUTSIDE the repository: a file and the package it
@@ -757,6 +761,10 @@ fn build_edges(
     // violation.
     let mut guessed_edges: HashSet<(String, String)> = HashSet::new();
     let mut file_edges: HashSet<(String, String)> = HashSet::new();
+    // File edges by the kind of import that makes them, to tell an edge only
+    // type imports make from one a value import makes too.
+    let mut type_import_edges: HashSet<(String, String)> = HashSet::new();
+    let mut value_import_edges: HashSet<(String, String)> = HashSet::new();
     let mut externals: BTreeSet<(String, String)> = BTreeSet::new();
 
     for f in files {
@@ -894,6 +902,8 @@ fn build_edges(
             }
             if let Some(t) = target_file.filter(|t| *t != file) {
                 file_edges.insert((file.to_string(), t.to_string()));
+                let by_kind = if imp.type_only { &mut type_import_edges } else { &mut value_import_edges };
+                by_kind.insert((file.to_string(), t.to_string()));
             }
             for n in &imp.names {
                 // Resolve in the target module file when one was found, else
@@ -934,6 +944,8 @@ fn build_edges(
                     Some((dst_key, dst_file)) => {
                         if let Some(df) = dst_file.filter(|df| *df != file) {
                             file_edges.insert((file.to_string(), df.to_string()));
+                            let by_kind = if imp.type_only { &mut type_import_edges } else { &mut value_import_edges };
+                            by_kind.insert((file.to_string(), df.to_string()));
                         }
                         imported_locals.insert(n.local.as_str(), Some(dst_key));
                     }
@@ -1273,9 +1285,14 @@ fn build_edges(
     // An edge some real binding also found is not a guess.
     guessed_edges.retain(|e| !sym_edges.contains(e));
     let mut symbol_edges = sorted_edges(sym_edges);
-    symbol_edges.extend(guessed_edges.into_iter().map(|(src, dst)| Edge { src, dst, guessed: true }));
+    symbol_edges.extend(guessed_edges.into_iter().map(|(src, dst)| Edge { src, dst, guessed: true, type_only: false }));
     symbol_edges.sort();
-    (symbol_edges, sorted_edges(file_edges), externals)
+    let mut file_edges = sorted_edges(file_edges);
+    for e in &mut file_edges {
+        let pair = (e.src.clone(), e.dst.clone());
+        e.type_only = type_import_edges.contains(&pair) && !value_import_edges.contains(&pair);
+    }
+    (symbol_edges, file_edges, externals)
 }
 
 /// The file of the Rust module at `segments` (the path below the crate root)
@@ -1699,7 +1716,7 @@ impl<'a> CsIndex<'a> {
 fn sorted_edges(set: HashSet<(String, String)>) -> Vec<Edge> {
     let mut v: Vec<Edge> = set
         .into_iter()
-        .map(|(src, dst)| Edge { src, dst, guessed: false })
+        .map(|(src, dst)| Edge { src, dst, guessed: false, type_only: false })
         .collect();
     v.sort();
     v
@@ -2124,6 +2141,7 @@ mod tests {
                 .collect(),
             line,
             alias: None,
+            type_only: false,
         }
     }
 

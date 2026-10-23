@@ -791,11 +791,23 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         .chain(stem_ids.values().cloned())
         .collect();
     layer_exempt.sort();
-    // Dark code: product files no test file reaches through the import graph.
-    let mut reached: HashSet<&str> = homes.iter().map(|(rel, ..)| rel.as_str()).collect();
+    // Dark code: product files no test exercises. Only a test file with a
+    // test that runs (not a todo, skip or `todo!()` stub) reaches code, and
+    // only through imports that run it: a type-only import names a file's
+    // types without executing a line of it. Claim placement still reads
+    // every import, type imports included.
+    let mut runs_from: HashMap<&str, Vec<&str>> = HashMap::new();
+    for e in input.file_edges.iter().filter(|e| !e.guessed && !e.type_only) {
+        runs_from.entry(e.src.as_str()).or_default().push(e.dst.as_str());
+    }
+    let mut reached: HashSet<&str> = homes
+        .iter()
+        .filter(|(_, lift, ..)| lift.tests.iter().any(|t| !t.planned))
+        .map(|(rel, ..)| rel.as_str())
+        .collect();
     let mut queue: Vec<&str> = reached.iter().copied().collect();
     while let Some(f) = queue.pop() {
-        for dst in edges_from.get(f).into_iter().flatten() {
+        for dst in runs_from.get(f).into_iter().flatten() {
             if reached.insert(dst) {
                 queue.push(dst);
             }
@@ -815,7 +827,7 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
             }
             let module_dir = b.rsplit_once('/').map(|(dir, _)| format!("{dir}/")).unwrap_or_default();
             let rust_root = b.ends_with(".rs");
-            let reexported = edges_from.get(b).into_iter().flatten().any(|d| reached.contains(d))
+            let reexported = runs_from.get(b).into_iter().flatten().any(|d| reached.contains(d))
                 || (rust_root && reached.iter().any(|r| *r != b && r.starts_with(&module_dir) && r.ends_with(".rs")));
             if reexported {
                 reached.insert(b);
