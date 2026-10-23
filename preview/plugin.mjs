@@ -50,6 +50,9 @@ export function scryerPreviewPlugin({ projectRoot, packageRoot = projectRoot, us
 
   /** Global CSS the app entry imports — auto-applied to every preview. */
   const globalCss = detectGlobalCss(packageRoot);
+  /** A Tauri frontend reaches its host through globals the webview injects;
+   *  outside the app they are missing and the component throws on mount. */
+  const tauri = usesTauri(packageRoot);
 
   return {
     name: "scryer-preview",
@@ -218,7 +221,7 @@ if (!Component) {
           const fixture = url.searchParams.get("fixture");
           if (fixture) entryParams.set("fixture", fixture);
           const entry = `${ENTRY_PREFIX}?${entryParams}`;
-          const html = await server.transformIndexHtml(req.url, previewHtml(entry, componentDark, canvasDark));
+          const html = await server.transformIndexHtml(req.url, previewHtml(entry, componentDark, canvasDark, tauri));
           res.setHeader("Content-Type", "text/html");
           res.end(html);
           return;
@@ -244,12 +247,60 @@ if (!Component) {
   };
 }
 
+/** Whether the package depends on `@tauri-apps/api`. */
+export function usesTauri(packageRoot) {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
+    return Boolean(pkg.dependencies?.["@tauri-apps/api"] ?? pkg.devDependencies?.["@tauri-apps/api"]);
+  } catch {
+    return false;
+  }
+}
+
+/** Stand-ins for the globals a Tauri webview injects, so a component that
+ *  calls the host mounts in the preview instead of throwing. Commands never
+ *  answer: the component shows its own loading state, as it would while the
+ *  host is busy. Never replaces a real runtime. */
+export const TAURI_STUB = `
+    <script>
+      if (!window.__TAURI_INTERNALS__) {
+        var callbacks = {}, nextId = 0;
+        window.__TAURI_INTERNALS__ = {
+          metadata: {
+            currentWindow: { label: "main" },
+            currentWebview: { windowLabel: "main", label: "main" },
+          },
+          transformCallback: function (cb) { var id = ++nextId; callbacks[id] = cb; return id; },
+          unregisterCallback: function (id) { delete callbacks[id]; },
+          convertFileSrc: function (p) { return p; },
+          invoke: function () { return new Promise(function () {}); },
+        };
+        window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: function () {} };
+      }
+    </script>`;
+
+/** The module scripts `index.html` loads — the entry Vite actually uses,
+ *  wherever the project keeps it — as root-relative paths without the slash. */
+function htmlEntries(projectRoot) {
+  let html;
+  try {
+    html = fs.readFileSync(path.join(projectRoot, "index.html"), "utf8");
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const m of html.matchAll(/<script\b[^>]*\btype=["']module["'][^>]*\bsrc=["']([^"']+)["']/g)) {
+    if (!/^[a-z]+:/i.test(m[1])) out.push(m[1].replace(/^\//, ""));
+  }
+  return out;
+}
+
 /** CSS files imported by the app entry (main.tsx etc.), as root-relative paths.
  *  Also catches bound/query imports like `import styles from "./x.css?inline"`
  *  (a shadow-root widget pattern) — the query is dropped so the preview gets a
  *  plain document-level stylesheet. */
-function detectGlobalCss(projectRoot) {
-  for (const entry of ["src/main.tsx", "src/main.jsx", "src/index.tsx", "src/main.ts"]) {
+export function detectGlobalCss(projectRoot) {
+  for (const entry of [...htmlEntries(projectRoot), "src/main.tsx", "src/main.jsx", "src/index.tsx", "src/main.ts"]) {
     const full = path.join(projectRoot, entry);
     if (!fs.existsSync(full)) continue;
     const source = fs.readFileSync(full, "utf8");
@@ -348,7 +399,7 @@ if (!Component) {
 // no-op for prefers-color-scheme / provider-based theming we can't reach from an
 // isolated iframe). `canvasDark` is scryer's chrome theme and drives ONLY the
 // checkerboard backdrop, so the two stay decoupled.
-function previewHtml(entrySrc, componentDark = false, canvasDark = false) {
+function previewHtml(entrySrc, componentDark = false, canvasDark = false, tauri = false) {
   const fgFallback = componentDark ? "#f5f5f5" : "#111111";
   // The component mounts into #root (entry contract unchanged); #root sits on
   // the transformed stage (<body>) inside the clipped viewport (<html>). The
@@ -424,7 +475,7 @@ function previewHtml(entrySrc, componentDark = false, canvasDark = false) {
         <div class="blk" style="height:14px;width:88%;margin-top:32px"></div>
         <div class="blk" style="height:14px;width:70%"></div>
       </div>
-    </div><div id="root"></div>
+    </div><div id="root"></div>${tauri ? TAURI_STUB : ""}
     <script type="module" src="${entrySrc}"></script>
     <script>
       (function () {

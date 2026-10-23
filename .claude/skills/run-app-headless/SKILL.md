@@ -45,7 +45,7 @@ Recipes that worked:
   `bubbles: true` and client coordinates on the row's label span; menu rows
   are `<li>`s, click them by text.
 - Section editors expose their toggle as the first `button` inside
-  `section[data-section="Responsibilities"]`; their Done button is matched
+  `section[data-section="Claims"]`; their Done button is matched
   by text.
 
 ## Watch out

@@ -433,7 +433,7 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
           selected.id === "dark" ? (
             <DarkCodePage model={model} report={healthReport} onSelectNode={selectNode} />
           ) : (
-            <LandingPage projectPath={projectPath} since={since} model={model} onSelectNode={selectNode} />
+            <LandingPage projectPath={projectPath} since={since} model={model} status={healthReport?.derivedStatus ?? null} onSelectNode={selectNode} />
           )
         ) : selected ? (
           <NodePage

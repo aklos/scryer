@@ -1,7 +1,7 @@
 /**
  * The node page's claims: a node's or group's claims grouped by concern, each
  * a diff row against the committed tree — its marker, statement (word-diffed
- * when reworded), inline source locations, and attached tests with their
+ * when reworded), and the test that states it, with its
  * recorded verdict and probe result. Edit mode is a list form, committed on
  * Done, with EARS lint and a live markup preview.
  */
@@ -36,7 +36,7 @@ import {
   DRIFT_RULE,
   DRIFT_HINT,
 } from "../../entities/model/diffkit";
-import { ClaimSource, ClaimTests, respElementId } from "../source-section/SourceSection";
+import { ClaimTests, respElementId } from "../source-section/SourceSection";
 import { ANCHOR_CALM, earsTestable, hasMarkup, lintEars, MarkupMirror, serializeEars, StatementText, stripMarkup } from "../../entities/model/markup";
 import { usePageMenu, useCopyId, copyIdItem } from "../../features/search/pageMenu";
 import {
@@ -111,21 +111,33 @@ function ConcernGlyph({ slug, concerns }: { slug?: string; concerns: ConcernDef[
   const description = slug
     ? (entry?.description ?? STANDARD_CONCERNS.get(slug)?.description)
     : undefined;
-  // Untagged core flow keeps a dashed-circle placeholder — an "empty slot"
-  // where a concern glyph would sit — in the SAME size and classes a concern
-  // icon carries, so the marker lane reads one visual system either way.
-  const Icon = slug
-    ? (lookupIcon(entry?.icon ?? STANDARD_CONCERNS.get(slug)?.icon ?? "Tag") ?? Tag)
-    : CircleDashed;
   const title = slug
     ? `concern: ${slug}${description ? ` — ${description}` : ""}`
     : "core domain flow — no concern tag";
+  if (!slug) {
+    return (
+      <span className="inline-flex select-none justify-end pr-1.5" title={title}>
+        <CoreFlowDot />
+      </span>
+    );
+  }
+  const Icon = lookupIcon(entry?.icon ?? STANDARD_CONCERNS.get(slug)?.icon ?? "Tag") ?? Tag;
   return (
     <span className="inline-flex select-none justify-end pr-1.5 text-[var(--text)]" title={title}>
       {/* absoluteStrokeWidth: at 16px lucide would scale its 2px stroke down
           to a faint 1.33px — absolute keeps a full, pixel-aligned 2px so the
           glyph reads bold and crisp in the lane. */}
-      <Icon absoluteStrokeWidth className="h-4 w-4 translate-y-[3px]" aria-hidden={!slug || undefined} />
+      <Icon absoluteStrokeWidth className="h-4 w-4 translate-y-[3px]" />
+    </span>
+  );
+}
+
+/** Untagged core flow's marker: a solid muted dot in the box a concern icon
+ *  fills, so the lane reads as one system without looking like an empty slot. */
+function CoreFlowDot({ className = "" }: { className?: string }) {
+  return (
+    <span className={`inline-flex h-4 w-4 translate-y-[3px] items-center justify-center ${className}`} aria-hidden="true">
+      <span className="h-1.5 w-1.5 rounded-full bg-[var(--text-tertiary)]" />
     </span>
   );
 }
@@ -162,14 +174,12 @@ export function ResponsibilitiesSection({
   prevResps,
   plannedHosts,
   concerns,
-  sourceMap,
   testMap,
   notes,
   testStates,
   testVerdicts,
   probeResults,
   projectPath,
-  leafHost,
   codeBackedHost,
   mintId,
   editor,
@@ -187,8 +197,6 @@ export function ResponsibilitiesSection({
   /** The model's concern registry — resolves each claim's `concern` slug to its
    *  glyph/description, and feeds the editor's slug suggestions. */
   concerns: ConcernDef[];
-  /** respId → source locations, for the inline `↳ file:range` peeks per claim. */
-  sourceMap: Record<string, SourceLocation[]>;
   /** respId → attached-test locations (the test dimension). */
   testMap: Record<string, SourceLocation[]>;
   /** respId → the agent's progress note on a planned claim it left unfolded. */
@@ -201,12 +209,9 @@ export function ResponsibilitiesSection({
   /** respId → probe result; absent for a claim nobody has probed. */
   probeResults: Record<string, ClaimProbeStatus>;
   projectPath: string | null;
-  /** Whether claims here must anchor to source (leaf node). Structural hosts
-   *  discharge through their subtree and never flag "unmapped". */
-  leafHost: boolean;
   /** Whether this host's claims are backed by code at all (not a person, not
-   *  an external). Unlike `leafHost`, structural hosts count — a structural
-   *  When-claim backs onto an integration test (rule 22). Gates "untested". */
+   *  an external). Structural hosts count — a structural When-claim backs onto
+   *  an integration test (rule 22). Gates "untested". */
   codeBackedHost: boolean;
   /** Mint a fresh claim id clear of every host in BOTH layers (plus the
    *  editor's own draft rows) — claim ids are globally unique, and a per-host
@@ -240,7 +245,7 @@ export function ResponsibilitiesSection({
 
   return (
     <PageSection
-      title="Responsibilities"
+      title="Claims"
       count={resps.length}
       editable={!!editor}
       editing={editing}
@@ -264,7 +269,7 @@ export function ResponsibilitiesSection({
           }}
         />
       ) : diffRows.length === 0 ? (
-        <Empty>No responsibilities.</Empty>
+        <Empty>No tests state a claim here yet.</Empty>
       ) : (
         <ol className="-mx-2 flex flex-col">
           {groupByConcern(diffRows).map((row) => (
@@ -273,14 +278,12 @@ export function ResponsibilitiesSection({
               row={row}
               host={host}
               concerns={concerns}
-              locations={sourceMap[row.resp.id] ?? []}
               testLocations={testMap[row.resp.id] ?? []}
               note={notes?.[row.resp.id]}
               testState={testStates[row.resp.id] ?? null}
               testVerdict={testVerdicts[row.resp.id] ?? null}
               probeResult={probeResults[row.resp.id] ?? null}
               projectPath={projectPath}
-              leafHost={leafHost}
               codeBackedHost={codeBackedHost}
               onRestore={() => restore(row.resp)}
               editor={editor}
@@ -393,7 +396,7 @@ function ResponsibilitiesEditor({
         const removeRow = (id: string) => patchRow(id, { removed: true });
         const restoreRow = (id: string) => patchRow(id, { removed: false });
         return draft.length === 0 ? (
-          <Empty>No responsibilities.</Empty>
+          <Empty>No tests state a claim here yet.</Empty>
         ) : (
           <ul className="-mx-2 flex flex-col">
             {orderByConcern(draft, (r) => r.concern).map((r, i) =>
@@ -465,14 +468,12 @@ function RespDiffRow({
   row,
   host,
   concerns,
-  locations,
   testLocations,
   note,
   testState,
   testVerdict,
   probeResult,
   projectPath,
-  leafHost,
   codeBackedHost,
   onRestore,
   editor,
@@ -481,8 +482,6 @@ function RespDiffRow({
   host: "node" | "group";
   /** The model's concern registry — resolves the row's glyph. */
   concerns: ConcernDef[];
-  /** This claim's source locations — rendered inline with expandable peeks. */
-  locations: SourceLocation[];
   /** The claim's attached tests (test dimension). */
   testLocations: SourceLocation[];
   /** The agent's progress note: what is built and what is left. */
@@ -494,7 +493,6 @@ function RespDiffRow({
   /** The claim's recorded probe result, or null when nobody probed it. */
   probeResult: ClaimProbeStatus | null;
   projectPath: string | null;
-  leafHost: boolean;
   /** See {@link ResponsibilitiesSection}: gates "untested", structural hosts included. */
   codeBackedHost: boolean;
   onRestore: () => void;
@@ -512,10 +510,6 @@ function RespDiffRow({
   const removedDirs =
     kind === "reworded" || kind === "unchanged" ? prevDirs.filter((d) => !directives.includes(d)) : [];
   const reviewable = kind === "vagrant" && host === "node" && editor;
-  // A LEAF claim that's believed code-backed (committed: unchanged or reworded)
-  // but anchors to no source is a blind spot. Added/vagrant claims are plan-only
-  // or code-first, so they're never "unmapped".
-  const unmapped = leafHost && locations.length === 0 && (kind === "unchanged" || kind === "reworded");
   // A committed When/While/If claim with no attached test — demonstrable, but
   // no test is attached (rule 22). Plan-added and vagrant claims don't
   // nag: the test comes at the build checkpoint, and code-first claims await
@@ -566,7 +560,7 @@ function RespDiffRow({
               />
             )
           ) : (
-            <span className="italic text-[var(--text-ghost)]">Untitled responsibility</span>
+            <span className="italic text-[var(--text-ghost)]">Untitled claim</span>
           )}
         </span>
         {/* The chip only earns its place when the verdict block below can't
@@ -577,16 +571,6 @@ function RespDiffRow({
             title="Drift check: the code no longer discharges this claim as written."
           >
             stale
-          </span>
-        )}
-        {/* Sits inline beside the statement, exactly like the stale chip — an
-            unmapped claim has no verdict block below to defer to. */}
-        {unmapped && (
-          <span
-            className={`${FLAG_COLORS.stale.pill} ml-2 align-middle`}
-            title="No source lines anchor this responsibility — the claim can't be read through to code."
-          >
-            unmapped
           </span>
         )}
         {/* Bleed spec: undo the row's 18+22px gutter columns and the 180px
@@ -607,14 +591,8 @@ function RespDiffRow({
                 <span className="font-medium">Unfinished:</span> {note}
               </p>
             )}
-            <ClaimSource
-              locations={locations}
-              projectPath={projectPath}
-              deleted={deleted}
-              bleed="-ml-[60px] -mr-[180px]"
-            />
-            {/* Attached tests, first-class beside the source anchors: same
-                line anatomy, flask-marked, peek and open included. */}
+            {/* The claim's anchor is its test: flask-marked, peek and open
+                included. */}
             <ClaimTests
               locations={testLocations}
               state={testState}
@@ -947,7 +925,9 @@ function ConcernPicker({
           className={`${CONCERN_OPTION} ${!current ? "bg-[var(--surface-hover)]" : ""}`}
           title="core domain flow — no concern tag"
         >
-          <CircleDashed absoluteStrokeWidth className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" aria-hidden="true" />
+          <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center" aria-hidden="true">
+            <span className="h-1.5 w-1.5 rounded-full bg-[var(--text-tertiary)]" />
+          </span>
           <span className="text-[var(--text)]">Core flow</span>
           <span className="truncate text-[var(--text-ghost)]">no concern tag</span>
         </button>
@@ -1015,11 +995,7 @@ function EditConcernGlyph({
         {look ? (
           <look.Icon absoluteStrokeWidth className="h-4 w-4 translate-y-[3px]" />
         ) : (
-          <CircleDashed
-            absoluteStrokeWidth
-            className="h-4 w-4 translate-y-[3px] opacity-50 group-hover/concern:opacity-100"
-            aria-hidden="true"
-          />
+          <CoreFlowDot className="opacity-60 group-hover/concern:opacity-100" />
         )}
       </button>
       {rect && (

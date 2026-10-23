@@ -4,10 +4,10 @@
  *
  *  - header: breadcrumb trail, title, page-level actions
  *  - type line under the title: kind, technology, style and layer, the
- *    defining file, and the subtree's test and completeness gauges —
+ *    defining file, and the subtree's test gauge —
  *    structured metadata surfaced inline rather than in a separate column
  *  - maintenance banners (ambox): structural style violations, each
- *    expandable to where it is, and empty symbols
+ *    expandable to where it is
  *  - lede: the description paragraph, no heading
  *  - sections with per-section [edit] links, swapped to edit mode in place:
  *    preview, responsibilities with their test verdicts, properties,
@@ -19,8 +19,6 @@
 import { useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
-  Anchor,
-  CircleDashed,
   FlaskConical,
   Flag,
 } from "lucide-react";
@@ -29,10 +27,8 @@ import {
   effectiveSourceMap,
   effectiveTestMap,
   isDataShape,
-  isNodeEmpty,
   nextResponsibilityId,
 } from "../../entities/model/viewmodel";
-import { completenessBadge } from "../../entities/model/completeness";
 import {
   structuralBySubtree,
   structuralNotice,
@@ -47,7 +43,6 @@ import { ConnectionsSection, ImpliedConnectionsSection } from "../../widgets/con
 import { PageMenuProvider, usePageMenu, useCopyId, copyIdItem } from "../../features/search/pageMenu";
 import {
   Editable,
-  EmptyFlag,
   NAME_MAX,
   PAGE_COL,
   sanitizeIdentifier,
@@ -249,59 +244,38 @@ function NodePageBody(props: PageProps & { node: Node }) {
   const previewEntry = previewEntryFor(node, props.preview.components, previewSourceFile);
   const KindIcon = lookupIcon(node.icon) ?? kindIcon(node, previewEntry != null);
 
-  // Leaf claims must read through to code; structural nodes discharge through
-  // their subtree, so their claims are never "unmapped". Leafness spans the
-  // AUTHORED tree (committed + plan) — the same union compute_health and the
-  // Unmapped page use — so the pill and the counters always agree, and a
-  // design-ahead child discharges the parent's claims everywhere at once.
-  // Persons (actors) and externals are out-of-system — never code-backed.
-  const hasAuthoredChildren =
-    model.nodes.some((n) => n.parentId === node.id) ||
-    (committed?.nodes ?? []).some((n) => n.parentId === node.id);
-  const leafHost = !hasAuthoredChildren && !node.external && node.kind !== "person";
-
   // The node's own definition anchor — its file, surfaced in the type line.
   const defFile = definition[0]?.pattern;
 
   // Maintenance notices — full-width amboxes stacked at the top of the article
   // body (the wiki hatnote pattern), not chips crammed beside the title.
-  const bannerStack =
-    structural || isNodeEmpty(node) ? (
-      <>
-        {structural && (
-          <>
-            <Ambox
-              tone={structural.unstyledOnly ? "warning" : "danger"}
-              icon={<Flag className="h-3 w-3" />}
-              actions={
-                <button
-                  type="button"
-                  onClick={() => setStructuralOpen((o) => !o)}
-                  aria-expanded={structuralOpen}
-                  className={NOTICE_ACTION}
-                >
-                  {structuralOpen ? "Hide" : "Show where"}
-                </button>
-              }
-            >
-              {structural.text}
-            </Ambox>
-            {structuralOpen && (
-              <StructuralViolationList
-                violations={structuralViolations}
-                model={model}
-                onSelectNode={onSelectNode}
-              />
-            )}
-          </>
-        )}
-        {isNodeEmpty(node) && (
-          <Ambox tone="warning" icon={<CircleDashed className="h-3 w-3" />}>
-            Empty symbol — no responsibilities or properties
-          </Ambox>
-        )}
-      </>
-    ) : null;
+  const bannerStack = structural ? (
+    <>
+      <Ambox
+        tone={structural.unstyledOnly ? "warning" : "danger"}
+        icon={<Flag className="h-3 w-3" />}
+        actions={
+          <button
+            type="button"
+            onClick={() => setStructuralOpen((o) => !o)}
+            aria-expanded={structuralOpen}
+            className={NOTICE_ACTION}
+          >
+            {structuralOpen ? "Hide" : "Show where"}
+          </button>
+        }
+      >
+        {structural.text}
+      </Ambox>
+      {structuralOpen && (
+        <StructuralViolationList
+          violations={structuralViolations}
+          model={model}
+          onSelectNode={onSelectNode}
+        />
+      )}
+    </>
+  ) : null;
 
   // The horizontal axis for the badges below.
   const styleDef = governingStyleDef(model, node.id, styleTable(report ?? null));
@@ -395,11 +369,9 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 </button>
               </>
             )}
-            {/* Ground-truth gauges follow the identity run as bordered mono
-                chips — instruments, not prose, but in the same reading line
-                (right-aligned they float contextless at wide widths). Tests
-                lead: attachment is the primary signal, completeness the stage
-                gauge beside it. */}
+            {/* The ground-truth gauge follows the identity run as a bordered
+                mono chip — an instrument, not prose, but in the same reading
+                line (right-aligned it floats contextless at wide widths). */}
             {/* Tests attached. The fraction is testable claims WITH a test
                 over testable claims (When/While/If on code-backed hosts);
                 tests on ubiquitous claims count in the tooltip, not the
@@ -459,24 +431,6 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 </span>
               );
             })()}
-            {(() => {
-              const badge = completenessBadge(report?.completeness[node.id]);
-              if (!badge) return null;
-              return (
-                <span
-                  className={GAUGE_CHIP}
-                  title={
-                    badge.measured
-                      ? `${badge.label} of this node's claims read through to code`
-                      : "No leaf claims yet — nothing to measure"
-                  }
-                >
-                  <Anchor className={`h-3 w-3 ${badge.grounded ? "" : "opacity-40"}`} />
-                  {badge.label}
-                </span>
-              );
-            })()}
-            {isNodeEmpty(node) && <EmptyFlag />}
           </>
         }
         editor={editor}
@@ -528,14 +482,12 @@ function NodePageBody(props: PageProps & { node: Node }) {
                   prevResps={committedResps}
                   plannedHosts={plannedRespHosts(model)}
                   concerns={model.concerns ?? []}
-                  sourceMap={sourceMap}
                   testMap={testMap}
                   notes={model.notes}
                   testStates={testStates}
                   testVerdicts={props.testVerdicts}
                   probeResults={props.probeResults}
                   projectPath={projectPath}
-                  leafHost={leafHost}
                   codeBackedHost={!node.external && node.kind !== "person"}
                   mintId={(draft) => nextResponsibilityId(draft, model, committed)}
                   editor={editor}

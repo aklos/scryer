@@ -4,12 +4,14 @@
  * (else the first component it touched, else its branch and start time):
  * the claims its edits newly proved, newly planned or left planned, the ones
  * now stale or failing, surviving mutants and new dark files in what it
- * touched. Beside them, the components more than one session touched. Rows
+ * touched. Beside them, the components more than one session touched. Above
+ * them all, where things stand now: the claim counts, and the failing and
+ * planned claims by name, so the page answers even when nothing moved. Rows
  * open the claim's node page and flash the claim. Computed at read time from
  * the session logs and the derived status (`get_landing`); read-only. With
  * several git worktrees, sessions are grouped by the worktree they worked
  * in, each read against that checkout's own tree, and the shared-component
- * count spans them all.
+ * count spans them all; a worktree with no session in the window is left out.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -20,6 +22,8 @@ import { jumpTo, PageSection } from "../../shared/ui/pagekit";
 import { respElementId } from "../../widgets/source-section/SourceSection";
 import { SpecialBody, SpecialHeader } from "../../widgets/special-page-shell/shell";
 import type { ScryModel } from "../../entities/model/viewmodel";
+import type { DerivedStatus } from "../../entities/model/derived";
+import { useAgentIntegration } from "../../features/agent-integration/useAgentIntegration";
 
 type ClaimState = "proven" | "stale" | "failing" | "planned";
 
@@ -81,14 +85,18 @@ export function LandingPage({
   projectPath,
   since,
   model,
+  status,
   onSelectNode,
 }: {
   projectPath: string | null;
   /** When the project was last opened before now (unix seconds). */
   since: number;
   model: ScryModel;
+  /** The derived status of every claim, for where things stand now. */
+  status: DerivedStatus | null;
   onSelectNode: (id: string) => void;
 }) {
+  const integration = useAgentIntegration(projectPath);
   const [landing, setLanding] = useState<Landing | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
@@ -135,7 +143,7 @@ export function LandingPage({
   }, [landing]);
 
   // Open the claim's page and flash the claim once it renders.
-  const openClaim = (c: LandingClaim) => {
+  const openClaim = (c: Pick<LandingClaim, "respId" | "nodeId">) => {
     onSelectNode(c.nodeId);
     window.setTimeout(() => jumpTo(respElementId(c.respId)), 250);
   };
@@ -167,55 +175,59 @@ export function LandingPage({
         }
       />
       <SpecialBody>
-        {landing && landing.sessions.length === 0 && (landing.worktrees?.length ?? 0) < 2 ? (
-          <div className="flex flex-col items-center gap-3 px-6 py-16">
-            <History className="h-6 w-6 text-[var(--text-ghost)]" />
-            <p className="text-sm text-[var(--text-muted)]">No agent sessions since you last looked.</p>
-          </div>
-        ) : (
-          // Blocks sit close: the first starts right under the heading and
-          // the rest follow at a tighter rhythm than a node page's sections.
-          <div className="[&>:first-child]:!mt-0 [&_section]:mt-2">
-            {landing && landing.shared.length > 0 && (
-              <PageSection
-                title="Touched by more than one session"
-                hint="Components several sessions edited in this window — where their work may collide."
-                count={landing.shared.length}
-              >
-                <ul className="flex flex-col gap-1">
-                  {landing.shared.map((c) => (
-                    <li key={c.nodeId} className="flex items-center gap-2 text-sm">
-                      <Users className="h-3.5 w-3.5 shrink-0 text-[var(--text-ghost)]" />
-                      <button type="button" className="text-[var(--accent)] hover:underline" onClick={() => onSelectNode(c.nodeId)}>
-                        {names.get(c.nodeId) ?? c.nodeId}
-                      </button>
-                      <span className="truncate text-xs text-[var(--text-muted)]">
-                        {c.sessions.map((s) => titles.get(s) ?? s.slice(0, 8)).join(" · ")}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </PageSection>
-            )}
-            {landing && (landing.worktrees?.length ?? 0) > 1
-              ? // Several checkouts: each worktree's sessions under its own
-                // heading; a worktree with none is listed by its branch.
-                landing.worktrees!.map((w) => {
-                  const own = landing.sessions.filter((s) => s.worktree === w.path);
-                  return (
-                    <div key={w.path} className="mt-4">
-                      <div className="flex items-baseline gap-2 border-b border-[var(--border)] pb-1">
-                        <GitBranch className="h-3.5 w-3.5 shrink-0 self-center text-[var(--text-ghost)]" />
-                        <span className="text-sm font-semibold text-[var(--text)]">{w.branch ?? "detached"}</span>
-                        {w.current && <span className="text-xs text-[var(--accent)]">open here</span>}
-                        <span className="ml-auto truncate font-mono text-xs text-[var(--text-ghost)]" title={w.path}>
-                          {w.path}
+        <div className="[&>:first-child]:!mt-0 [&_section]:mt-2">
+          <Standing status={status} model={model} onOpenClaim={openClaim} />
+          {integration.status && !integration.status.on && (
+            <p className="mt-3 text-xs text-[var(--text-muted)]">
+              Agent integration is off for this project, so no sessions are recorded. Turn it on in Settings, or run{" "}
+              <code className="font-mono text-[var(--text-secondary)]">scryer-mcp setup on</code>.
+            </p>
+          )}
+          {landing && landing.sessions.length === 0 ? (
+            <div className="flex items-center gap-2 py-6">
+              <History className="h-4 w-4 text-[var(--text-ghost)]" />
+              <p className="text-sm text-[var(--text-muted)]">No agent sessions since you last looked.</p>
+            </div>
+          ) : (
+            <>
+              {landing && landing.shared.length > 0 && (
+                <PageSection
+                  title="Touched by more than one session"
+                  hint="Components several sessions edited in this window — where their work may collide."
+                  count={landing.shared.length}
+                >
+                  <ul className="flex flex-col gap-1">
+                    {landing.shared.map((c) => (
+                      <li key={c.nodeId} className="flex items-center gap-2 text-sm">
+                        <Users className="h-3.5 w-3.5 shrink-0 text-[var(--text-ghost)]" />
+                        <button type="button" className="text-[var(--accent)] hover:underline" onClick={() => onSelectNode(c.nodeId)}>
+                          {names.get(c.nodeId) ?? c.nodeId}
+                        </button>
+                        <span className="truncate text-xs text-[var(--text-muted)]">
+                          {c.sessions.map((s) => titles.get(s) ?? s.slice(0, 8)).join(" · ")}
                         </span>
-                      </div>
-                      {own.length === 0 ? (
-                        <p className="py-2 text-xs text-[var(--text-muted)]">No sessions in this window.</p>
-                      ) : (
-                        own.map((s) => (
+                      </li>
+                    ))}
+                  </ul>
+                </PageSection>
+              )}
+              {landing && (landing.worktrees?.length ?? 0) > 1
+                ? // Several checkouts: each worktree's sessions under its own
+                  // heading; a worktree with none in the window is left out.
+                  landing.worktrees!.map((w) => {
+                    const own = landing.sessions.filter((s) => s.worktree === w.path);
+                    if (own.length === 0) return null;
+                    return (
+                      <div key={w.path} className="mt-4">
+                        <div className="flex items-baseline gap-2 border-b border-[var(--border)] pb-1">
+                          <GitBranch className="h-3.5 w-3.5 shrink-0 self-center text-[var(--text-ghost)]" />
+                          <span className="text-sm font-semibold text-[var(--text)]">{w.branch ?? "detached"}</span>
+                          {w.current && <span className="text-xs text-[var(--accent)]">open here</span>}
+                          <span className="ml-auto truncate font-mono text-xs text-[var(--text-ghost)]" title={w.path}>
+                            {w.path}
+                          </span>
+                        </div>
+                        {own.map((s) => (
                           <SessionCard
                             key={s.session}
                             s={s}
@@ -225,18 +237,86 @@ export function LandingPage({
                             onOpenClaim={openClaim}
                             onSelectNode={onSelectNode}
                           />
-                        ))
-                      )}
-                    </div>
-                  );
-                })
-              : landing?.sessions.map((s) => (
-                  <SessionCard key={s.session} s={s} title={titles.get(s.session) ?? s.title} names={names} onOpenClaim={openClaim} onSelectNode={onSelectNode} />
-                ))}
-          </div>
-        )}
+                        ))}
+                      </div>
+                    );
+                  })
+                : landing?.sessions.map((s) => (
+                    <SessionCard key={s.session} s={s} title={titles.get(s.session) ?? s.title} names={names} onOpenClaim={openClaim} onSelectNode={onSelectNode} />
+                  ))}
+            </>
+          )}
+        </div>
       </SpecialBody>
     </div>
+  );
+}
+
+/** Where things stand now, whatever moved: every claim's count by state, a
+ *  line on what stale means when anything is, and the failing and planned
+ *  claims by name — the work that is still open. */
+function Standing({
+  status,
+  model,
+  onOpenClaim,
+}: {
+  status: DerivedStatus | null;
+  model: ScryModel;
+  onOpenClaim: (c: Pick<LandingClaim, "respId" | "nodeId">) => void;
+}) {
+  const statements = useMemo(() => {
+    const out = new Map<string, string>();
+    for (const n of model.nodes) for (const r of n.responsibilities ?? []) out.set(r.id, r.statement);
+    return out;
+  }, [model]);
+  if (!status) return null;
+  const t = status.totals;
+  const open = (["failing", "planned"] as const).map(
+    (state) => [state, status.claims.filter((c) => c.state === state)] as const,
+  );
+  const cells: [ClaimState, number][] = [
+    ["proven", t.proven],
+    ["stale", t.stale],
+    ["failing", t.failing],
+    ["planned", t.planned],
+  ];
+  return (
+    <PageSection title="Where things stand" count={t.claims}>
+      <div className="mb-2 flex flex-wrap gap-x-6 gap-y-1">
+        {cells.map(([state, n]) => (
+          <span key={state} className="flex items-baseline gap-1.5">
+            <b className={`font-mono text-lg ${n > 0 ? TONE[state] : "text-[var(--text-ghost)]"}`}>{n}</b>
+            <span className="text-xs text-[var(--text-muted)]">{state}</span>
+          </span>
+        ))}
+      </div>
+      {t.stale > 0 && (
+        <p className="mb-2 text-xs text-[var(--text-muted)]">
+          Stale: the test or the code it exercises changed since its last recorded run. Run the tests and ingest
+          the report to refresh.
+        </p>
+      )}
+      {open
+        .filter(([, rows]) => rows.length > 0)
+        .map(([state, rows]) => (
+          <div key={state} className="mb-2">
+            <div className="text-[11px] font-medium uppercase tracking-wide text-[var(--text-tertiary)]">{state}</div>
+            <ul className="flex flex-col">
+              {rows.map((c) => (
+                <li key={c.respId}>
+                  <button
+                    type="button"
+                    onClick={() => onOpenClaim(c)}
+                    className="flex w-full items-baseline gap-2 rounded px-1 py-0.5 text-left text-sm hover:bg-[var(--surface-hover)]"
+                  >
+                    <span className="min-w-0 flex-1 truncate text-[var(--text)]">{statements.get(c.respId) ?? c.respId}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+    </PageSection>
   );
 }
 

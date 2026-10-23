@@ -2,9 +2,6 @@ import { Fragment } from "react";
 import { Bot } from "lucide-react";
 import { wordDiff } from "../lib/wordDiff";
 
-const EMPTY_HINT =
-  "Empty — no responsibilities or properties. Give it a business responsibility or remove the node.";
-
 /** The one page content column every full-page surface shares: article (900) +
  *  gap (32) + rail (300) + horizontal padding (56), centered at wide widths so
  *  pages compose instead of hugging the tree and stranding a dead right region.
@@ -66,31 +63,6 @@ export function WordDiffText({ from, to }: { from: string; to: string }) {
 export function sanitizeIdentifier(text: string): string {
   const cleaned = text.replace(/[^A-Za-z0-9_]/g, "");
   return cleaned.replace(/^[0-9]+/, "");
-}
-
-/** The `empty` flag (see rollup.isNodeEmpty) — a symbol with no semantic
- *  content. An attention state, not a lifecycle one, so it carries the drift
- *  orange instead of fading into the chrome. */
-export function EmptyFlag({ className = "" }: { className?: string }) {
-  return (
-    <span
-      title={EMPTY_HINT}
-      className={`inline-flex shrink-0 items-center rounded-full border border-dashed border-orange-400/70 bg-orange-500/5 px-2.5 py-0.5 text-2xs font-medium text-orange-700 dark:text-orange-300 ${className}`}
-    >
-      empty
-    </span>
-  );
-}
-
-/** The tree-row counterpart to {@link EmptyFlag}: a hollow ring where a status
- *  dot would sit. */
-export function EmptyDot({ className = "" }: { className?: string }) {
-  return (
-    <span
-      title={EMPTY_HINT}
-      className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full border border-orange-500 dark:border-orange-400 ${className}`}
-    />
-  );
 }
 
 /** The eyebrow — the one spec for every micro uppercase section label. Size,

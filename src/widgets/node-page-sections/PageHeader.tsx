@@ -151,9 +151,8 @@ export function PageHeader({
 }
 
 /** A maintenance notice (ambox) — a full-width banner stacked at the top of the
- *  article body: neutral chrome on an inset surface, the icon alone carrying
- *  the semantic hue (the toast recipe), inline actions right-aligned. The wiki
- *  hatnote's job without the tinted-callout look. */
+ *  article body: a translucent wash and border in the tone's accent, the icon
+ *  in full hue, inline actions right-aligned. */
 export function Ambox({
   tone,
   icon,
@@ -171,8 +170,14 @@ export function Ambox({
       : tone === "info"
         ? "text-violet-600 dark:text-violet-400"
         : "text-orange-600 dark:text-orange-400";
+  const wash =
+    tone === "danger"
+      ? "border-red-500/30 bg-red-500/10"
+      : tone === "info"
+        ? "border-violet-500/30 bg-violet-500/10"
+        : "border-orange-500/30 bg-orange-500/10";
   return (
-    <div className="flex items-center gap-2.5 rounded-md border border-[var(--border)] bg-[var(--surface-inset)] px-3 py-2 text-xs text-[var(--text-secondary)]">
+    <div className={`flex items-center gap-2.5 rounded-md border ${wash} px-3 py-2 text-xs text-[var(--text-secondary)]`}>
       <span className={`shrink-0 ${iconTone}`}>{icon}</span>
       <span className="min-w-0 flex-1">{children}</span>
       {actions && <span className="flex shrink-0 items-center gap-3">{actions}</span>}

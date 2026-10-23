@@ -2,7 +2,6 @@ import { useMemo, useRef } from "react";
 import { X } from "lucide-react";
 import type { Node, Group } from "../../entities/model/viewmodel";
 import {
-  effectiveSourceMap,
   effectiveTestMap,
   nextResponsibilityId,
 } from "../../entities/model/viewmodel";
@@ -56,7 +55,6 @@ export function GroupPageBody(props: PageProps & { group: Group }) {
     .map((id) => model.nodes.find((n) => n.id === id))
     .filter((n): n is Node => Boolean(n));
 
-  const sourceMap = effectiveSourceMap(committed, model);
   const testMap = effectiveTestMap(committed, model);
   const testStates = useMemo(() => testStatesOf(props.report), [props.report]);
   const resps = group.responsibilities ?? [];
@@ -128,14 +126,12 @@ export function GroupPageBody(props: PageProps & { group: Group }) {
               prevResps={committedResps}
               plannedHosts={plannedRespHosts(model)}
               concerns={model.concerns ?? []}
-              sourceMap={sourceMap}
               testMap={testMap}
                   notes={model.notes}
               testStates={testStates}
               testVerdicts={props.testVerdicts}
               probeResults={props.probeResults}
               projectPath={projectPath}
-              leafHost={false} // group claims discharge through members
               codeBackedHost // groups organize code-backed members
               mintId={(draft) => nextResponsibilityId(draft, model, committed)}
               editor={editor}

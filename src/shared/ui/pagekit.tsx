@@ -13,8 +13,6 @@ export {
   NAME_MAX,
   WordDiffText,
   sanitizeIdentifier,
-  EmptyFlag,
-  EmptyDot,
   EYEBROW_BASE,
   EYEBROW,
   BTN,
