@@ -723,4 +723,38 @@ mod tests {
         assert_eq!(text, "[scryer] demo/film.tsx\ntooling: not held to style rules");
     }
 
+    /// When Copilot names a tool `view`, `create`, `edit` or `str_replace_editor` with the file under `path`, treats it as the read or write Claude Code names with `file_path`.
+    #[test]
+    #[ignore]
+    fn copilot_tool_names_map_to_reads_and_writes() {
+        todo!()
+    }
+
+    /// When the agent writes a file, records it as the session's touch and prints nothing.
+    #[test]
+    #[ignore]
+    fn a_write_records_a_touch_silently() {
+        todo!()
+    }
+
+    /// When Copilot's `apply_patch` carries the envelope as its whole tool input, names the files it patches.
+    #[test]
+    #[ignore]
+    fn copilot_apply_patch_names_its_files() {
+        todo!()
+    }
+
+    /// When a Codex `apply_patch` is about to run, injects the overlay of each file it names, at most five.
+    #[test]
+    #[ignore]
+    fn codex_apply_patch_injects_up_to_five_overlays() {
+        todo!()
+    }
+
+    /// When a prompt is submitted, binds the harness's processes to the session and records nothing of the prompt.
+    #[test]
+    #[ignore]
+    fn prompt_submit_binds_processes_and_keeps_no_prompt() {
+        todo!()
+    }
 }

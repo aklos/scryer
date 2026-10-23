@@ -16,3 +16,10 @@ fn an_unknown_task_prints_usage_and_fails() {
         assert!(String::from_utf8_lossy(&out.stderr).contains("Usage:"));
     }
 }
+
+/// When `build-sidecar` runs, builds scryer-mcp in release, or debug with `--debug`, and copies it to `src-tauri/binaries` as `scryer-mcp-<host triple>`.
+#[test]
+#[ignore]
+fn build_sidecar_copies_the_binary_under_its_host_triple() {
+    todo!()
+}

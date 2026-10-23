@@ -319,4 +319,11 @@ mod tests {
         assert!(highlight_lines(Path::new("notes.xyz"), "plain words\n").is_none());
         assert!(highlight_lines(Path::new("Makefile"), "all:\n").is_none(), "no extension");
     }
+
+    /// When a file's extension names a bundled grammar (Rust, TypeScript, TSX, JavaScript, Python, Go, Java, Ruby, C, C++, C#, PHP or Clojure), highlights it rather than falling back to plain text.
+    #[test]
+    #[ignore]
+    fn every_bundled_grammar_highlights_its_extension() {
+        todo!()
+    }
 }

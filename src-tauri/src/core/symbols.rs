@@ -198,4 +198,18 @@ mod tests {
         let src = "function login() {\n  return 1;\n}\nit(\"login\", () => login());\n";
         assert_eq!(resolve(Path::new("f.ts"), src, "login", None), Some((1, 3)));
     }
+
+    /// When several definitions share the symbol's name, resolves to the one nearest the line hint.
+    #[test]
+    #[ignore]
+    fn same_named_definitions_resolve_nearest_the_line_hint() {
+        todo!()
+    }
+
+    /// When the file is a Vue single-file component, resolves its PascalCase file name to the whole file and any other name to nothing.
+    #[test]
+    #[ignore]
+    fn vue_sfc_resolves_its_file_name_to_the_whole_file() {
+        todo!()
+    }
 }

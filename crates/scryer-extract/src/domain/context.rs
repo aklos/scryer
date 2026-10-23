@@ -3919,4 +3919,11 @@ fn add_one(x: u32) -> u32 {
             ctx.file_edges
         );
     }
+
+    /// When a Go import path falls under two declared module paths, resolves it under the longer one.
+    #[test]
+    #[ignore]
+    fn go_import_resolves_under_the_longest_module_path() {
+        todo!()
+    }
 }

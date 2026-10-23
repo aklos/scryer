@@ -336,4 +336,18 @@ mod tests {
         );
         assert_eq!(node_source_file(&m, "node-1"), "src/CardDecl.tsx", "own anchor wins");
     }
+
+    /// While the preview server for the same project is still running, reuses it, and replaces it when another project asks.
+    #[test]
+    #[ignore]
+    fn reuses_the_running_preview_server_for_the_same_project() {
+        todo!()
+    }
+
+    /// When asked to repair a failed preview render, launches the preferred agent with a prompt carrying the node's source file and the render's failure.
+    #[test]
+    #[ignore]
+    fn repair_launches_the_agent_with_the_source_and_the_failure() {
+        todo!()
+    }
 }

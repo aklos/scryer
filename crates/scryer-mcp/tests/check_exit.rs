@@ -137,3 +137,10 @@ fn lint_and_check_fail_on_a_malformed_claim() {
     assert!(out.contains("lint: "), "{out}");
     assert_eq!(run(dir.path(), &["check", "--fail-on-drift"]).0, 2);
 }
+
+/// If the tree cannot be derived, then check exits 2 and says why.
+#[test]
+#[ignore]
+fn check_exits_2_when_the_tree_cannot_be_derived() {
+    todo!()
+}

@@ -156,4 +156,11 @@ mod tests {
         assert!(committed.contains("Saves") && !committed.contains("Merges"));
         assert!(planned.contains("Saves") && planned.contains("Merges"));
     }
+
+    /// When a different project is opened, replaces the previous project's watcher, and when the same project is opened again, keeps the running one.
+    #[test]
+    #[ignore]
+    fn opening_another_project_replaces_the_watcher() {
+        todo!()
+    }
 }

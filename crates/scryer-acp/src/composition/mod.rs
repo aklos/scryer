@@ -143,3 +143,13 @@ impl AgentSync {
         self.runtime.cancel().await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    /// When the preferred agent is not installed, launches the first installed of Claude Code, Codex and Copilot, in that order.
+    #[test]
+    #[ignore]
+    fn falls_back_to_the_first_installed_agent_in_order() {
+        todo!()
+    }
+}
