@@ -582,6 +582,43 @@ mod tests {
         assert!(m.nodes.iter().all(|n| n.name != "previewOwner"), "no orphan component for a test whose imports reach code");
     }
 
+    /// When structure.toml declares a container tooling, its node carries the flag, and it raises no unstyled finding and no forbidden link for importing the app's inner layers.
+    #[test]
+    fn a_declared_tooling_container_is_marked_and_held_to_no_style() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "package.json", "{\"name\": \"web\", \"main\": \"src/app/main.ts\"}\n");
+        write(d, "src/app/main.ts", "import { Card } from \"../widgets/card\";\nexport const app = Card;\n");
+        write(d, "src/widgets/card.ts", "import { total } from \"../entities/money\";\nexport const Card = total;\n");
+        write(d, "src/entities/money.ts", "export function total() { return 1; }\n");
+        write(d, "demo/remotion.config.ts", "export default {};\n");
+        write(d, "demo/film.tsx", "import { total } from \"../src/entities/money\";\nexport const Film = total;\n");
+        write(d, "harness/vite.config.ts", "export default {};\n");
+        write(d, "harness/main.tsx", "import { total } from \"../src/entities/money\";\nexport const h = total;\n");
+        write(
+            d,
+            ".scryer/structure.toml",
+            "[containers.web]\nstyle = \"feature-sliced\"\n\n[containers.demo]\ntooling = true\n",
+        );
+        let tree = derived_tree_uncached(d).unwrap();
+        let container = |name: &str| tree.planned.nodes.iter().find(|n| n.kind == Kind::Container && n.name == name).unwrap();
+        assert_eq!(container("demo").tooling, Some(true));
+        assert_eq!(container("harness").tooling, None);
+        let charged: BTreeSet<(String, &str)> = tree
+            .style_violations
+            .iter()
+            .map(|v| {
+                let mut n = tree.planned.nodes.iter().find(|n| n.id == v.node_id).unwrap();
+                while n.kind != Kind::Container {
+                    n = tree.planned.nodes.iter().find(|p| Some(p.id.as_str()) == n.parent_id.as_deref()).unwrap();
+                }
+                (n.name.clone(), v.kind.as_str())
+            })
+            .collect();
+        assert!(charged.iter().all(|(c, _)| c != "demo"), "{:?}", tree.style_violations);
+        assert!(charged.contains(&("harness".to_string(), "unstyled")), "{charged:?}");
+    }
+
     /// When structure.toml declares a container for a directory no manifest makes one, the directory becomes that container.
     #[test]
     fn structure_toml_promotes_a_directory_to_a_container() {

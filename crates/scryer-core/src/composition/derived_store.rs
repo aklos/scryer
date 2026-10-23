@@ -140,6 +140,7 @@ mod tests {
             style: None,
             layer: None,
             exercised_by: Vec::new(),
+            tooling: None,
         });
         let tree = DerivedTree {
             fingerprint: 7,

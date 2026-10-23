@@ -624,6 +624,8 @@ pub fn check_code(
         let def = governing(&container.id);
         let dir = style::container_prefix(model, &container.id).unwrap_or_default();
         match def {
+            // Dev tooling is held to no style.
+            None if container.tooling == Some(true) => {}
             None => {
                 let internal = derived
                     .resolved_edges
@@ -1153,6 +1155,40 @@ mod tests {
             vec![],
         );
         assert_eq!((r.layer_violations, r.forbidden_links), (1, 0), "{:#?}", r.violations);
+    }
+
+    /// When a container is declared tooling, it needs no style and its links into another container's inner layers are not forbidden, while its own cycles still count.
+    #[test]
+    fn a_tooling_container_is_held_to_no_style_but_its_cycles_count() {
+        let mut m = hex_service();
+        m.nodes.push(node(serde_json::json!({ "id": "demo", "kind": "container", "name": "demo", "parentId": "sys", "tooling": true })));
+        for (id, name, file, sym) in [("film", "film", "demo/film/a.tsx", "Film"), ("shots", "shots", "demo/shots/b.tsx", "Shot")] {
+            m.nodes.push(node(serde_json::json!({
+                "id": id, "kind": "component", "name": name, "parentId": "demo",
+                "responsibilities": [{ "id": format!("r-{id}"), "statement": "plays" }]
+            })));
+            anchor(&mut m, &format!("r-{id}"), file, sym);
+        }
+        m.links.push(Link {
+            id: "l-in".into(), src: "film".into(), dst: "infra".into(),
+            label: String::new(), method: None, kind: None,
+        });
+        let r = report(
+            &m,
+            vec![
+                edge(("film", "Film", "demo/film/a.tsx"), ("shots", "Shot", "demo/shots/b.tsx")),
+                edge(("shots", "Shot", "demo/shots/b.tsx"), ("film", "Film", "demo/film/a.tsx")),
+                edge(("film", "Film", "demo/film/a.tsx"), ("infra", "PgOrders", "svc/infrastructure/pg.rs")),
+            ],
+            vec![],
+        );
+        assert_eq!((r.unstyled, r.forbidden_links, r.layer_violations), (0, 0, 0), "{:#?}", r.violations);
+        assert_eq!(r.cycles, 1);
+
+        // The same container undeclared is unstyled and its link forbidden.
+        m.nodes.iter_mut().find(|n| n.id == "demo").unwrap().tooling = None;
+        let r = report(&m, vec![], vec![]);
+        assert_eq!((r.unstyled, r.forbidden_links), (1, 1), "{:#?}", r.violations);
     }
 
     /// If a code edge was only guessed from a matching name, then charge no structural violation for it.

@@ -257,6 +257,7 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         let mut n = node(&id, Kind::Container, &name, Some(&system_id));
         n.technology = c.technology.clone();
         n.style = config.and_then(|k| k.style.clone());
+        n.tooling = config.is_some_and(|k| k.tooling).then_some(true);
         n.description = input
             .lifts
             .iter()
@@ -1018,5 +1019,6 @@ fn node(id: &str, kind: Kind, name: &str, parent: Option<&str>) -> Node {
         style: None,
         layer: None,
         exercised_by: Vec::new(),
+        tooling: None,
     }
 }

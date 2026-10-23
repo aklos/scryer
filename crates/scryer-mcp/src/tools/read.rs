@@ -401,11 +401,15 @@ pub(crate) fn file_report(loaded: &derived::Loaded, peers: &Peers, file: &str, c
     let claims = derived::file_claims(tree, node, file);
     let shown = claims_cap.unwrap_or(claims.len());
     let more = claims.len().saturating_sub(shown);
+    let style = derived::style_guidance(loaded, node, file);
     let mut v = serde_json::json!({
         "file": file,
         "node": node.map(|n| n.id.clone()),
         "path": node.map(|n| derived::chain(model, &n.id)),
         "layer": node.and_then(|n| n.layer.clone()),
+        "style": style.rule,
+        "violations": style.violations,
+        "tooling": style.tooling,
         "description": node.and_then(|n| n.description.clone()),
         "probe": node.and_then(|n| loaded.node_probe(&n.id)),
         "claims": claims.iter().take(shown).map(|c| loaded.claim_line(c)).collect::<Vec<_>>(),
@@ -749,6 +753,31 @@ mod tests {
         for gone in ["pending", "drift", "rules", "phase", "state"] {
             assert!(out.get(gone).is_none(), "orient no longer carries {gone}");
         }
+    }
+
+    /// For a file on a styled layer, orient gives the rule its layer is held to and the violations the check charges to it; for a file of a tooling container, that it is held to no style rules.
+    #[test]
+    fn orient_gives_a_files_style_rule_and_violations() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "Cargo.toml", "[package]\nname = \"ledger\"\nversion = \"0.1.0\"\n");
+        write(d, "src/lib.rs", "pub mod domain;\npub mod infrastructure;\n");
+        write(d, "src/domain/mod.rs", "pub mod money;\n");
+        write(d, "src/domain/money.rs", "pub fn add(a: u32) -> u32 { crate::infrastructure::db::open(); a }\n");
+        write(d, "src/infrastructure/mod.rs", "pub mod db;\n");
+        write(d, "src/infrastructure/db.rs", "pub fn open() {}\n");
+        write(d, "package.json", "{\"name\": \"web\"}\n");
+        write(d, "demo/remotion.config.ts", "export default {};\n");
+        write(d, "demo/film.tsx", "export const Film = 1;\n");
+        write(d, ".scryer/structure.toml", "[containers.ledger]\nstyle = \"library\"\n\n[containers.demo]\ntooling = true\n");
+        let out = json_of(&orient(&dir, None, &["src/domain/money.rs", "demo/film.tsx"]));
+        let (money, film) = (&out["files"][0], &out["files"][1]);
+        assert_eq!(money["style"], "domain (library) may import: domain", "{out}");
+        let violations = money["violations"].as_array().unwrap();
+        assert_eq!(violations.len(), 1, "{out}");
+        assert!(violations[0].as_str().unwrap().starts_with("breaks the style: "), "{out}");
+        assert_eq!(film["tooling"], "tooling: not held to style rules", "{out}");
+        assert!(film.get("style").is_none() && film.get("violations").is_none(), "{out}");
     }
 
     /// With another session live in the project, orient says per file who

@@ -93,6 +93,11 @@ pub struct ContainerConfig {
     /// The externals this container is the one to talk to.
     #[serde(default)]
     pub uses: Vec<Relation>,
+    /// Dev tooling (a demo, a harness, a viewer): on the map, but no product.
+    /// It needs no style, and it may import any layer of what it builds on;
+    /// its own cycles still count. A declaration, never detected.
+    #[serde(default)]
+    pub tooling: bool,
 }
 
 const DEFAULT_E2E: &[&str] = &["**/e2e/**", "**/*.e2e.*", "**/*.e2e-spec.*"];

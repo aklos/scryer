@@ -262,6 +262,12 @@ pub struct Node {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schemars(skip)]
     pub exercised_by: Vec<String>,
+    /// A container declared dev tooling in structure.toml (`tooling = true`):
+    /// on the map, but no product. It needs no style, and its imports into
+    /// other containers are never forbidden; its own cycles still count.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub tooling: Option<bool>,
 }
 
 /// The `empty` flag — a SYMBOL that carries no semantic content of its own: no
@@ -531,6 +537,7 @@ mod tests {
             style: None,
             layer: None,
             exercised_by: Vec::new(),
+            tooling: None,
         }
     }
 

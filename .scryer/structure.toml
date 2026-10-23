@@ -80,6 +80,21 @@ style = "core-shell"
 name = "Docs Site"
 style = "astro"
 
+# Dev tooling built on the app's own modules: the Remotion demo film (and its
+# reel), the component harness and the static export viewer. They stay on the
+# map, need no style, and may import any layer of the app.
+[containers.demo]
+tooling = true
+
+[containers."demo/reel"]
+tooling = true
+
+[containers.harness]
+tooling = true
+
+[containers.export-viewer]
+tooling = true
+
 # The node sidecar the Rust host runs to render component previews. It has no
 # manifest of its own, so it is declared a container here.
 [containers.preview]

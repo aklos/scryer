@@ -1138,6 +1138,10 @@ pub fn style_link_breach<'a>(
     let src_name = name_of(model, src);
     let dst_name = name_of(model, dst);
 
+    // Dev tooling may reach any layer of what it builds on.
+    if src_c.id != dst_c.id && src_c.tooling == Some(true) {
+        return None;
+    }
     if src_c.id != dst_c.id {
         let dst_style = governing_style(model, dst).and_then(|s| styles.get(s));
         // Entering from outside: land on an inbound layer.

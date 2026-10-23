@@ -500,6 +500,7 @@ mod tests {
             style: None,
             layer: None,
             exercised_by: Vec::new(),
+            tooling: None,
             id: "sym".into(),
             kind: Kind::Symbol,
             name: "alpha".into(),

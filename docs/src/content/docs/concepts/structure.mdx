@@ -25,12 +25,16 @@ integration = ["crates/*/tests/**"]
 name = "Ledger"
 style = "hexagonal"
 uses = [{ to = "payments-db", label = "stores entries in" }]
+
+[containers.storybook]
+tooling = true
 ```
 
 - `[system]` names the system, its people and the external systems it talks to.
-- `[relationships]` draws the context map: each key (the system's name, a person or an external) lists what it relates to, as a bare name or `{ to, label }`. These are declared facts, not read off imports. A name not declared under `[system]` is an error, like a misspelt key.
+- `[relationships]` draws the context map: each key (the system's name, a person or an external) lists what it relates to, as a bare name or `{ to, label }`. A key or target may also name a container declared under `[containers]`, by its key or display name: the link lands on that container and is lifted to the system for the context map. These are declared facts, not read off imports. A name declared neither under `[system]` nor under `[containers]` is an error, like a misspelt key. A person or external nothing relates still gets an unlabelled link to (or from) the system.
 - `[levels]` lists the globs whose tests are end-to-end or integration tests. Left out, e2e and integration directories are recognised by name, and a Rust crate's `tests/` directory is integration.
-- `[containers.<dir or package name>]` sets a container's display name, its architecture style and, optionally, its layers. `uses` names the externals this container is the one to talk to: each becomes a link from the container, drawn as a ghost on the container map, and a link from the system unless `[relationships]` already relates the two.
+- `[containers.<dir or package name>]` sets a container's display name, its architecture style and, optionally, its layers. `uses` names the externals this container is the one to talk to: each becomes a link from the container, drawn as a ghost on the container map, and a link from the system unless `[relationships]` already relates the two. A section keyed by a directory no manifest makes a container turns that directory into one.
+- `tooling = true` marks a container as dev tooling: a demo, a harness, a viewer built on the product's own modules. It stays on the map, needs no style, and may import any layer of the containers it builds on; its own import cycles still count. Tooling is only ever declared, never detected.
 
 ## Styles
 

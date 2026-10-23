@@ -11,8 +11,9 @@
 //! - UserPromptSubmit  → bind the harness process to the session; the prompt
 //!                       is never read; say nothing
 //! - PostToolUse read  → inject what the tree says about the file — its node,
-//!                       description and claims (once per session until it
-//!                       changes)
+//!                       what its layer may import and how the file breaks
+//!                       that, description and claims (once per session
+//!                       until it changes)
 //! - PostToolUse edit… → record the touch, say nothing
 //! - Pre/PostToolUse shell → record the files the command modified; while a
 //!                       probe is open, refuse a git command that would
@@ -410,8 +411,11 @@ fn absolutize(cwd: &str, file: &str) -> String {
 fn render_overlay(overlay: &serde_json::Value) -> Option<String> {
     let claims: Vec<&str> = overlay["claims"].as_array().into_iter().flatten().filter_map(|c| c.as_str()).collect();
     let description = overlay["description"].as_str();
+    let violations: Vec<&str> = overlay["violations"].as_array().into_iter().flatten().filter_map(|v| v.as_str()).collect();
+    let rule = overlay["style"].as_str();
+    let tooling = overlay["tooling"].as_str();
     overlay["node"].as_str()?;
-    if claims.is_empty() && description.is_none() {
+    if claims.is_empty() && description.is_none() && violations.is_empty() && rule.is_none() && tooling.is_none() {
         return None;
     }
     let file = overlay["file"].as_str().unwrap_or("this file");
@@ -419,8 +423,17 @@ fn render_overlay(overlay: &serde_json::Value) -> Option<String> {
         Some(p) => format!("[scryer] {file} — {p}\n"),
         None => format!("[scryer] {file}\n"),
     };
-    if let Some(layer) = overlay["layer"].as_str() {
-        out.push_str(&format!("layer: {layer}\n"));
+    // The layer with the rule it is held to, when its container has a style.
+    match (rule, overlay["layer"].as_str()) {
+        (Some(rule), _) => out.push_str(&format!("layer: {rule}\n")),
+        (None, Some(layer)) => out.push_str(&format!("layer: {layer}\n")),
+        (None, None) => {}
+    }
+    if let Some(t) = tooling {
+        out.push_str(&format!("{t}\n"));
+    }
+    for v in &violations {
+        out.push_str(&format!("{v}\n"));
     }
     if let Some(d) = description {
         out.push_str(&format!("{d}\n"));
@@ -686,6 +699,28 @@ mod tests {
         assert!(text.starts_with("[scryer] src/lib.rs — app › api"), "{text}");
         assert!(text.contains("- [proven] When asked, serves requests"), "{text}");
         assert!(text.ends_with("A new claim here is a todo test in tests/api.rs."), "{text}");
+    }
+
+    /// When a file sits on a styled layer, the overlay names what that layer may import and each violation the check charges to the file; a tooling container's file says it is held to no style rules.
+    #[test]
+    fn an_overlay_carries_the_style_a_file_is_held_to() {
+        let text = render_overlay(&serde_json::json!({
+            "file": "src/domain/order.rs",
+            "node": "n",
+            "layer": "domain",
+            "style": "domain (library) may import: domain",
+            "violations": ["breaks the style: 'Orders' (domain) → 'Postgres' (infrastructure) is illegal"]
+        }))
+        .unwrap();
+        assert_eq!(
+            text,
+            "[scryer] src/domain/order.rs\nlayer: domain (library) may import: domain\nbreaks the style: 'Orders' (domain) → 'Postgres' (infrastructure) is illegal"
+        );
+        let text = render_overlay(&serde_json::json!({
+            "file": "demo/film.tsx", "node": "n", "tooling": "tooling: not held to style rules"
+        }))
+        .unwrap();
+        assert_eq!(text, "[scryer] demo/film.tsx\ntooling: not held to style rules");
     }
 
 }

@@ -12,6 +12,9 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 pub(crate) struct Loaded {
     pub tree: DerivedTree,
     pub status: DerivedStatus,
+    /// The style table the tree was checked against: the built-ins plus the
+    /// project's own, for the rule a file's layer is held to.
+    pub styles: scryer_core::style::Styles,
 }
 
 impl Loaded {
@@ -56,7 +59,46 @@ impl Loaded {
 /// recorded verdicts, probes and mutation runs.
 pub(crate) fn load(r: &ModelRef) -> Result<Loaded, String> {
     let (tree, status) = scryer_extract::test_status::derived_status(r)?;
-    Ok(Loaded { tree, status })
+    Ok(Loaded { tree, status, styles: scryer_core::load_styles(r.project_path()) })
+}
+
+/// How many of a file's style violations a file entry lists before pointing
+/// at `check`.
+const FILE_VIOLATIONS_CAP: usize = 3;
+
+/// What the declared style asks of one file, for an agent about to edit it:
+/// the rule its layer is held to (`domain (library) may import: domain`),
+/// the violations the check charges to the file (its own detail, capped),
+/// and for a tooling container that it is held to none.
+pub(crate) struct StyleGuidance {
+    pub rule: Option<String>,
+    pub violations: Vec<String>,
+    pub tooling: Option<&'static str>,
+}
+
+pub(crate) fn style_guidance(loaded: &Loaded, node: Option<&Node>, file: &str) -> StyleGuidance {
+    let tree = &loaded.tree;
+    let model = &tree.planned;
+    let tooling = node
+        .and_then(|n| scryer_core::style::container_of(model, &n.id))
+        .is_some_and(|c| c.tooling == Some(true))
+        .then_some("tooling: not held to style rules");
+    let rule = node.filter(|_| tooling.is_none()).and_then(|n| {
+        let layer = n.layer.as_deref()?;
+        let name = scryer_core::style::governing_style(model, &n.id)?;
+        let def = loaded.styles.get(name)?;
+        let allowed = def.allowed(layer);
+        let allowed = if allowed.is_empty() { "nothing".to_string() } else { allowed.join(", ") };
+        Some(format!("{layer} ({name}) may import: {allowed}"))
+    });
+    let charged: Vec<&str> =
+        tree.style_violations.iter().filter(|v| v.file == file).map(|v| v.detail.as_str()).collect();
+    let mut violations: Vec<String> =
+        charged.iter().take(FILE_VIOLATIONS_CAP).map(|d| format!("breaks the style: {d}")).collect();
+    if charged.len() > FILE_VIOLATIONS_CAP {
+        violations.push(format!("{} more — scryer-mcp check", charged.len() - FILE_VIOLATIONS_CAP));
+    }
+    StyleGuidance { rule, violations, tooling }
 }
 
 /// The derived tree alone, without the status reads.

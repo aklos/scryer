@@ -726,6 +726,7 @@ mod tests {
             style: None,
             layer: None,
             exercised_by: Vec::new(),
+            tooling: None,
             id: id.into(),
             kind,
             name: id.into(),
