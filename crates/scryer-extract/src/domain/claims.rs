@@ -103,6 +103,25 @@ pub fn split_concerns(text: &str) -> (String, Vec<String>) {
     (rest.to_string(), tags)
 }
 
+/// A claim read as a sentence: its first letter uppercased when its first
+/// word is a plain lowercase word (`returns one segment` → `Returns one
+/// segment`). A first word that looks like code — backticked, or holding
+/// `_`, `.`, `(`, `:`, `/`, a digit or an inner capital (`getModel`, `iOS`)
+/// — stays as written.
+pub fn sentence_case(text: &str) -> String {
+    let first = text.split_whitespace().next().unwrap_or_default();
+    let word = first.trim_end_matches([',', ';', ':']);
+    let plain = word.starts_with(|c: char| c.is_lowercase())
+        && word.chars().all(|c| c.is_lowercase() || c == '\'' || c == '-');
+    if !plain {
+        return text.to_string();
+    }
+    let start = text.len() - text.trim_start().len();
+    let mut chars = text[start..].chars();
+    let head = chars.next().map(|c| c.to_uppercase().collect::<String>()).unwrap_or_default();
+    format!("{}{head}{}", &text[..start], chars.as_str())
+}
+
 /// An identifier read as words: `keeps_draft_when_save_fails`,
 /// `KeepsDraftWhenSaveFails` and `test_keeps_draft` all become
 /// `keeps draft …`. Acronyms keep their case.
@@ -173,6 +192,7 @@ fn make_test(
     let names = body_names(node, bytes, &identifier);
     let raw = doc.unwrap_or_else(|| de_snake(&identifier));
     let (description, concerns) = split_concerns(&raw);
+    let description = sentence_case(&description);
     LiftedTest { line, end_line, identifier, description, concerns, junit_name, planned, documented, names }
 }
 
@@ -709,6 +729,30 @@ mod tests {
         lift_file(path, src, &mut Parser::new())
     }
 
+    /// When a claim's first word is a plain lowercase word it starts with a capital, and when that word looks like code it stays as written, while the JUnit name keeps the report's spelling.
+    #[test]
+    fn claims_read_as_sentences() {
+        let src = "it(\"returns one plain segment\", () => {});\nit(\"getModel reads the model\", () => {});\nit(\"`save` keeps it\", () => {});\nit(\"iOS keeps it\", () => {});\nit(\"read_model answers\", () => {});\nit(\"v2 parses\", () => {});\n";
+        let l = lift("a.test.ts", src);
+        let got: Vec<(&str, &str)> = l.tests.iter().map(|t| (t.description.as_str(), t.junit_name.as_str())).collect();
+        assert_eq!(
+            got,
+            vec![
+                ("Returns one plain segment", "returns one plain segment"),
+                ("getModel reads the model", "getModel reads the model"),
+                ("`save` keeps it", "`save` keeps it"),
+                ("iOS keeps it", "iOS keeps it"),
+                ("read_model answers", "read_model answers"),
+                ("v2 parses", "v2 parses"),
+            ]
+        );
+        let rs = lift("src/x.rs", "#[test]\nfn retries_after_timeout() {}\n");
+        assert_eq!(rs.tests[0].description, "Retries after timeout");
+        assert_eq!(rs.tests[0].junit_name, "retries_after_timeout");
+        assert_eq!(sentence_case("don't drop it"), "Don't drop it");
+        assert_eq!(sentence_case("a.b works"), "a.b works");
+    }
+
     /// When a Rust test fn carries a `///` doc, the doc's first paragraph is
     /// the claim and trailing tags become concerns.
     #[test]
@@ -741,7 +785,7 @@ mod tests {
         assert_eq!(t.concerns, vec!["persistence"]);
         assert_eq!(t.junit_name, "keeps_draft");
         assert!(t.documented && !t.planned);
-        assert_eq!(l.tests[1].description, "retries after timeout");
+        assert_eq!(l.tests[1].description, "Retries after timeout");
         assert!(!l.tests[1].documented);
         assert_eq!(l.test_spans.len(), 1, "the cfg(test) module is test code");
     }
@@ -796,11 +840,11 @@ describe.skip("later", () => { it("does a thing", () => {}); });
         assert_eq!(
             got,
             vec![
-                ("hides children", "tree > when collapsed > hides children [ui]", false),
-                ("remembers the fold", "tree > when collapsed > remembers the fold", true),
-                ("renders %s rows", "tree > renders %s rows", false),
-                ("scrolls to selection", "tree > scrolls to selection", true),
-                ("does a thing", "later > does a thing", true),
+                ("Hides children", "tree > when collapsed > hides children [ui]", false),
+                ("Remembers the fold", "tree > when collapsed > remembers the fold", true),
+                ("Renders %s rows", "tree > renders %s rows", false),
+                ("Scrolls to selection", "tree > scrolls to selection", true),
+                ("Does a thing", "later > does a thing", true),
             ]
         );
         assert_eq!(l.tests[0].concerns, vec!["ui"]);
@@ -852,8 +896,8 @@ def helper():
             got,
             vec![
                 ("When a total has fractions of a cent, rounds half up", false),
-                ("scales linearly", false),
-                ("applies discount", true),
+                ("Scales linearly", false),
+                ("Applies discount", true),
                 ("Refunds the whole amount", true),
             ]
         );
@@ -901,9 +945,9 @@ public class DockTests
             vec![
                 ("When a rig is km out, refuses docking", "RefusesFarRigs", false),
                 ("Docks a rig in range", "DocksNearRigs", false),
-                ("charges fee per hour", "Charges_fee_per_hour", false),
-                ("undocks", "Undocks", true),
-                ("refuels", "Refuels", true),
+                ("Charges fee per hour", "Charges_fee_per_hour", false),
+                ("Undocks", "Undocks", true),
+                ("Refuels", "Refuels", true),
             ]
         );
         assert_eq!(l.tests[1].concerns, vec!["docking"]);

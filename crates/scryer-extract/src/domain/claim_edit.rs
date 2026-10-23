@@ -573,7 +573,7 @@ mod tests {
         let src = "describe('tree', () => {\n  it('hides children', () => {});\n});\n";
         let out = rewrite_description("a.test.ts", src, &site("hides children", 2, &[]), "hides the user's children").unwrap();
         assert!(out.contains(r"it('hides the user\'s children', () => {});"), "{out}");
-        assert_eq!(lifted("a.test.ts", &out), vec![("hides the user's children".into(), false)]);
+        assert_eq!(lifted("a.test.ts", &out), vec![("Hides the user's children".into(), false)]);
     }
 
     /// When a pytest claim is reworded, its docstring changes, or one is
@@ -649,8 +649,8 @@ mod tests {
         let out = insert_stub("tree.test.ts", Some(src), "scrolls to \"selection\"", Some("tree")).unwrap();
         assert!(out.contains("  it(\"hides\", () => {});\n  it.todo(\"scrolls to \\\"selection\\\"\");\n});\n"), "{out}");
         let fresh = insert_stub("new.test.ts", None, "renders", Some("new")).unwrap();
-        assert_eq!(lifted("new.test.ts", &fresh), vec![("renders".into(), true)]);
-        assert_eq!(lifted("tree.test.ts", &out)[1], ("scrolls to \"selection\"".into(), true));
+        assert_eq!(lifted("new.test.ts", &fresh), vec![("Renders".into(), true)]);
+        assert_eq!(lifted("tree.test.ts", &out)[1], ("Scrolls to \"selection\"".into(), true));
     }
 
     /// When a claim is added to a pytest file, a skipped test with the claim

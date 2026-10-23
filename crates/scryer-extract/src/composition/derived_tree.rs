@@ -178,7 +178,7 @@ mod tests {
         assert_eq!(home_of("Warms lazily").id, store.id);
         assert_eq!(named("warm").parent_id.as_deref(), Some(store.id.as_str()));
 
-        let smoke = home_of("boots without a backend");
+        let smoke = home_of("Boots without a backend");
         assert_eq!((smoke.kind, smoke.name.as_str()), (Kind::Component, "smoke"));
         let parent = m.nodes.iter().find(|n| Some(n.id.as_str()) == smoke.parent_id.as_deref()).unwrap();
         assert_eq!((parent.kind, parent.name.as_str()), (Kind::Container, "web"));

@@ -6,7 +6,7 @@
 //! `structure.toml`. Idempotent: what is already in the code is left alone.
 
 use crate::domain::claim_edit::{add_module_doc, insert_stub, rewrite_description, ClaimSite};
-use crate::domain::claims::lift_file;
+use crate::domain::claims::{lift_file, sentence_case};
 use crate::domain::structure::set_container_field;
 use crate::infrastructure::claim_files::stub_target;
 use crate::infrastructure::derived_tree::derived_tree;
@@ -241,7 +241,7 @@ pub fn migrate(project: &Path) -> Result<MigrationReport, String> {
         let existing = std::fs::read_to_string(project.join(&file)).ok();
         let already = existing
             .as_deref()
-            .is_some_and(|src| lift_file(&file, src, &mut parser).tests.iter().any(|t| t.description == statement));
+            .is_some_and(|src| lift_file(&file, src, &mut parser).tests.iter().any(|t| t.description == sentence_case(&statement)));
         if already {
             continue;
         }
