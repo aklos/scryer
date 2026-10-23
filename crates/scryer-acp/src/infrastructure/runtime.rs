@@ -603,6 +603,27 @@ mod acp_args_tests {
     fn an_adapter_is_spawned_with_no_flags() {
         assert!(acp_args(&AcpKind::Adapter, "gpt-5.5", "high").is_empty());
     }
+
+    /// When a stream-json line reports a turn's total usage, from Claude Code's result event or Codex's token count, reads it as the turn's usage, and ignores the per-chunk usage on assistant events.
+    #[test]
+    #[ignore]
+    fn reads_turn_usage_from_the_total_not_the_chunks() {
+        todo!()
+    }
+
+    /// When the agent's stream reports a tool use, shows one activity line naming the tool without its MCP prefix and what it acts on.
+    #[test]
+    #[ignore]
+    fn tool_use_reads_as_one_activity_line_without_the_mcp_prefix() {
+        todo!()
+    }
+
+    /// If neither `.mcp.json` nor `.github/mcp.json` declares the scryer server, then a Copilot launch fails with a message that names the fix.
+    #[test]
+    #[ignore]
+    fn copilot_launch_without_a_scryer_server_fails_naming_the_fix() {
+        todo!()
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

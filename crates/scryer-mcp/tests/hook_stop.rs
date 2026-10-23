@@ -43,3 +43,24 @@ fn stop_emits_nothing_and_closes_the_record() {
         .count();
     assert_eq!(stops, 2);
 }
+
+/// If the event is not JSON or no project is at or above its directory, then the hook exits 0 and prints nothing.
+#[test]
+#[ignore]
+fn bad_json_or_no_project_exits_silently() {
+    todo!()
+}
+
+/// When a hook fires below the project root, finds the project by walking up from `$CLAUDE_PROJECT_DIR`, else from the event's cwd.
+#[test]
+#[ignore]
+fn finds_the_project_from_below_its_root() {
+    todo!()
+}
+
+/// When the agent reads a file the tree speaks for, injects the file's overlay in its harness's envelope, `hookSpecificOutput` for Claude Code and Codex and a top-level `additionalContext` for Copilot.
+#[test]
+#[ignore]
+fn read_injects_the_overlay_in_each_harness_envelope() {
+    todo!()
+}

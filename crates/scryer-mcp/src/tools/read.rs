@@ -853,4 +853,32 @@ mod tests {
         );
         assert_eq!(out["results"][0]["path"], "notes / notes / draft", "{out}");
     }
+
+    /// When no node is named, read_model returns the tree down to components, each with its claim count in place of its claims.
+    #[test]
+    #[ignore]
+    fn read_model_without_a_node_outlines_to_components() {
+        todo!()
+    }
+
+    /// When a node is named, read_model returns its descendants, the links inside its subtree, and the links crossing its edge with the node at their far end.
+    #[test]
+    #[ignore]
+    fn read_model_of_a_node_returns_its_subtree_and_crossing_links() {
+        todo!()
+    }
+
+    /// When a query term is a near spelling of a word on a node, search_model finds the node, ranked below an exact match.
+    #[test]
+    #[ignore]
+    fn search_model_finds_a_near_spelling_below_an_exact_match() {
+        todo!()
+    }
+
+    /// If any query term matches nothing on a node, then search_model leaves the node out.
+    #[test]
+    #[ignore]
+    fn search_model_requires_every_term_to_match() {
+        todo!()
+    }
 }

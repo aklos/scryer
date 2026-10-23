@@ -95,3 +95,19 @@ pub fn covers_extent(line: u32, end_line: u32, extent: (u32, u32)) -> bool {
     line <= extent.0 + 1 && end_line + 1 >= extent.1
 }
 
+#[cfg(test)]
+mod tests {
+    /// When two spans differ only in CRLF versus LF line endings, fingerprints them the same.
+    #[test]
+    #[ignore]
+    fn crlf_and_lf_spans_fingerprint_the_same() {
+        todo!()
+    }
+
+    /// When an anchored symbol has several same-named definitions, resolves the one nearest its remembered line.
+    #[test]
+    #[ignore]
+    fn resolves_the_same_named_definition_nearest_the_remembered_line() {
+        todo!()
+    }
+}

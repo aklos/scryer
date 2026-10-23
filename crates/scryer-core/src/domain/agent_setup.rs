@@ -553,4 +553,11 @@ mod tests {
         assert!(matches!(gitignore_state(Some(&format!("{GITIGNORE_MARKER}\n*\n"))), EntryState::Stale(_)));
         assert!(matches!(gitignore_state(Some("build/\n")), EntryState::Foreign(_)));
     }
+
+    /// If another tool holds Claude Code's statusLine slot, then setup on leaves it in place and writes no status line of its own.
+    #[test]
+    #[ignore]
+    fn setup_on_leaves_a_foreign_status_line_alone() {
+        todo!()
+    }
 }

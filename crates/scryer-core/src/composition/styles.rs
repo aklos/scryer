@@ -52,4 +52,11 @@ mod tests {
         assert_eq!(styles.errors().len(), 1);
         assert!(styles.errors()[0].contains("broken.json"), "{:?}", styles.errors());
     }
+
+    /// When a project style file carries a built-in's name, uses it in place of the built-in.
+    #[test]
+    #[ignore]
+    fn project_style_overrides_a_same_named_built_in() {
+        todo!()
+    }
 }

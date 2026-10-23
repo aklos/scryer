@@ -108,4 +108,11 @@ mod tests {
         assert!(react.contains("shared.tsx"));
         assert!(!react.contains("Vue single-file component"));
     }
+
+    /// When a placeholder render came out empty or crashed, asks the agent to extend the shared type-keyed fixtures and manifest, writing nothing outside `.scryer/preview/fixtures/`, and quotes the render error when there is one.
+    #[test]
+    #[ignore]
+    fn fixture_prompt_confines_writes_and_quotes_the_render_error() {
+        todo!()
+    }
 }

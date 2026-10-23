@@ -70,3 +70,7 @@ describe("previewableNodeIds", () => {
     expect(previewableNodeIds(nodes, null, anchorOf).size).toBe(0);
   });
 });
+
+describe("usePreviewServer", () => {
+  it.todo("When a project opens, starts its preview server and lists the components it discovered");
+});
