@@ -8,6 +8,7 @@
 //! the node the file belongs to and carries no status.
 
 use crate::domain::lang;
+use std::collections::BTreeSet;
 use std::path::Path;
 use tree_sitter::{Node, Parser};
 
@@ -27,6 +28,9 @@ pub struct LiftedTest {
     pub planned: bool,
     /// The description was written, not de-snaked from the identifier.
     pub documented: bool,
+    /// Every identifier the test's code names (three characters or longer),
+    /// read once so the symbols it exercises are a set lookup.
+    pub names: BTreeSet<String>,
 }
 
 /// Everything one file says about claims.
@@ -99,6 +103,25 @@ pub fn split_concerns(text: &str) -> (String, Vec<String>) {
     (rest.to_string(), tags)
 }
 
+/// A claim read as a sentence: its first letter uppercased when its first
+/// word is a plain lowercase word (`returns one segment` → `Returns one
+/// segment`). A first word that looks like code — backticked, or holding
+/// `_`, `.`, `(`, `:`, `/`, a digit or an inner capital (`getModel`, `iOS`)
+/// — stays as written.
+pub fn sentence_case(text: &str) -> String {
+    let first = text.split_whitespace().next().unwrap_or_default();
+    let word = first.trim_end_matches([',', ';', ':']);
+    let plain = word.starts_with(|c: char| c.is_lowercase())
+        && word.chars().all(|c| c.is_lowercase() || c == '\'' || c == '-');
+    if !plain {
+        return text.to_string();
+    }
+    let start = text.len() - text.trim_start().len();
+    let mut chars = text[start..].chars();
+    let head = chars.next().map(|c| c.to_uppercase().collect::<String>()).unwrap_or_default();
+    format!("{}{head}{}", &text[..start], chars.as_str())
+}
+
 /// An identifier read as words: `keeps_draft_when_save_fails`,
 /// `KeepsDraftWhenSaveFails` and `test_keeps_draft` all become
 /// `keeps draft …`. Acronyms keep their case.
@@ -158,6 +181,7 @@ fn first_paragraph(lines: &[String]) -> Option<String> {
 
 fn make_test(
     node: Node,
+    bytes: &[u8],
     identifier: String,
     doc: Option<String>,
     junit_name: String,
@@ -165,9 +189,63 @@ fn make_test(
 ) -> LiftedTest {
     let (line, end_line) = line_of(node);
     let documented = doc.is_some();
+    let names = body_names(node, bytes, &identifier);
     let raw = doc.unwrap_or_else(|| de_snake(&identifier));
     let (description, concerns) = split_concerns(&raw);
-    LiftedTest { line, end_line, identifier, description, concerns, junit_name, planned, documented }
+    let description = sentence_case(&description);
+    LiftedTest { line, end_line, identifier, description, concerns, junit_name, planned, documented, names }
+}
+
+/// The identifiers a test's code spells, three characters or longer, the
+/// test's own name left out: what it can be said to exercise. Strings and
+/// comments name nothing, and neither does a bare name the test binds itself
+/// (`let dir = …`, a parameter): its uses mean the local. A field or method
+/// (`r.dir()`) still names what it reaches.
+fn body_names(node: Node, bytes: &[u8], own: &str) -> BTreeSet<String> {
+    let mut bare = BTreeSet::new();
+    let mut members = BTreeSet::new();
+    let mut bound = BTreeSet::new();
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        // A path (`super::add`, `a.b.C`) is read leaf by leaf.
+        if n.kind().ends_with("identifier") && n.named_child_count() == 0 {
+            let t = text(n, bytes);
+            if t.len() >= 3 && t != own {
+                let set = if n.kind() == "identifier" { &mut bare } else { &mut members };
+                set.insert(t.to_string());
+            }
+            continue;
+        }
+        if n.kind().contains("comment") {
+            continue;
+        }
+        let binding = match n.kind() {
+            "let_declaration" | "for_expression" | "parameter" | "required_parameter" | "optional_parameter" => {
+                n.child_by_field_name("pattern")
+            }
+            "variable_declarator" => n.child_by_field_name("name"),
+            "assignment" | "for_statement" | "for_in_statement" => n.child_by_field_name("left"),
+            "closure_parameters" | "formal_parameters" | "parameters" => Some(n),
+            "arrow_function" => n.child_by_field_name("parameter"),
+            _ => None,
+        };
+        if let Some(b) = binding {
+            let mut pending = vec![b];
+            while let Some(p) = pending.pop() {
+                if matches!(p.kind(), "identifier" | "shorthand_property_identifier_pattern") {
+                    bound.insert(text(p, bytes).to_string());
+                } else if !p.kind().ends_with("type") && p.kind() != "type_annotation" {
+                    let mut cursor = p.walk();
+                    pending.extend(p.named_children(&mut cursor));
+                }
+            }
+        }
+        let mut cursor = n.walk();
+        stack.extend(n.named_children(&mut cursor));
+    }
+    bare.retain(|name| !bound.contains(name));
+    bare.append(&mut members);
+    bare
 }
 
 // --- Rust ---
@@ -201,7 +279,7 @@ fn rust_tests(node: Node, bytes: &[u8], lift: &mut FileLift) {
                 let ignored = attrs.iter().any(|a| rust_attr_path(a) == "ignore");
                 let planned = ignored || rust_body_is_todo(child, bytes);
                 let doc = first_paragraph(&docs);
-                lift.tests.push(make_test(child, name.clone(), doc, name, planned));
+                lift.tests.push(make_test(child, bytes, name.clone(), doc, name, planned));
             }
             "mod_item" => {
                 let (attrs, _) = rust_preamble(child, bytes);
@@ -373,7 +451,7 @@ fn js_tests(
                             t[1..t.len().saturating_sub(1)].to_string()
                         });
                         let identifier = raw.unwrap_or_else(|| name.clone());
-                        out.push(make_test(child, identifier, Some(name), junit, planned));
+                        out.push(make_test(child, bytes, identifier, Some(name), junit, planned));
                         continue;
                     }
                     _ => {}
@@ -499,7 +577,7 @@ fn py_tests(node: Node, bytes: &[u8], in_test_class: bool, out: &mut Vec<LiftedT
                     .map(|d| d.lines().map(str::to_string).collect::<Vec<_>>())
                     .and_then(|lines| first_paragraph(&lines));
                 let stub = body.is_some_and(|b| py_body_is_stub(b, bytes));
-                out.push(make_test(child, name.clone(), doc, name, skipped || stub));
+                out.push(make_test(child, bytes, name.clone(), doc, name, skipped || stub));
             }
             "class_definition" if name.starts_with("Test") => {
                 if let Some(body) = def.child_by_field_name("body") {
@@ -589,7 +667,7 @@ fn cs_tests(node: Node, bytes: &[u8], out: &mut Vec<LiftedTest>) {
             matches!(stmts.as_slice(), [only] if text(*only, bytes).contains("NotImplementedException"))
         });
         let doc = cs_named_arg(*test_attr, bytes, "DisplayName").or_else(|| cs_xml_summary(child, bytes));
-        out.push(make_test(child, name.clone(), doc, name, skipped || stub));
+        out.push(make_test(child, bytes, name.clone(), doc, name, skipped || stub));
     }
 }
 
@@ -651,6 +729,30 @@ mod tests {
         lift_file(path, src, &mut Parser::new())
     }
 
+    /// When a claim's first word is a plain lowercase word it starts with a capital, and when that word looks like code it stays as written, while the JUnit name keeps the report's spelling.
+    #[test]
+    fn claims_read_as_sentences() {
+        let src = "it(\"returns one plain segment\", () => {});\nit(\"getModel reads the model\", () => {});\nit(\"`save` keeps it\", () => {});\nit(\"iOS keeps it\", () => {});\nit(\"read_model answers\", () => {});\nit(\"v2 parses\", () => {});\n";
+        let l = lift("a.test.ts", src);
+        let got: Vec<(&str, &str)> = l.tests.iter().map(|t| (t.description.as_str(), t.junit_name.as_str())).collect();
+        assert_eq!(
+            got,
+            vec![
+                ("Returns one plain segment", "returns one plain segment"),
+                ("getModel reads the model", "getModel reads the model"),
+                ("`save` keeps it", "`save` keeps it"),
+                ("iOS keeps it", "iOS keeps it"),
+                ("read_model answers", "read_model answers"),
+                ("v2 parses", "v2 parses"),
+            ]
+        );
+        let rs = lift("src/x.rs", "#[test]\nfn retries_after_timeout() {}\n");
+        assert_eq!(rs.tests[0].description, "Retries after timeout");
+        assert_eq!(rs.tests[0].junit_name, "retries_after_timeout");
+        assert_eq!(sentence_case("don't drop it"), "Don't drop it");
+        assert_eq!(sentence_case("a.b works"), "a.b works");
+    }
+
     /// When a Rust test fn carries a `///` doc, the doc's first paragraph is
     /// the claim and trailing tags become concerns.
     #[test]
@@ -683,7 +785,7 @@ mod tests {
         assert_eq!(t.concerns, vec!["persistence"]);
         assert_eq!(t.junit_name, "keeps_draft");
         assert!(t.documented && !t.planned);
-        assert_eq!(l.tests[1].description, "retries after timeout");
+        assert_eq!(l.tests[1].description, "Retries after timeout");
         assert!(!l.tests[1].documented);
         assert_eq!(l.test_spans.len(), 1, "the cfg(test) module is test code");
     }
@@ -738,11 +840,11 @@ describe.skip("later", () => { it("does a thing", () => {}); });
         assert_eq!(
             got,
             vec![
-                ("hides children", "tree > when collapsed > hides children [ui]", false),
-                ("remembers the fold", "tree > when collapsed > remembers the fold", true),
-                ("renders %s rows", "tree > renders %s rows", false),
-                ("scrolls to selection", "tree > scrolls to selection", true),
-                ("does a thing", "later > does a thing", true),
+                ("Hides children", "tree > when collapsed > hides children [ui]", false),
+                ("Remembers the fold", "tree > when collapsed > remembers the fold", true),
+                ("Renders %s rows", "tree > renders %s rows", false),
+                ("Scrolls to selection", "tree > scrolls to selection", true),
+                ("Does a thing", "later > does a thing", true),
             ]
         );
         assert_eq!(l.tests[0].concerns, vec!["ui"]);
@@ -794,8 +896,8 @@ def helper():
             got,
             vec![
                 ("When a total has fractions of a cent, rounds half up", false),
-                ("scales linearly", false),
-                ("applies discount", true),
+                ("Scales linearly", false),
+                ("Applies discount", true),
                 ("Refunds the whole amount", true),
             ]
         );
@@ -843,9 +945,9 @@ public class DockTests
             vec![
                 ("When a rig is km out, refuses docking", "RefusesFarRigs", false),
                 ("Docks a rig in range", "DocksNearRigs", false),
-                ("charges fee per hour", "Charges_fee_per_hour", false),
-                ("undocks", "Undocks", true),
-                ("refuels", "Refuels", true),
+                ("Charges fee per hour", "Charges_fee_per_hour", false),
+                ("Undocks", "Undocks", true),
+                ("Refuels", "Refuels", true),
             ]
         );
         assert_eq!(l.tests[1].concerns, vec!["docking"]);

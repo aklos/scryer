@@ -139,6 +139,7 @@ mod tests {
             directives: Vec::new(),
             style: None,
             layer: None,
+            exercised_by: Vec::new(),
         });
         let tree = DerivedTree {
             fingerprint: 7,
@@ -149,6 +150,7 @@ mod tests {
             dark_files: Vec::new(),
             style_violations: Vec::new(),
             layer_exempt: Vec::new(),
+            tooling: Default::default(),
         };
         write_derived_tree_at(&r, &tree).unwrap();
         assert_eq!(read_derived_tree_at(&r).unwrap().fingerprint, 7);
@@ -194,6 +196,7 @@ mod tests {
             dark_files: Vec::new(),
             style_violations: Vec::new(),
             layer_exempt: Vec::new(),
+            tooling: Default::default(),
         };
         write_derived_tree_at(&r, &tree).unwrap();
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();

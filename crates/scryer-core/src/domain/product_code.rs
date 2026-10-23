@@ -76,10 +76,19 @@ pub const SOURCE_EXTS: &[&str] = &[
     "clj", "cljs", "cljc", "cljr", // Clojure / ClojureScript / cross-platform / CLR
 ];
 
+/// Whether a project-relative path has a segment whose name starts with a dot:
+/// a directory (`.claude/`, `.github/`, `.devcontainer/`) or the file itself
+/// (`.eslintrc.js`). Tool and editor configuration, never the product,
+/// whatever source it holds.
+pub fn is_dot_path(rel_path: &str) -> bool {
+    rel_path.split('/').any(|seg| seg.starts_with('.') && seg != "." && seg != "..")
+}
+
 /// Is this project-relative path product source code — a file whose change can
 /// carry architecture? True only for parseable source extensions, excluding
 /// code that exists but carries none: TypeScript declaration/mirror files
-/// (`*.d.ts`), test doubles in a `stubs/` directory, and generated sources.
+/// (`*.d.ts`), test doubles in a `stubs/` directory, generated sources, and
+/// anything under a dot directory or named with a leading dot.
 /// The single gate shared by extraction (which files mint symbols) and drift
 /// (which changed files demand reconciliation) — assets, lockfiles, and
 /// generated churn never reach a modeling agent through either path.
@@ -95,6 +104,9 @@ pub fn is_product_code(rel_path: &str) -> bool {
     // unit's dependency manifest, not its architecture — a version bump there
     // should not demand an architecture reconciliation.
     if rel_path.ends_with("project.clj") || rel_path.ends_with("build.boot") {
+        return false;
+    }
+    if is_dot_path(rel_path) {
         return false;
     }
     let mut segs = rel_path.split('/');

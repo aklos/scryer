@@ -178,7 +178,7 @@ mod tests {
         assert_eq!(home_of("Warms lazily").id, store.id);
         assert_eq!(named("warm").parent_id.as_deref(), Some(store.id.as_str()));
 
-        let smoke = home_of("boots without a backend");
+        let smoke = home_of("Boots without a backend");
         assert_eq!((smoke.kind, smoke.name.as_str()), (Kind::Component, "smoke"));
         let parent = m.nodes.iter().find(|n| Some(n.id.as_str()) == smoke.parent_id.as_deref()).unwrap();
         assert_eq!((parent.kind, parent.name.as_str()), (Kind::Container, "web"));
@@ -206,7 +206,8 @@ mod tests {
             .collect();
         assert_eq!(layerless, BTreeSet::from(["odd".to_string()]), "{:?}", tree.style_violations);
         let exempt: BTreeSet<String> = tree.layer_exempt.iter().map(|id| name_of(id)).collect();
-        assert_eq!(exempt, BTreeSet::from(["build".to_string(), "examples".to_string()]));
+        // The build script is tooling, not a component at all.
+        assert_eq!(exempt, BTreeSet::from(["examples".to_string()]));
     }
 
     /// When a container declares a project style from `.scryer/styles/`, its
@@ -299,6 +300,280 @@ mod tests {
         assert_eq!(link("Pay", "db"), Some("stores entries in"));
         assert_eq!(link("Pay", "merchant"), None);
         assert!(tree.style_violations.is_empty(), "{:?}", tree.style_violations);
+    }
+
+    /// When a directory name starts with a dot, it never becomes a component or a container, and its files are neither symbols nor dark.
+    #[test]
+    fn dot_directories_are_never_the_product() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "package.json", "{\"name\": \"web\"}\n");
+        write(d, "src/app.ts", "export function boot() { return 1; }\n");
+        write(d, ".claude/skills/run/scripts/wd.py", "def drive():\n    pass\n");
+        write(d, ".github/actions/tag/package.json", "{\"name\": \"tag\"}\n");
+        write(d, ".github/actions/tag/index.js", "export function tag() {}\n");
+        let tree = derived_tree_uncached(d).unwrap();
+        let m = &tree.planned;
+        let names: Vec<&str> =
+            m.nodes.iter().filter(|n| matches!(n.kind, Kind::Container | Kind::Component)).map(|n| n.name.as_str()).collect();
+        assert!(names.iter().all(|n| !n.starts_with('.') && *n != "tag" && *n != "scripts"), "{names:?}");
+        assert!(m.nodes.iter().all(|n| n.name != "drive" && n.name != "tag"), "no symbols from dot directories");
+        assert!(tree.file_nodes.keys().chain(&tree.dark_files).all(|f| !f.starts_with('.')), "{:?}", tree.file_nodes);
+    }
+
+    /// When a tool's config file sits outside its package's source root, it is no component and not dark, while one inside `src/` is product code.
+    #[test]
+    fn tool_configs_outside_the_source_root_are_not_components() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "package.json", "{\"name\": \"web\"}\n");
+        write(d, "vite.config.ts", "export default { plugins: [] };\n");
+        write(d, "harness/vite.config.ts", "export default {};\n");
+        write(d, "src/content.config.ts", "export const collections = { docs: 1 };\n");
+        let tree = derived_tree_uncached(d).unwrap();
+        let components: BTreeSet<&str> =
+            tree.planned.nodes.iter().filter(|n| n.kind == Kind::Component).map(|n| n.name.as_str()).collect();
+        assert_eq!(components, BTreeSet::from(["content"]));
+        assert!(tree.dark_files.iter().all(|f| !f.ends_with("vite.config.ts")), "{:?}", tree.dark_files);
+    }
+
+    /// When a symbol has a doc comment it is the node's description, and a data shape's properties carry each field's type and doc.
+    #[test]
+    fn symbols_carry_their_docs_and_typed_properties() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "Cargo.toml", "[package]\nname = \"core\"\nversion = \"0.1.0\"\n");
+        write(d, "src/lib.rs", "pub mod draft;\n");
+        write(
+            d,
+            "src/draft.rs",
+            "/// What the user types.\npub struct Draft {\n    /// The text, as typed.\n    pub text: String,\n}\n\n/// Saves a draft.\npub fn save(_d: &Draft) {}\n",
+        );
+        let tree = derived_tree_uncached(d).unwrap();
+        let named = |n: &str| tree.planned.nodes.iter().find(|x| x.name == n).unwrap();
+        let draft = named("Draft");
+        assert_eq!(draft.description.as_deref(), Some("What the user types."));
+        let p = &draft.properties[0];
+        assert_eq!((p.label.as_str(), p.ty.as_deref(), p.description.as_str()), ("text", Some("String"), "The text, as typed."));
+        assert_eq!(named("save").description.as_deref(), Some("Saves a draft."));
+        assert!(named("save").properties.is_empty());
+    }
+
+    /// When a React function component takes props, they are its node's properties and it carries the React component technology, so it does not read as a data shape.
+    #[test]
+    fn a_react_components_props_are_its_properties() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "package.json", "{\"name\": \"web\"}\n");
+        write(
+            d,
+            "src/ui/Card.tsx",
+            "interface CardProps {\n  /** Shown on top. */\n  title: string;\n  size?: number;\n}\n/** A card. */\nexport function Card({ title }: CardProps) { return <div>{title}</div>; }\n",
+        );
+        let tree = derived_tree_uncached(d).unwrap();
+        let card = tree.planned.nodes.iter().find(|x| x.name == "Card").unwrap();
+        assert_eq!(card.technology.as_deref(), Some(crate::domain::derive::REACT_COMPONENT));
+        assert_eq!(card.description.as_deref(), Some("A card."));
+        let props: Vec<(&str, Option<&str>, &str)> =
+            card.properties.iter().map(|p| (p.label.as_str(), p.ty.as_deref(), p.description.as_str())).collect();
+        assert_eq!(props, vec![("title", Some("string"), "Shown on top."), ("size?", Some("number"), "")]);
+        let shape = tree.planned.nodes.iter().find(|x| x.name == "CardProps").unwrap();
+        assert_eq!(shape.technology, None, "the props interface itself is a data shape");
+    }
+
+    /// When a test's body names a symbol defined in its own file or in a file it imports, the symbol records that claim as exercising it; a name the test binds itself, a name under three characters, and a file the test does not import record nothing.
+    #[test]
+    fn a_symbol_records_the_claims_that_exercise_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "web/package.json", "{\"name\": \"web\"}\n");
+        write(d, "web/src/money.ts", "export function add(a: number, b: number) { return a + b; }\nexport function ok() { return 1; }\nexport function total() { return 0; }\n");
+        write(d, "web/src/other.ts", "export function add() { return 0; }\n");
+        write(
+            d,
+            "web/src/money.test.ts",
+            "import { add, ok } from \"./money\";\nit(\"Adds two amounts\", () => { const total = add(1, 2); ok(); expect(total).toBe(3); });\nit.todo(\"Adds three amounts\", () => { add(1, 2); });\n",
+        );
+        write(d, "Cargo.toml", "[package]\nname = \"core\"\nversion = \"0.1.0\"\n");
+        write(d, "src/lib.rs", "pub mod domain;\n");
+        write(
+            d,
+            "src/domain.rs",
+            "pub fn post(n: u32) -> u32 { n }\n#[cfg(test)]\nmod tests {\n    /// Posts an amount\n    #[test]\n    fn posts() { assert_eq!(super::post(1), 1); }\n}\n",
+        );
+        let tree = derived_tree_uncached(d).unwrap();
+        let claim = |desc: &str| tree.claims.iter().find(|c| c.description == desc).unwrap().id.clone();
+        let exercised = |m: &scryer_core::ScryModel, file: &str, name: &str| {
+            let node = m.nodes.iter().find(|n| n.name == name && m.source_map[&n.id][0].pattern == file).unwrap();
+            node.exercised_by.clone()
+        };
+        let (adds, adds3, posts) = (claim("Adds two amounts"), claim("Adds three amounts"), claim("Posts an amount"));
+        let m = &tree.planned;
+        assert_eq!(exercised(m, "web/src/money.ts", "add"), vec![adds.clone(), adds3]);
+        assert!(exercised(m, "web/src/money.ts", "ok").is_empty(), "a two-letter name is too short to tell");
+        assert!(exercised(m, "web/src/money.ts", "total").is_empty(), "the test's own `total` is a local");
+        assert!(exercised(m, "web/src/other.ts", "add").is_empty(), "the test does not import other.ts");
+        assert_eq!(exercised(m, "src/domain.rs", "post"), vec![posts]);
+        assert_eq!(exercised(&tree.committed, "web/src/money.ts", "add"), vec![adds], "a planned claim is in the plan only");
+    }
+
+    /// When structure.toml declares persons and externals but relates none of them, each person gets an unlabelled link to the system and the system one to each external; a declared relationship replaces the default.
+    #[test]
+    fn unrelated_actors_get_default_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "Cargo.toml", "[package]\nname = \"ledger\"\nversion = \"0.1.0\"\n");
+        write(d, "src/lib.rs", "pub fn post() {}\n");
+        write(
+            d,
+            ".scryer/structure.toml",
+            "[system]\nname = \"Pay\"\npersons = [\"merchant\", \"auditor\"]\nexternals = [\"bank\", \"db\"]\n\n[relationships]\nauditor = [{ to = \"Pay\", label = \"reviews\" }]\n\"Pay\" = [{ to = \"bank\", label = \"settles with\" }]\n",
+        );
+        let tree = derived_tree_uncached(d).unwrap();
+        let m = &tree.committed;
+        let id = |name: &str| m.nodes.iter().find(|n| n.name == name).unwrap().id.clone();
+        let link = |a: &str, b: &str| m.links.iter().find(|l| l.src == id(a) && l.dst == id(b)).map(|l| l.label.as_str());
+        assert_eq!(link("merchant", "Pay"), Some(""));
+        assert_eq!(link("auditor", "Pay"), Some("reviews"));
+        assert_eq!(link("Pay", "db"), Some(""));
+        assert_eq!(link("Pay", "bank"), Some("settles with"));
+        assert_eq!(m.links.iter().filter(|l| l.dst == id("Pay") || l.src == id("Pay")).count(), 4);
+    }
+
+    /// When a relationship names a container, the link sits on that container and is lifted to the system for the context map with its label.
+    #[test]
+    fn a_relationship_to_a_container_lands_on_it_and_lifts_to_the_system() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n");
+        write(d, "crates/api/Cargo.toml", "[package]\nname = \"api\"\nversion = \"0.1.0\"\n");
+        write(d, "crates/api/src/lib.rs", "pub fn serve() {}\n");
+        write(
+            d,
+            ".scryer/structure.toml",
+            "[system]\nname = \"Pay\"\npersons = [\"merchant\"]\nexternals = [\"bank\"]\n\n[relationships]\nmerchant = [{ to = \"API\", label = \"calls\" }]\n\n[containers.api]\nname = \"API\"\nuses = [{ to = \"bank\", label = \"settles with\" }]\n",
+        );
+        let tree = derived_tree_uncached(d).unwrap();
+        let m = &tree.committed;
+        let id = |name: &str| m.nodes.iter().find(|n| n.name == name).unwrap().id.clone();
+        let link = |a: &str, b: &str| m.links.iter().find(|l| l.src == id(a) && l.dst == id(b)).map(|l| l.label.as_str());
+        assert_eq!(link("merchant", "API"), Some("calls"));
+        assert_eq!(link("merchant", "Pay"), Some("calls"));
+        assert_eq!(link("API", "bank"), Some("settles with"));
+        assert_eq!(link("Pay", "bank"), Some("settles with"));
+    }
+
+    /// When a JS/TS package imports `@tauri-apps/api` and a crate of the repo depends on `tauri`, the package links to the crate as invoking its commands.
+    #[test]
+    fn a_tauri_frontend_links_to_its_host_crate() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "package.json", "{\"name\": \"app\", \"dependencies\": {\"@tauri-apps/api\": \"^2\"}}\n");
+        write(d, "src/api.ts", "import { invoke } from \"@tauri-apps/api/core\";\nexport function load() { return invoke(\"load\"); }\n");
+        write(d, "src-tauri/Cargo.toml", "[package]\nname = \"host\"\nversion = \"0.1.0\"\n[dependencies]\ntauri = \"2\"\n[build-dependencies]\ntauri-build = \"2\"\n");
+        write(d, "src-tauri/src/main.rs", "fn main() {}\n");
+        write(d, "crates/plugin/Cargo.toml", "[package]\nname = \"plugin\"\nversion = \"0.1.0\"\n[dependencies]\ntauri = \"2\"\n");
+        write(d, "crates/plugin/src/lib.rs", "pub fn init() {}\n");
+        let tree = derived_tree_uncached(d).unwrap();
+        let m = &tree.committed;
+        let id = |name: &str| m.nodes.iter().find(|n| n.name == name && n.kind == Kind::Container).unwrap().id.clone();
+        let link = |a: &str, b: &str| m.links.iter().find(|l| l.src == id(a) && l.dst == id(b)).map(|l| l.label.as_str());
+        assert_eq!(link("app", "host"), Some("invokes commands"));
+        assert_eq!(link("app", "plugin"), None, "the app crate, not every crate on tauri");
+    }
+
+    /// When a package has an entry point, its components are the directories the entry reaches through imports, and what nothing reaches is listed as the container's tooling, neither a component nor dark.
+    #[test]
+    fn a_packages_components_are_what_its_entries_reach() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "package.json", "{\"name\": \"web\"}\n");
+        write(d, "index.html", "<html><body><script type=\"module\" src=\"/src/app/main.tsx\"></script></body></html>\n");
+        write(d, "src/app/main.tsx", "import { Page } from \"../pages/Page\";\nexport const root = Page;\n");
+        write(d, "src/pages/Page.tsx", "export function Page() { return null; }\n");
+        write(d, "src/shared/unused.ts", "export const lost = 1;\n");
+        write(d, "scripts/export.mjs", "export function run() {}\n");
+        write(d, "vite.config.ts", "export default {};\n");
+        let tree = derived_tree_uncached(d).unwrap();
+        let m = &tree.planned;
+        let components: BTreeSet<&str> = m.nodes.iter().filter(|n| n.kind == Kind::Component).map(|n| n.name.as_str()).collect();
+        assert_eq!(components, BTreeSet::from(["app", "pages", "shared"]), "the source root an entry sits in is reached whole");
+        let web = m.nodes.iter().find(|n| n.kind == Kind::Container).unwrap();
+        assert_eq!(tree.tooling[&web.id], vec!["scripts/export.mjs".to_string(), "vite.config.ts".to_string()]);
+        assert!(tree.dark_files.iter().all(|f| !f.starts_with("scripts/")), "{:?}", tree.dark_files);
+        assert!(tree.dark_files.contains(&"src/shared/unused.ts".to_string()), "{:?}", tree.dark_files);
+    }
+
+    /// When a package declares no entry point and has none by convention, every directory in it stays a component.
+    #[test]
+    fn without_an_entry_every_directory_is_a_component() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "package.json", "{\"name\": \"web\"}\n");
+        write(d, "lib/a.ts", "export const a = 1;\n");
+        write(d, "scripts/b.mjs", "export const b = 1;\n");
+        let tree = derived_tree_uncached(d).unwrap();
+        let components: BTreeSet<&str> =
+            tree.planned.nodes.iter().filter(|n| n.kind == Kind::Component).map(|n| n.name.as_str()).collect();
+        assert_eq!(components, BTreeSet::from(["lib", "scripts"]));
+        assert!(tree.tooling.is_empty());
+    }
+
+    /// When a crate has lib, bin or example targets, its build script is tooling while its source modules and examples stay components.
+    #[test]
+    fn a_crates_build_script_is_tooling() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "Cargo.toml", "[package]\nname = \"host\"\nversion = \"0.1.0\"\n");
+        write(d, "build.rs", "fn main() {}\n");
+        write(d, "src/main.rs", "mod shell;\nfn main() {}\n");
+        write(d, "src/shell/mod.rs", "pub fn run() {}\n");
+        write(d, "examples/smoke.rs", "fn main() {}\n");
+        let tree = derived_tree_uncached(d).unwrap();
+        let components: BTreeSet<&str> =
+            tree.planned.nodes.iter().filter(|n| n.kind == Kind::Component).map(|n| n.name.as_str()).collect();
+        assert_eq!(components, BTreeSet::from(["examples", "shell"]));
+        assert_eq!(tree.tooling.values().flatten().collect::<Vec<_>>(), vec!["build.rs"]);
+    }
+
+    /// When a directory inside a package has an app entry of its own (an index.html or a bundler config), it is a container named after the directory, not a component of the package.
+    #[test]
+    fn a_nested_app_is_its_own_container() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "package.json", "{\"name\": \"web\", \"main\": \"src/index.ts\"}\n");
+        write(d, "src/index.ts", "export const x = 1;\n");
+        write(d, "harness/index.html", "<script type=\"module\" src=\"./main.tsx\"></script>\n");
+        write(d, "harness/main.tsx", "import { x } from \"../src/index\";\nexport const y = x;\n");
+        write(d, "harness/vite.config.ts", "export default {};\n");
+        write(d, "demo/remotion.config.ts", "export default {};\n");
+        write(d, "demo/Root.tsx", "export function Root() { return null; }\n");
+        write(d, "tests/fixtures/site/index.html", "<script type=\"module\" src=\"./a.js\"></script>\n");
+        write(d, "tests/fixtures/site/a.js", "export const a = 1;\n");
+        let tree = derived_tree_uncached(d).unwrap();
+        let containers: BTreeSet<&str> =
+            tree.planned.nodes.iter().filter(|n| n.kind == Kind::Container).map(|n| n.name.as_str()).collect();
+        assert_eq!(containers, BTreeSet::from(["demo", "harness", "web"]));
+        let harness = tree.planned.nodes.iter().find(|n| n.name == "harness").unwrap();
+        assert_eq!(tree.tooling[&harness.id], vec!["harness/vite.config.ts".to_string()]);
+    }
+
+    /// When structure.toml declares a container for a directory no manifest makes one, the directory becomes that container.
+    #[test]
+    fn structure_toml_promotes_a_directory_to_a_container() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "package.json", "{\"name\": \"web\"}\n");
+        write(d, "src/a.ts", "export const a = 1;\n");
+        write(d, "preview/server.mjs", "export function serve() {}\n");
+        write(d, ".scryer/structure.toml", "[containers.preview]\nname = \"Preview Server\"\n");
+        let tree = derived_tree_uncached(d).unwrap();
+        let m = &tree.planned;
+        let preview = m.nodes.iter().find(|n| n.name == "Preview Server").unwrap();
+        assert_eq!(preview.kind, Kind::Container);
+        let serve = m.nodes.iter().find(|n| n.name == "serve").unwrap();
+        let parent = m.nodes.iter().find(|n| Some(n.id.as_str()) == serve.parent_id.as_deref()).unwrap();
+        assert_eq!(parent.parent_id.as_deref(), Some(preview.id.as_str()));
     }
 
     /// When a file is reached only by its colocated test's import, or is a

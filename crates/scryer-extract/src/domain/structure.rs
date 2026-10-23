@@ -6,7 +6,8 @@
 
 use glob::{MatchOptions, Pattern};
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use crate::domain::context::Container;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub use scryer_core::derived_tree::ClaimLevel;
 
@@ -23,8 +24,10 @@ pub struct Structure {
     /// Keyed by container directory or name (crate/package name).
     #[serde(default)]
     pub containers: BTreeMap<String, ContainerConfig>,
-    /// Context-level relationships, keyed by the source's name: the system,
-    /// a person or an external. Declared, not read off the code.
+    /// Relationships, keyed by the source's name: the system, a person, an
+    /// external, or a container `[containers]` declares (by key or display
+    /// name), which places the relationship on that container and lifts it to
+    /// the system for the context. Declared, not read off the code.
     #[serde(default)]
     pub relationships: BTreeMap<String, Vec<Relation>>,
 }
@@ -108,17 +111,19 @@ impl Structure {
         Ok(s)
     }
 
-    /// Every name a relationship or a `uses` gives must be declared under
-    /// `[system]`, the way a misspelt key is an error.
+    /// Every name a relationship or a `uses` gives must be declared: under
+    /// `[system]`, or — for a relationship — as a container under
+    /// `[containers]`, the way a misspelt key is an error.
     fn check_names(&self) -> Result<(), String> {
         let known = |name: &str| {
             self.system.name.as_deref() == Some(name)
                 || self.system.persons.iter().any(|p| p == name)
                 || self.system.externals.iter().any(|e| e == name)
+                || self.names_container(name)
         };
         let unknown = |name: &str| {
             format!(
-                "structure.toml: [relationships] names \"{name}\", which is not the system's name, a person or an external under [system]"
+                "structure.toml: [relationships] names \"{name}\", which is not the system's name, a person or an external under [system], nor a container under [containers]"
             )
         };
         for (src, targets) in &self.relationships {
@@ -145,7 +150,14 @@ impl Structure {
         Ok(())
     }
 
-    /// The declared context relationships as (source, target, label).
+    /// Whether `name` is a container `[containers]` declares, by its key
+    /// (directory or package name) or its display name.
+    pub fn names_container(&self, name: &str) -> bool {
+        self.containers.iter().any(|(key, c)| key == name || c.name.as_deref() == Some(name))
+    }
+
+    /// The declared relationships as (source, target, label). An end may be
+    /// the system, a person, an external or a declared container.
     pub fn relationships(&self) -> impl Iterator<Item = (&str, &str, Option<&str>)> {
         self.relationships
             .iter()
@@ -178,6 +190,33 @@ impl Structure {
     /// Whether the test radius includes e2e tests (`radius = "all"`).
     pub fn radius_includes_e2e(&self) -> bool {
         self.radius.as_deref() == Some("all")
+    }
+
+    /// Make a container of every directory `[containers."<dir>"]` declares
+    /// that no manifest made one: a key naming no discovered container's
+    /// directory or package, under which the project has files. Named after
+    /// the directory; the section's `name` still applies.
+    pub fn promote_declared_dirs(&self, containers: &mut Vec<Container>, files: &BTreeSet<String>) {
+        for key in self.containers.keys() {
+            let prefix = format!("{key}/");
+            if key.is_empty()
+                || containers.iter().any(|c| &c.dir == key || &c.name == key)
+                || !files.iter().any(|f| f.starts_with(&prefix))
+            {
+                continue;
+            }
+            containers.push(Container {
+                dir: key.clone(),
+                name: key.rsplit('/').next().unwrap_or(key).to_string(),
+                technology: None,
+                dep_dirs: Vec::new(),
+                go_module: None,
+                clj_paths: Vec::new(),
+                packages: Vec::new(),
+                entries: Vec::new(),
+            });
+        }
+        containers.sort_by(|a, b| a.dir.cmp(&b.dir));
     }
 
     /// The config for a container, looked up by directory, then by name
@@ -338,6 +377,18 @@ layers = ["domain", "application", "composition", "infrastructure"]
         }
         let err = Structure::parse(&format!("{SYSTEM}\n[relationships]\nmerchant = [\"Payy\"]\n")).unwrap_err();
         assert!(err.contains("\"Payy\""), "{err}");
+    }
+
+    /// When a relationship names a container declared under [containers], by its key or its display name, it parses.
+    #[test]
+    fn a_relationship_may_name_a_declared_container() {
+        let s = Structure::parse(&format!(
+            "{SYSTEM}\n[relationships]\nmerchant = [{{ to = \"Checkout\", label = \"pays in\" }}]\nledger = [\"bank\"]\n\n[containers.web]\nname = \"Checkout\"\n\n[containers.ledger]\n"
+        ))
+        .unwrap();
+        let rels: Vec<_> = s.relationships().collect();
+        assert_eq!(rels, vec![("ledger", "bank", None), ("merchant", "Checkout", Some("pays in"))]);
+        assert!(Structure::parse(&format!("{SYSTEM}\n[relationships]\nmerchant = [\"web\"]\n")).is_err());
     }
 
     /// When a container says which externals it uses, they parse with their

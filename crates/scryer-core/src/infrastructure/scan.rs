@@ -264,6 +264,15 @@ mod tests {
         assert!(!is_product_code("app/__generated__/gql.ts"));
     }
 
+    /// When a path runs through a directory whose name starts with a dot, or the file's own name does, it is not product code.
+    #[test]
+    fn dot_paths_are_not_product_code() {
+        assert!(!is_product_code(".claude/skills/run-app-headless/scripts/wd.py"));
+        assert!(!is_product_code("web/.storybook/main.ts"));
+        assert!(!is_product_code(".eslintrc.js"));
+        assert!(is_product_code("web/src/main.ts"));
+    }
+
     /// When a directory has a `.git` folder or a manifest at its root (a .csproj or .sln found by extension included), counts it as a codebase.
     #[test]
     fn a_git_folder_or_manifest_marks_a_codebase() {

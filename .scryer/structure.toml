@@ -6,6 +6,20 @@ name = "scryer"
 persons = ["developer", "agent"]
 externals = ["claude code", "codex", "copilot cli"]
 
+# Who uses scryer and how. A relationship that names a container sits on it
+# and is lifted to the system for the context map.
+[relationships]
+developer = [
+  { to = "Desktop App UI", label = "reads claims, their status and health in" },
+  { to = "MCP Server", label = "turns on agent integration and runs check with" },
+]
+agent = [{ to = "MCP Server", label = "orients, reads the tree and reports test runs and probes over MCP" }]
+"claude code" = [{ to = "MCP Server", label = "launches as its MCP server and session hook" }]
+codex = [{ to = "MCP Server", label = "launches as its MCP server and session hook" }]
+"copilot cli" = [{ to = "MCP Server", label = "launches as its MCP server and session hook" }]
+"Desktop App Host" = [{ to = "Preview Server", label = "runs with node as its preview sidecar" }]
+"Desktop App UI" = [{ to = "Preview Server", label = "frames component previews from" }]
+
 [levels]
 e2e = ["e2e/**", "tests/e2e/**"]
 integration = ["crates/*/tests/**", "src-tauri/tests/**"]
@@ -40,6 +54,11 @@ layers = ["domain", "application", "composition", "infrastructure"]
 name = "Agent Sync"
 style = "library"
 layers = ["domain", "application", "composition", "infrastructure"]
+uses = [
+  { to = "claude code", label = "runs claude -p to write preview fixtures" },
+  { to = "codex", label = "runs codex exec to write preview fixtures" },
+  { to = "copilot cli", label = "drives over ACP to write preview fixtures" },
+]
 
 # No style, honestly: the server was declared core-shell, but its modules
 # are flat files under src/ (server, cli, hook_client, tools, derived,
@@ -60,3 +79,8 @@ style = "core-shell"
 [containers.docs]
 name = "Docs Site"
 style = "astro"
+
+# The node sidecar the Rust host runs to render component previews. It has no
+# manifest of its own, so it is declared a container here.
+[containers.preview]
+name = "Preview Server"

@@ -372,6 +372,7 @@ mod tests {
         Node {
             style: None,
             layer: None,
+            exercised_by: Vec::new(),
             id: id.into(),
             kind,
             name: id.into(),

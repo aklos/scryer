@@ -163,6 +163,7 @@ mod tests {
         m.nodes.push(Node {
             style: None,
             layer: None,
+            exercised_by: Vec::new(),
             id: "n1".into(),
             kind: Kind::Component,
             name: "N".into(),

@@ -2,12 +2,14 @@
 //! components the modules or directories inside them, symbols the extracted
 //! definitions, links the import graph between them. Claims are the lifted
 //! test descriptions, placed by test level: e2e under the system, integration
-//! under its container, unit under its component. Nothing here is authored
-//! except the little `structure.toml` adds: the persons and externals, and
-//! the relationships declared between them and the system.
+//! under its container, unit under its component; a symbol records the claims
+//! whose tests name it. Nothing here is authored except the little
+//! `structure.toml` adds: the persons and externals, and the relationships
+//! declared between them, the system and its containers.
 
 use crate::domain::claims::FileLift;
-use crate::domain::context::{ContainerFacts, Edge, FileContext};
+use crate::domain::context::{ContainerFacts, Edge, ExternalImport, FileContext};
+use crate::domain::lang::Member;
 use crate::domain::structure::{ClaimLevel, Structure};
 use scryer_core::derived_tree::{DerivedClaim, DerivedTree};
 use scryer_core::style::Styles;
@@ -23,6 +25,9 @@ pub struct DeriveInput<'a> {
     /// Parsed product files with their symbols.
     pub files: &'a [FileContext],
     pub file_edges: &'a [Edge],
+    /// Imports of packages outside the repository, for the IPC a frontend
+    /// talks to its host through (`@tauri-apps/api`).
+    pub external_imports: &'a [ExternalImport],
     /// Every product source file's lifted claims and module doc.
     pub lifts: &'a BTreeMap<String, FileLift>,
     /// Every file in the project, for manifest conventions.
@@ -33,6 +38,11 @@ pub struct DeriveInput<'a> {
     pub styles: &'a Styles,
     pub fingerprint: u64,
 }
+
+/// The technology a React function component's symbol carries: its
+/// properties are its props, and it is no data shape. Mirrors
+/// `REACT_COMPONENT` in the frontend's `viewmodel.ts`.
+pub const REACT_COMPONENT: &str = "React component";
 
 const ALPHABET: &[u8; 32] = b"0123456789abcdefghjkmnpqrstvwxyz";
 
@@ -107,6 +117,16 @@ fn is_test_container(c: &ContainerFacts) -> bool {
     })
 }
 
+/// Where a file sits inside its container: `crates/x/src/lib.rs` in
+/// `crates/x` is `src/lib.rs`.
+fn inner_of<'p>(container_dir: &str, rel: &'p str) -> &'p str {
+    if container_dir.is_empty() {
+        rel
+    } else {
+        rel.strip_prefix(container_dir).and_then(|r| r.strip_prefix('/')).unwrap_or(rel)
+    }
+}
+
 /// Where a file sits inside its container, the source root stripped:
 /// `crates/x/src/domain/model.rs` reads (`crates/x/src`, `domain/model.rs`).
 fn inner_path<'p>(container_dir: &str, rel: &'p str) -> (&'p str, &'p str) {
@@ -117,6 +137,27 @@ fn inner_path<'p>(container_dir: &str, rel: &'p str) -> (&'p str, &'p str) {
     };
     let inner = inner.strip_prefix("src/").unwrap_or(inner);
     (rel[..rel.len() - inner.len()].trim_end_matches('/'), inner)
+}
+
+/// A tool's configuration file outside its container's source root
+/// (`vite.config.ts`, `docs/astro.config.mjs`, `harness/vite.config.ts`): it
+/// configures the build and is no part of the product. One inside `src/`
+/// (Astro's `content.config.ts`) is product code like any other.
+fn is_tool_config(container_dir: &str, rel: &str) -> bool {
+    !inner_path(container_dir, rel).0.ends_with("src") && file_name(rel).contains(".config.")
+}
+
+/// A member as the property a symbol node shows: an optional one keeps its
+/// `?` on the label.
+fn property(m: &Member) -> SchemaProperty {
+    SchemaProperty {
+        label: if m.optional { format!("{}?", m.name) } else { m.name.clone() },
+        description: m.doc.clone().unwrap_or_default(),
+        ty: m.ty.clone(),
+        vagrant: None,
+        stale: None,
+        last_touched_at: None,
+    }
 }
 
 /// The component a product file belongs to: the first directory under the
@@ -251,18 +292,76 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
             })
     };
 
-    // Components: every product file's module or top directory.
+    let mut edges_from: HashMap<&str, Vec<&str>> = HashMap::new();
+    for e in input.file_edges.iter().filter(|e| !e.guessed) {
+        edges_from.entry(e.src.as_str()).or_default().push(e.dst.as_str());
+    }
+
+    // A package's components are the directories its entry points reach
+    // through the import graph: the entries its manifest or page names, and
+    // Cargo's conventional targets. An entry's top directory in the package
+    // is a source root, all of it reached (a Rust module tree is declared,
+    // not imported). A package with no entry found keeps every directory.
+    let mut product_paths: HashMap<&str, HashSet<String>> = HashMap::new();
+    for c in &containers_sorted {
+        let owned = |f: &str| owner(f).is_some_and(|o| o.dir == c.dir);
+        let within = |f: &'_ str| -> String { inner_of(&c.dir, f).to_string() };
+        let cargo_target = |f: &str| {
+            let inner = within(f);
+            matches!(inner.as_str(), "src/lib.rs" | "src/main.rs")
+                || inner.starts_with("src/bin/")
+                || inner.starts_with("examples/")
+        };
+        let seeds: BTreeSet<&str> = input
+            .lifts
+            .keys()
+            .map(String::as_str)
+            .filter(|f| owned(f) && !is_test_file(f))
+            .filter(|f| {
+                c.entries.iter().any(|e| e == f) || (cargo_dirs.contains(c.dir.as_str()) && f.ends_with(".rs") && cargo_target(f))
+            })
+            .collect();
+        if seeds.is_empty() {
+            continue;
+        }
+        let roots: BTreeSet<String> =
+            seeds.iter().filter_map(|f| within(f).split_once('/').map(|(top, _)| format!("{top}/"))).collect();
+        let mut reached: HashSet<&str> = input
+            .lifts
+            .keys()
+            .map(String::as_str)
+            .filter(|f| owned(f) && roots.iter().any(|r| within(f).starts_with(r.as_str())))
+            .chain(seeds.iter().copied())
+            .collect();
+        let mut queue: Vec<&str> = reached.iter().copied().collect();
+        while let Some(f) = queue.pop() {
+            for dst in edges_from.get(f).into_iter().flatten() {
+                if reached.insert(dst) {
+                    queue.push(dst);
+                }
+            }
+        }
+        let paths = reached.iter().filter(|f| owned(f)).map(|f| component_of(&c.dir, f).0).collect();
+        product_paths.insert(c.dir.as_str(), paths);
+    }
+
+    // Components: every product file's module or top directory. What no
+    // entry reaches, and a tool's config, is the container's tooling.
     let mut components: BTreeMap<String, Component> = BTreeMap::new();
     let mut file_component: HashMap<&str, String> = HashMap::new();
+    let mut tooling: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for rel in input.lifts.keys() {
         if is_test_file(rel) || crate_root(rel) {
             continue;
         }
         let Some(c) = owner(rel) else { continue };
-        if !container_ids.contains_key(c.dir.as_str()) {
+        let Some(container_id) = container_ids.get(c.dir.as_str()) else { continue };
+        let (path, name) = component_of(&c.dir, rel);
+        let unreached = product_paths.get(c.dir.as_str()).is_some_and(|paths| !paths.contains(&path));
+        if unreached || is_tool_config(&c.dir, rel) {
+            tooling.entry(container_id.clone()).or_default().push(rel.clone());
             continue;
         }
-        let (path, name) = component_of(&c.dir, rel);
         let comp = components.entry(path.clone()).or_insert_with(|| Component {
             id: String::new(),
             name,
@@ -277,10 +376,6 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
     }
 
     // Where each test file's claims go, by level.
-    let mut edges_from: HashMap<&str, Vec<&str>> = HashMap::new();
-    for e in input.file_edges.iter().filter(|e| !e.guessed) {
-        edges_from.entry(e.src.as_str()).or_default().push(e.dst.as_str());
-    }
     let mut homes: Vec<(&String, &FileLift, ClaimLevel, Home)> = Vec::new();
     for (rel, lift) in input.lifts {
         if lift.tests.is_empty() {
@@ -405,7 +500,10 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
     }
 
     // Symbols: outermost definitions of product files, test code left out;
-    // a crate root's sit on its container.
+    // a crate root's sit on its container. Each carries its doc comment, and
+    // a data shape its fields, a React component its props, typed and
+    // documented as written.
+    let mut file_symbols: HashMap<&str, Vec<(&str, usize)>> = HashMap::new();
     for f in input.files {
         let parent = match file_component.get(f.rel_path.as_str()) {
             Some(path) => sub_ids.get(f.rel_path.as_str()).unwrap_or(&components[path].id).clone(),
@@ -433,19 +531,18 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
             }
             let id = stable_id("node", &format!("symbol:{}#{}", f.rel_path, sym.name), &mut taken);
             let mut n = node(&id, Kind::Symbol, &sym.name, Some(&parent));
-            if sym.is_data_shape {
-                n.properties = sym
-                    .fields
-                    .iter()
-                    .map(|label| SchemaProperty {
-                        label: label.clone(),
-                        description: String::new(),
-                        vagrant: None,
-                        stale: None,
-                        last_touched_at: None,
-                    })
-                    .collect();
+            n.description = sym.doc.clone();
+            if sym.is_data_shape || sym.is_component {
+                n.properties = if sym.members.is_empty() {
+                    sym.fields.iter().map(|name| property(&Member { name: name.clone(), ..Default::default() })).collect()
+                } else {
+                    sym.members.iter().map(property).collect()
+                };
             }
+            if sym.is_component {
+                n.technology = Some(REACT_COMPONENT.to_string());
+            }
+            file_symbols.entry(f.rel_path.as_str()).or_default().push((sym.name.as_str(), model.nodes.len()));
             model.source_map.insert(
                 id.clone(),
                 vec![SourceLocation {
@@ -474,8 +571,20 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
             Home::TestStem(dir, stem) => stem_ids[&(dir.clone(), stem.clone())].clone(),
             Home::System => system_id.clone(),
         };
+        // The files whose symbols this file's tests can exercise: its own
+        // (an inline test module) and the files it imports.
+        let reachable: BTreeSet<&str> = std::iter::once(rel.as_str())
+            .chain(edges_from.get(rel.as_str()).into_iter().flatten().copied())
+            .collect();
         for t in &lift.tests {
             let id = stable_id("resp", &format!("claim:{rel}#{}", t.junit_name), &mut taken);
+            for f in &reachable {
+                for &(name, idx) in file_symbols.get(f).into_iter().flatten() {
+                    if name.len() >= 3 && t.names.contains(name) {
+                        model.nodes[idx].exercised_by.push(id.clone());
+                    }
+                }
+            }
             let concern = t.concerns.iter().find(|c| !c.contains(':')).cloned();
             let idx = node_index[&node_id];
             model.nodes[idx].responsibilities.push(Responsibility {
@@ -550,22 +659,91 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         push_link(&mut model, &mut seen, &mut taken, ca.unwrap_or(sa), cb.unwrap_or(sb), Some(LinkKind::Depends), "");
     }
 
-    // Declared links: the context relationships structure.toml gives, and
-    // the externals a container says it is the one to talk to. Facts the
-    // config states, not read off imports; a container's use of an external
-    // is the system's too, with its label, unless the config relates the two
-    // itself.
+    // Tauri's IPC: a frontend calls its Rust host through `invoke`, never an
+    // import, so the import graph has no edge between them. A JS/TS container
+    // whose files import `@tauri-apps/api` invokes the commands of the repo's
+    // crate on `tauri` — the app, the one building with `tauri-build`, when
+    // several crates are on it.
+    let depends_on = |c: &ContainerFacts, package: &str| {
+        cargo_dirs.contains(c.dir.as_str()) && c.packages.iter().any(|p| p == package)
+    };
+    let mut hosts: Vec<&ContainerFacts> =
+        containers_sorted.iter().copied().filter(|c| depends_on(c, "tauri")).collect();
+    if hosts.iter().any(|c| depends_on(c, "tauri-build")) {
+        hosts.retain(|c| depends_on(c, "tauri-build"));
+    }
+    let fronts: BTreeSet<&str> = input
+        .external_imports
+        .iter()
+        .filter(|i| i.package == "@tauri-apps/api" && !is_test_file(&i.file))
+        .filter_map(|i| owner(&i.file))
+        .map(|c| c.dir.as_str())
+        .filter(|d| container_ids.contains_key(d))
+        .collect();
+    for front in &fronts {
+        for host in hosts.iter().filter(|h| h.dir != *front) {
+            let (a, b) = (&container_ids[front], &container_ids[host.dir.as_str()]);
+            push_link(&mut model, &mut seen, &mut taken, a, b, None, "invokes commands");
+        }
+    }
+
+    // Declared links: the relationships structure.toml gives, and the
+    // externals a container says it is the one to talk to. Facts the config
+    // states, not read off imports. A relationship with a container at one
+    // end sits on that container, and on the system too for the context, with
+    // its label, unless the config relates the two itself; so does a
+    // container's use of an external.
+    let declared_container = |name: &str| -> Option<&String> {
+        containers_sorted
+            .iter()
+            .find(|c| {
+                c.dir == name
+                    || c.name == name
+                    || s.container(&c.name, &c.dir).and_then(|k| k.name.as_deref()) == Some(name)
+            })
+            .map(|c| &container_ids[c.dir.as_str()])
+    };
+    let mut related: HashSet<&str> = HashSet::new();
+    let mut lifted: Vec<(String, String, &str)> = Vec::new();
     for (src, dst, label) in s.relationships() {
-        let (Some(a), Some(b)) = (context_ids.get(src), context_ids.get(dst)) else { continue };
-        push_link(&mut model, &mut seen, &mut taken, a, b, None, label.unwrap_or_default());
+        related.insert(src);
+        related.insert(dst);
+        let label = label.unwrap_or_default();
+        let (ca, cb) = (context_ids.get(src), context_ids.get(dst));
+        if let (Some(a), Some(b)) = (ca, cb) {
+            push_link(&mut model, &mut seen, &mut taken, a, b, None, label);
+            continue;
+        }
+        let (Some(a), Some(b)) = (ca.or_else(|| declared_container(src)), cb.or_else(|| declared_container(dst))) else {
+            continue;
+        };
+        push_link(&mut model, &mut seen, &mut taken, a, b, None, label);
+        let lift = |end: Option<&String>, id: &String| end.map_or(system_id.clone(), |_| id.clone());
+        let (la, lb) = (lift(ca, a), lift(cb, b));
+        if la != lb {
+            lifted.push((la, lb, label));
+        }
     }
     for c in &containers_sorted {
         let Some(config) = s.container(&c.name, &c.dir) else { continue };
         for u in &config.uses {
             let Some(external) = context_ids.get(u.to()) else { continue };
-            push_link(&mut model, &mut seen, &mut taken, &container_ids[c.dir.as_str()], external, None, u.label().unwrap_or_default());
-            push_link(&mut model, &mut seen, &mut taken, &system_id, external, None, u.label().unwrap_or_default());
+            related.insert(u.to());
+            let label = u.label().unwrap_or_default();
+            push_link(&mut model, &mut seen, &mut taken, &container_ids[c.dir.as_str()], external, None, label);
+            lifted.push((system_id.clone(), external.clone(), label));
         }
+    }
+    for (a, b, label) in &lifted {
+        push_link(&mut model, &mut seen, &mut taken, a, b, None, label);
+    }
+    // An actor nothing relates is still the system's: a person uses it, and
+    // it uses an external. Unlabelled, since nothing says how.
+    for person in s.system.persons.iter().filter(|p| !related.contains(p.as_str())) {
+        push_link(&mut model, &mut seen, &mut taken, &context_ids[person.as_str()], &system_id, None, "");
+    }
+    for external in s.system.externals.iter().filter(|e| !related.contains(e.as_str())) {
+        push_link(&mut model, &mut seen, &mut taken, &system_id, &context_ids[external.as_str()], None, "");
     }
 
     scryer_core::concerns::register_concerns(&mut model);
@@ -573,6 +751,7 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
     let mut committed = model.clone();
     for n in committed.nodes.iter_mut() {
         n.responsibilities.retain(|r| !planned_ids.contains(r.id.as_str()));
+        n.exercised_by.retain(|id| !planned_ids.contains(id.as_str()));
     }
     committed.test_map.retain(|id, _| !planned_ids.contains(id.as_str()));
     // A crate root maps to its crate, so code no test reaches there is dark
@@ -657,6 +836,7 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         dark_files,
         style_violations: Vec::new(),
         layer_exempt,
+        tooling,
     }
 }
 
@@ -832,5 +1012,6 @@ fn node(id: &str, kind: Kind, name: &str, parent: Option<&str>) -> Node {
         directives: Vec::new(),
         style: None,
         layer: None,
+        exercised_by: Vec::new(),
     }
 }

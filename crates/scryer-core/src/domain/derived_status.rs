@@ -342,6 +342,7 @@ mod tests {
             directives: Vec::new(),
             style: None,
             layer: None,
+            exercised_by: Vec::new(),
         }
     }
 
@@ -406,6 +407,7 @@ mod tests {
                 detail: "x".into(),
             }],
             layer_exempt: Vec::new(),
+            tooling: Default::default(),
         }
     }
 

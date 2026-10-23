@@ -42,6 +42,15 @@ pub struct Container {
     /// `:source-paths`. Relative to `dir`. A Clojure namespace maps to a file
     /// path under one of these, so without them `app.db` is unresolvable.
     pub clj_paths: Vec<String>,
+    /// Every package the manifest declares a dependency on, by name: Cargo's
+    /// dependency tables, package.json's `dependencies`/`devDependencies`.
+    pub packages: Vec<String>,
+    /// The files the unit declares as its entry points, project-relative:
+    /// package.json `main`/`module`/`exports`/`bin`, the module scripts its
+    /// `index.html` loads, Cargo `[lib]`/`[[bin]]`/`[[example]]` paths.
+    /// Cargo's conventional targets are not listed; they follow from the
+    /// files present.
+    pub entries: Vec<String>,
 }
 
 /// The flattened alias table governing one directory subtree.
@@ -153,6 +162,12 @@ pub struct ContainerFacts {
     pub technology: Option<String>,
     /// Directories of other containers this one declares a path dependency on.
     pub dep_dirs: Vec<String>,
+    /// Every package the manifest declares a dependency on, by name.
+    #[serde(skip)]
+    pub packages: Vec<String>,
+    /// The files the unit declares as its entry points. See [`Container::entries`].
+    #[serde(skip)]
+    pub entries: Vec<String>,
 }
 
 /// `SeedUnit` is scryer-core's own plain projection of these facts (the model
@@ -192,6 +207,15 @@ pub struct SymbolContext {
     /// Declared field/variant names when this is a data shape; else empty.
     pub fields: Vec<String>,
     pub is_data_shape: bool,
+    /// The definition's doc comment, as plain text. See [`Def::doc`].
+    #[serde(skip)]
+    pub doc: Option<String>,
+    /// Fields, variants or props with their types and docs. See [`Def::members`].
+    #[serde(skip)]
+    pub members: Vec<crate::domain::lang::Member>,
+    /// A React function component. See [`Def::is_component`].
+    #[serde(skip)]
+    pub is_component: bool,
     /// Source excerpt: contiguous doc/attribute lines above the definition plus
     /// the definition itself, capped at extraction time (no truncation marker —
     /// `excerpt_total_lines` says how long the real thing is). Carried only in
@@ -328,6 +352,8 @@ pub fn build_context(
             name: c.name.clone(),
             technology: c.technology.clone(),
             dep_dirs: c.dep_dirs.clone(),
+            packages: c.packages.clone(),
+            entries: c.entries.clone(),
         })
         .collect();
 
@@ -360,6 +386,9 @@ pub fn build_context(
                 end_line: def.end_line,
                 fields: def.fields.clone(),
                 is_data_shape: def.is_data_shape,
+                doc: def.doc.clone(),
+                members: def.members.clone(),
+                is_component: def.is_component,
                 excerpt,
                 excerpt_total_lines,
             });
@@ -2059,6 +2088,7 @@ mod tests {
             end_line: end,
             fields: Vec::new(),
             is_data_shape: false,
+            ..Default::default()
         }
     }
 
@@ -2077,6 +2107,8 @@ mod tests {
             dep_dirs: Vec::new(),
             go_module: None,
             clj_paths: Vec::new(),
+            packages: Vec::new(),
+            entries: Vec::new(),
         }
     }
 

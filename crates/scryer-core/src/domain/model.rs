@@ -102,6 +102,10 @@ pub struct SchemaProperty {
     pub label: String,
     #[serde(default)]
     pub description: String,
+    /// The declared type, as written in the source (`Option<String>`,
+    /// `(id: string) => void`). Absent when the code declares none.
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    pub ty: Option<String>,
     /// Drift adoption marker, the property-level twin of [`Responsibility::vagrant`]:
     /// `flag_drift` discovered a declared data field that no property described and
     /// proposed it into the PLAN. Awaits a human verdict — adopt (the field exists,
@@ -252,6 +256,12 @@ pub struct Node {
     /// The layer this component plays in its governing style, from the style's layer list. Components only; symbols inherit it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layer: Option<String>,
+    /// The claims (responsibility ids) whose tests exercise this symbol: the
+    /// test's body names it, and it is defined in the test's file or in a file
+    /// the test imports. Derived; the claims stay on their component.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(skip)]
+    pub exercised_by: Vec<String>,
 }
 
 /// The `empty` flag — a SYMBOL that carries no semantic content of its own: no
@@ -520,6 +530,7 @@ mod tests {
             directives: Vec::new(),
             style: None,
             layer: None,
+            exercised_by: Vec::new(),
         }
     }
 

@@ -72,6 +72,11 @@ pub struct DerivedTree {
     /// cycles.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layer_exempt: Vec<String>,
+    /// A container id → its tooling: source files no entry point reaches
+    /// (scripts, tool configs). No component holds them and they are never
+    /// dark.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tooling: BTreeMap<String, Vec<String>>,
 }
 
 /// One style violation, charged to the node whose code has to move.

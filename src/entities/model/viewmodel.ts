@@ -72,6 +72,8 @@ export interface Responsibility {
 export interface SchemaProperty {
   label: string;
   description?: string;
+  /** The declared type as written in the source. Mirrors Rust `SchemaProperty.ty`. */
+  type?: string;
   /** Drift adoption marker, the property-level twin of {@link Responsibility.vagrant}:
    *  `flag_drift` found a declared field no property described. Renders as a drift
    *  mark (Q), not a plan add (A); awaits adopt/reject. Mirrors Rust `SchemaProperty.vagrant`. */
@@ -131,8 +133,14 @@ export interface Node {
    *  `Node.stale`. */
   stale?: boolean;
   responsibilities?: Responsibility[];
-  /** Field declarations, when this symbol defines a data shape. */
+  /** Field declarations, when this symbol defines a data shape; a React
+   *  component's props. */
   properties?: SchemaProperty[];
+  /** The claims (responsibility ids) whose tests exercise this symbol: the
+   *  test's body names it, and it is defined in the test's file or a file the
+   *  test imports. Derived; the claims stay on their component. Mirrors Rust
+   *  `Node.exercised_by`. */
+  exercisedBy?: string[];
   /** Optional lucide-react icon name override (frontend-only). */
   icon?: string;
   /** User-authored freeform notes — self-context and traversal aids, distinct
@@ -239,17 +247,25 @@ export function emptyModel(): ScryModel {
  * behavior. Renders with the table affordance and (like the former `schema`
  * kind) hides its incoming links, which are typically too numerous to be
  * useful. A symbol carrying both properties and responsibilities is not a pure
- * data shape and renders as a normal code node.
+ * data shape and renders as a normal code node, and neither is a React
+ * component, whose properties are its props.
  */
 export function isDataShape(node: {
   properties?: SchemaProperty[];
   responsibilities?: Responsibility[];
+  technology?: string;
 }): boolean {
   return (
     (node.properties?.length ?? 0) > 0 &&
-    (node.responsibilities?.length ?? 0) === 0
+    (node.responsibilities?.length ?? 0) === 0 &&
+    node.technology !== REACT_COMPONENT
   );
 }
+
+/** The technology the derivation gives a React function component, whose
+ *  properties are its props, not a data shape's fields. Mirrors Rust
+ *  `REACT_COMPONENT` in scryer-extract's derive. */
+export const REACT_COMPONENT = "React component";
 
 /** The anchors visible in the working view. Code-side mapping has a single
  *  home: the committed model owns every committed element's anchor; the plan
