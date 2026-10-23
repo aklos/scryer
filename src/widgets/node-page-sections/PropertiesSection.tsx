@@ -49,7 +49,7 @@ function buildPropDiff(planned: SchemaProperty[], committed: SchemaProperty[]): 
   }).map(({ item, ...row }) => ({ ...row, prop: item }));
 }
 
-/** One property as a mono diff row — the field name, then its description after
+/** One property as a mono diff row — the field name and its type, then its description after
  *  an em-dash (word-diffed when reworded), keyed to the shared marker/number
  *  grid so it reads as part of the same diff sheet as the responsibilities. */
 function PropDiffRow({
@@ -84,6 +84,7 @@ function PropDiffRow({
       </span>
       <div className="min-w-0 font-mono text-sm leading-relaxed">
         <span className={`font-medium ${contentColor}`}>{prop.label || "field"}</span>
+        {prop.type && <span className="text-[var(--text-tertiary)]">: {prop.type}</span>}
         {(desc || (kind === "reworded" && prev?.description)) && (
           <span className="text-[var(--text-tertiary)]">
             {" "}—{" "}

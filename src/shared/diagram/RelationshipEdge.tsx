@@ -120,12 +120,12 @@ export function RelationshipEdge({
   const labelY = data?.bow ? 0.25 * sy + 0.5 * cyp + 0.25 * ty : (sy + ty) / 2;
   // Parallel (reverse-pair) edges share one chord, so a midpoint pill can't be
   // told apart from its twin. Place each label by (a) sliding it along the chord
-  // toward its own source — the pair lands at ~35%/65% and clears ALONG the line
+  // toward its own source — the pair lands at ~22%/78% and clears ALONG the line
   // at any angle — and (b) nudging it to its lane's OUTER side so the pill hugs
   // its own line. Both flip with direction, so the pair reads as opposite lanes.
   let labelDivX = labelX, labelDivY = labelY;
   if (data?.parallel) {
-    const t = 0.35;
+    const t = 0.22;
     const px = sx + (tx - sx) * t, py = sy + (ty - sy) * t;
     labelDivX = px + -uy * PARALLEL_LABEL_GAP;
     labelDivY = py + ux * PARALLEL_LABEL_GAP;
@@ -230,7 +230,9 @@ export function RelationshipEdge({
             className="flex flex-col items-center"
           >
             {label && (
-              <div className="whitespace-nowrap rounded bg-[var(--surface-active)]/80 px-1.5 py-0.5 text-[10px] text-[var(--text)]">
+              // Wrapped to a narrow column: a sentence-long label on one line
+              // runs across its neighbours' pills where edges converge.
+              <div className="w-max max-w-[150px] rounded bg-[var(--surface-active)]/80 px-1.5 py-0.5 text-center text-[10px] leading-tight text-[var(--text)]">
                 {label}
               </div>
             )}

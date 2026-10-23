@@ -10,7 +10,8 @@
  *    expandable to where it is
  *  - lede: the description paragraph, no heading
  *  - sections with per-section [edit] links, swapped to edit mode in place:
- *    preview, responsibilities with their test verdicts, properties,
+ *    preview, claims with their test verdicts, the claims that exercise a
+ *    symbol, properties,
  *    connections and implied connections
  *
  * Mutations flow through the Editor intents.
@@ -62,6 +63,7 @@ import { DescriptionSection } from "../../widgets/node-page-sections/Description
 import { plannedRespHosts, ResponsibilitiesSection } from "../../widgets/node-page-sections/ResponsibilitiesSection";
 import { PropertiesSection } from "../../widgets/node-page-sections/PropertiesSection";
 import { PreviewSection } from "../../widgets/node-page-sections/PreviewSection";
+import { ExercisedBySection } from "../../widgets/node-page-sections/ExercisedBySection";
 import { previewEntryFor } from "../../features/preview-client/usePreviewServer";
 import { allowedImports, governingStyleDef, layerOf } from "../../entities/model/styles";
 
@@ -474,7 +476,9 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 />
               )}
 
-              {!dataShape && (
+              {/* A symbol owns no claims by design; its section shows only
+                  when a test is placed on it directly. */}
+              {!dataShape && !(node.kind === "symbol" && resps.length === 0) && (
                 <ResponsibilitiesSection
                   host="node"
                   hostId={node.id}
@@ -493,6 +497,15 @@ function NodePageBody(props: PageProps & { node: Node }) {
                   editor={editor}
                   editing={ed.isEditing("responsibilities")}
                   onToggle={() => ed.toggle("responsibilities")}
+                />
+              )}
+
+              {node.kind === "symbol" && (node.exercisedBy?.length ?? 0) > 0 && (
+                <ExercisedBySection
+                  claimIds={node.exercisedBy!}
+                  model={model}
+                  status={report?.derivedStatus ?? null}
+                  onSelectNode={onSelectNode}
                 />
               )}
 
