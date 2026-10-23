@@ -173,6 +173,10 @@ The server reads the C4 tree derived from your code — containers from packagin
 - `ingest_mutation_report` — record a cargo-mutants or Stryker run; surviving mutants mark the code they landed in.
 - `open_probe` / `close_probe` — break the code a passing test exercises in an isolated worktree and see whether the test notices; a surviving break is a finding.
 
+### The scryer skill
+
+`scryer-mcp setup on` also installs a `scryer` skill: `.claude/skills/scryer/SKILL.md` for Claude Code and Copilot, `.agents/skills/scryer/SKILL.md` for Codex. Agents load it only when a task calls for it. It carries the whole loop: orient, write the claims as todo tests, build, run what the change reaches, ingest the report, and probe what you doubt. It also covers EARS with examples per language, how to fix a structural violation by moving code, and how to work beside other live sessions. `setup off` removes it; a `SKILL.md` of your own in that place is left alone.
+
 ### Suggested CLAUDE.md
 
 The server's own instructions, worth keeping in the project's CLAUDE.md (or AGENTS.md) too:
