@@ -558,6 +558,30 @@ mod tests {
         assert_eq!(tree.tooling[&harness.id], vec!["harness/vite.config.ts".to_string()]);
     }
 
+    /// When a unit test's imports reach only another container of the repo, its claims land on the component they reach there, and only a test whose imports reach nothing gets a component named after its file.
+    #[test]
+    fn a_tests_claims_follow_its_imports_into_another_container() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "package.json", "{\"name\": \"web\"}\n");
+        write(d, "src/a.ts", "export const a = 1;\n");
+        write(d, "preview/server.mjs", "export function ownerOf() { return 1; }\n");
+        write(d, "tests/previewOwner.test.ts", "import { ownerOf } from \"../preview/server.mjs\";\nit(\"Finds the owner\", () => { ownerOf(); });\n");
+        write(d, "tests/lonely.test.ts", "it(\"Stands alone\", () => {});\n");
+        write(d, ".scryer/structure.toml", "[containers.preview]\nname = \"Preview Server\"\n");
+        let tree = derived_tree_uncached(d).unwrap();
+        let m = &tree.planned;
+        let home = |desc: &str| {
+            let c = tree.claims.iter().find(|c| c.description == desc).unwrap();
+            let n = m.nodes.iter().find(|n| n.id == c.node_id).unwrap();
+            let parent = m.nodes.iter().find(|p| Some(p.id.as_str()) == n.parent_id.as_deref()).unwrap();
+            (parent.name.clone(), n.name.clone())
+        };
+        assert_eq!(home("Finds the owner"), ("Preview Server".to_string(), "server".to_string()));
+        assert_eq!(home("Stands alone"), ("web".to_string(), "lonely".to_string()));
+        assert!(m.nodes.iter().all(|n| n.name != "previewOwner"), "no orphan component for a test whose imports reach code");
+    }
+
     /// When structure.toml declares a container for a directory no manifest makes one, the directory becomes that container.
     #[test]
     fn structure_toml_promotes_a_directory_to_a_container() {
