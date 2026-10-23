@@ -11,6 +11,7 @@ const PART_LABEL: Record<SetupEntry["part"], string> = {
   autoApprove: "auto-approve",
   hooks: "hooks",
   statusline: "status line",
+  skill: "skill",
   gitignore: "gitignore",
 };
 

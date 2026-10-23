@@ -181,6 +181,9 @@ struct Docs<'a> {
     project: &'a Path,
     json: BTreeMap<&'static str, Loaded<serde_json::Value>>,
     toml: BTreeMap<&'static str, Loaded<toml_edit::DocumentMut>>,
+    /// Whole files scryer owns (the skill): the text to write, or `None` to
+    /// delete. Applied on save, like every other change.
+    texts: BTreeMap<&'static str, Option<String>>,
 }
 
 struct Loaded<T> {
@@ -193,7 +196,7 @@ struct Loaded<T> {
 
 impl<'a> Docs<'a> {
     fn new(project: &'a Path) -> Self {
-        Docs { project, json: BTreeMap::new(), toml: BTreeMap::new() }
+        Docs { project, json: BTreeMap::new(), toml: BTreeMap::new(), texts: BTreeMap::new() }
     }
 
     fn json(&mut self, file: &str) -> Result<&mut Loaded<serde_json::Value>, String> {
@@ -219,6 +222,12 @@ impl<'a> Docs<'a> {
 
     fn state(&mut self, tool: Tool, part: Part, file: &str, exists: &dyn Fn(&str) -> bool) -> EntryState {
         let unreadable = |e: String| EntryState::Stale(e);
+        if part == Part::Skill {
+            return match files::read_text(&self.project.join(file)) {
+                Ok(text) => d::skill_state(text.as_deref()),
+                Err(e) => unreadable(e),
+            };
+        }
         if file == d::CODEX_CONFIG {
             return match self.toml(file) {
                 Ok(doc) => d::codex_toml_state(&doc.value, exists),
@@ -234,11 +243,15 @@ impl<'a> Docs<'a> {
             Part::AutoApprove => d::allow_state(root),
             Part::Hooks => d::hooks_state(root, tool.hook_events(), exists),
             Part::Statusline => d::statusline_state(root, exists),
-            Part::Gitignore => unreachable!("not a tool's entry"),
+            Part::Skill | Part::Gitignore => unreachable!("not a JSON entry"),
         }
     }
 
     fn set(&mut self, tool: Tool, part: Part, file: &str, binary: &str) -> Result<(), String> {
+        if part == Part::Skill {
+            self.texts.insert(static_file(file), Some(d::skill_text().to_string()));
+            return Ok(());
+        }
         if file == d::CODEX_CONFIG {
             let doc = self.toml(file)?;
             d::set_codex_toml(&mut doc.value, binary);
@@ -259,7 +272,7 @@ impl<'a> Docs<'a> {
             Part::AutoApprove => d::set_allow(&mut doc.value),
             Part::Hooks => d::set_hooks(&mut doc.value, tool.hook_events(), &tool.hook_command(binary)),
             Part::Statusline => d::set_statusline(&mut doc.value, binary),
-            Part::Gitignore => unreachable!("not a tool's entry"),
+            Part::Skill | Part::Gitignore => unreachable!("not a JSON entry"),
         }
         doc.changed = true;
         Ok(())
@@ -267,6 +280,14 @@ impl<'a> Docs<'a> {
 
     fn remove(&mut self, part: Part, file: &str) -> Result<(), String> {
         if !self.project.join(file).exists() {
+            return Ok(());
+        }
+        if part == Part::Skill {
+            // Only scryer's own skill goes; one without the marker is the user's.
+            let text = files::read_text(&self.project.join(file))?;
+            if text.is_some_and(|t| t.contains(d::SKILL_MARKER)) {
+                self.texts.insert(static_file(file), None);
+            }
             return Ok(());
         }
         if file == d::CODEX_CONFIG {
@@ -282,7 +303,7 @@ impl<'a> Docs<'a> {
             Part::AutoApprove => d::remove_allow(&mut doc.value),
             Part::Hooks => d::remove_hooks(&mut doc.value),
             Part::Statusline => d::remove_statusline(&mut doc.value),
-            Part::Gitignore => unreachable!("not a tool's entry"),
+            Part::Skill | Part::Gitignore => unreachable!("not a JSON entry"),
         };
         // Copilot's file is scryer's: with no hooks left, its `version` key
         // alone is not worth keeping.
@@ -304,6 +325,13 @@ impl<'a> Docs<'a> {
                 files::write_text(&path, &format!("{text}\n"))?;
             }
         }
+        for (file, text) in self.texts {
+            let path = self.project.join(file);
+            match text {
+                Some(text) => files::write_text(&path, &text)?,
+                None => files::remove_file(self.project, &path)?,
+            }
+        }
         for (file, doc) in self.toml.into_iter().filter(|(_, d)| d.changed) {
             let path = self.project.join(file);
             let text = doc.value.to_string();
@@ -320,7 +348,7 @@ impl<'a> Docs<'a> {
 /// The static name of one of the files the parts list — every file a run
 /// touches is one of them.
 fn static_file(file: &str) -> &'static str {
-    [d::MCP_JSON, d::CLAUDE_SETTINGS, d::CODEX_CONFIG, d::CODEX_HOOKS_FILE, d::COPILOT_HOOKS_FILE]
+    [d::MCP_JSON, d::CLAUDE_SETTINGS, d::CODEX_CONFIG, d::CODEX_HOOKS_FILE, d::COPILOT_HOOKS_FILE, d::CLAUDE_SKILL, d::AGENTS_SKILL]
         .into_iter()
         .find(|f| *f == file)
         .expect("a file from Tool::parts")
@@ -346,8 +374,16 @@ mod tests {
         serde_json::from_str(&read(dir, file).unwrap()).unwrap()
     }
 
-    const FILES: [&str; 6] =
-        [d::MCP_JSON, d::CLAUDE_SETTINGS, d::CODEX_CONFIG, d::CODEX_HOOKS_FILE, d::COPILOT_HOOKS_FILE, d::GITIGNORE];
+    const FILES: [&str; 8] = [
+        d::MCP_JSON,
+        d::CLAUDE_SETTINGS,
+        d::CODEX_CONFIG,
+        d::CODEX_HOOKS_FILE,
+        d::COPILOT_HOOKS_FILE,
+        d::CLAUDE_SKILL,
+        d::AGENTS_SKILL,
+        d::GITIGNORE,
+    ];
 
     fn snapshot(dir: &Path) -> Vec<Option<String>> {
         FILES.iter().map(|f| read(dir, f)).collect()
@@ -378,10 +414,10 @@ mod tests {
         write(".github/hooks/my-linter.json", serde_json::json!({ "hooks": {} }).to_string());
     }
 
-    /// When the switch goes on, every detected tool gets its MCP entry and
-    /// hooks, Claude Code its auto-approve and status line, and the project its
-    /// .gitignore; running it again changes no file, and the user's own
-    /// entries in those files are all still there.
+    /// When the switch goes on, every detected tool gets its MCP entry, hooks
+    /// and the scryer skill, Claude Code its auto-approve and status line, and
+    /// the project its .gitignore; running it again changes no file, and the
+    /// user's own entries in those files are all still there.
     #[test]
     fn setup_on_writes_every_entry_once_and_keeps_foreign_ones() {
         let dir = tempfile::tempdir().unwrap();
@@ -414,6 +450,8 @@ mod tests {
         let codex_hooks = json(p, d::CODEX_HOOKS_FILE);
         assert_eq!(codex_hooks["hooks"]["PreToolUse"].as_array().unwrap().len(), 2, "my-policy + scryer");
         assert_eq!(json(p, d::COPILOT_HOOKS_FILE)["hooks"]["PostToolUse"][0]["command"], format!("\"{bin}\" hook --copilot"));
+        assert_eq!(read(p, d::CLAUDE_SKILL).as_deref(), Some(d::skill_text()));
+        assert_eq!(read(p, d::AGENTS_SKILL).as_deref(), Some(d::skill_text()));
         assert_eq!(read(p, d::GITIGNORE).unwrap(), d::gitignore_text());
     }
 
@@ -438,6 +476,7 @@ mod tests {
         assert_eq!(after, foreign);
         assert_eq!(read(p, d::CODEX_CONFIG).unwrap().trim(), codex.trim());
         assert!(read(p, d::COPILOT_HOOKS_FILE).is_none(), "scryer's own file is gone");
+        assert!(read(p, d::CLAUDE_SKILL).is_none() && read(p, d::AGENTS_SKILL).is_none(), "the skill is gone");
         assert!(read(p, ".github/hooks/my-linter.json").is_some());
         assert_eq!(read(p, d::GITIGNORE).unwrap(), d::gitignore_text());
 
@@ -458,7 +497,7 @@ mod tests {
         for f in [d::MCP_JSON, d::CLAUDE_SETTINGS, d::CODEX_CONFIG, d::CODEX_HOOKS_FILE, d::COPILOT_HOOKS_FILE] {
             assert!(read(p, f).is_none(), "{f} left behind");
         }
-        for dir in [".claude", ".codex", ".github"] {
+        for dir in [".claude", ".codex", ".github", ".agents"] {
             assert!(!p.join(dir).exists(), "{dir} left behind");
         }
     }
@@ -495,6 +534,29 @@ mod tests {
 
         assert!(setup_on(p, &[Tool::ClaudeCode], &bin).unwrap().on);
         assert_eq!(json(p, d::MCP_JSON)["mcpServers"]["scryer"]["command"], bin.as_str());
+    }
+
+    /// If the project already has a scryer skill of its own (no marker), then
+    /// on leaves it and reads on with a note, and off leaves it too; a skill an
+    /// earlier scryer wrote reads as stale and on rewrites it.
+    #[test]
+    fn a_skill_without_the_marker_is_the_users() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        let bin = fake_binary(p);
+        std::fs::create_dir_all(p.join(d::CLAUDE_SKILL).parent().unwrap()).unwrap();
+        std::fs::write(p.join(d::CLAUDE_SKILL), "---\nname: scryer\n---\nmine\n").unwrap();
+
+        let on = setup_on(p, &[Tool::ClaudeCode], &bin).unwrap();
+        assert!(on.on);
+        assert!(on.notes.iter().any(|n| n.contains("skill")), "{:?}", on.notes);
+        setup_off(p, &[Tool::ClaudeCode]).unwrap();
+        assert_eq!(read(p, d::CLAUDE_SKILL).as_deref(), Some("---\nname: scryer\n---\nmine\n"));
+
+        std::fs::write(p.join(d::CLAUDE_SKILL), format!("{}x -->\nold", d::SKILL_MARKER)).unwrap();
+        assert!(matches!(setup_status(p, &[Tool::ClaudeCode]).tools[0].entries.last().unwrap().state, EntryState::Stale(_)));
+        setup_on(p, &[Tool::ClaudeCode], &bin).unwrap();
+        assert_eq!(read(p, d::CLAUDE_SKILL).as_deref(), Some(d::skill_text()));
     }
 
     /// A status line of the user's holds the one slot: on leaves it, the

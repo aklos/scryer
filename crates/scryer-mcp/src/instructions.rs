@@ -16,4 +16,5 @@ boundary for its container, a unit test for its component — write a claim at t
 for. Before building, `orient {task, files}` and write each claim you will satisfy as a todo test \
 in the file orient names; a todo test is work to do. Run only what `get_test_radius` names, then \
 `ingest_test_report`. A surviving probe (`open_probe`) is a finding: strengthen the test. Every \
-tool takes an optional absolute `project`, defaulting to the working directory.";
+tool takes an optional absolute `project`, defaulting to the working directory. The `scryer` skill, \
+when installed, has the full loop with examples.";

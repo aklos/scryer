@@ -4,8 +4,9 @@
 //!
 //! An entry is scryer's by its marker and nothing else: an MCP server or a
 //! command whose binary is `scryer-mcp` (the `hook` / `statusline` subcommand
-//! for hooks and the status line), the `mcp__scryer` allow string, and the
-//! header line of `.scryer/.gitignore`. Everything without the marker belongs
+//! for hooks and the status line), the `mcp__scryer` allow string, the
+//! header line of `.scryer/.gitignore`, and the marker comment in the scryer
+//! skill's `SKILL.md`. Everything without the marker belongs
 //! to someone else and is never changed.
 
 use serde::Serialize;
@@ -47,9 +48,12 @@ impl Tool {
                 (Part::AutoApprove, CLAUDE_SETTINGS),
                 (Part::Hooks, CLAUDE_SETTINGS),
                 (Part::Statusline, CLAUDE_SETTINGS),
+                (Part::Skill, CLAUDE_SKILL),
             ],
-            Tool::Codex => &[(Part::McpServer, CODEX_CONFIG), (Part::Hooks, CODEX_HOOKS_FILE)],
-            Tool::Copilot => &[(Part::McpServer, MCP_JSON), (Part::Hooks, COPILOT_HOOKS_FILE)],
+            Tool::Codex => &[(Part::McpServer, CODEX_CONFIG), (Part::Hooks, CODEX_HOOKS_FILE), (Part::Skill, AGENTS_SKILL)],
+            // Copilot reads `.claude/skills` too: sharing Claude Code's copy
+            // keeps one scryer skill in its list when both are installed.
+            Tool::Copilot => &[(Part::McpServer, MCP_JSON), (Part::Hooks, COPILOT_HOOKS_FILE), (Part::Skill, CLAUDE_SKILL)],
         }
     }
 
@@ -80,6 +84,8 @@ pub enum Part {
     AutoApprove,
     Hooks,
     Statusline,
+    /// The scryer skill: how to work in a project scryer reads.
+    Skill,
     Gitignore,
 }
 
@@ -90,6 +96,7 @@ impl Part {
             Part::AutoApprove => "auto-approve",
             Part::Hooks => "hooks",
             Part::Statusline => "status line",
+            Part::Skill => "skill",
             Part::Gitignore => "gitignore",
         }
     }
@@ -123,6 +130,10 @@ pub const CODEX_HOOKS_FILE: &str = ".codex/hooks.json";
 /// hook location it reads — so scryer takes a file of its own there.
 pub const COPILOT_HOOKS_FILE: &str = ".github/hooks/scryer.json";
 pub const GITIGNORE: &str = ".scryer/.gitignore";
+/// The skill where Claude Code (and Copilot) look for project skills.
+pub const CLAUDE_SKILL: &str = ".claude/skills/scryer/SKILL.md";
+/// The skill where Codex looks for project skills.
+pub const AGENTS_SKILL: &str = ".agents/skills/scryer/SKILL.md";
 
 /// The server-wide allow entry: Claude Code reads a bare `mcp__<server>` as
 /// "auto-approve every tool from that server".
@@ -194,6 +205,25 @@ pub fn gitignore_state(current: Option<&str>) -> EntryState {
             EntryState::Stale("written by an earlier scryer".into())
         }
         Some(_) => EntryState::Foreign("yours, left untouched".into()),
+    }
+}
+
+/// The comment line that makes a `SKILL.md` scryer's.
+pub const SKILL_MARKER: &str = "<!-- Written by `scryer-mcp setup on`";
+
+/// The scryer skill as `setup on` writes it: the loop (orient, todo tests,
+/// build, radius run, ingest, probe), the claim grammar, styles and other
+/// sessions — loaded by the agent only when a task calls for it.
+pub fn skill_text() -> &'static str {
+    include_str!("skill.md")
+}
+
+pub fn skill_state(current: Option<&str>) -> EntryState {
+    match current {
+        None => EntryState::Missing,
+        Some(text) if text == skill_text() => EntryState::Installed,
+        Some(text) if text.contains(SKILL_MARKER) => EntryState::Stale("written by an earlier scryer".into()),
+        Some(_) => EntryState::Foreign("a scryer skill of your own, left untouched".into()),
     }
 }
 

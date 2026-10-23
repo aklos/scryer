@@ -7,7 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 export type EntryState = "installed" | "missing" | "stale" | "foreign";
 
 export interface SetupEntry {
-  part: "mcpServer" | "autoApprove" | "hooks" | "statusline" | "gitignore";
+  part: "mcpServer" | "autoApprove" | "hooks" | "statusline" | "skill" | "gitignore";
   /** Project-relative. */
   file: string;
   state: EntryState;
