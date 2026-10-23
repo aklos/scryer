@@ -725,6 +725,7 @@ mod tests {
         Node {
             style: None,
             layer: None,
+            exercised_by: Vec::new(),
             id: id.into(),
             kind,
             name: id.into(),
@@ -977,6 +978,7 @@ mod tests {
         shape.properties.push(crate::SchemaProperty {
             label: "field".into(),
             description: String::new(),
+            ty: None,
             vagrant: None,
             stale: None,
             last_touched_at: Some(50),

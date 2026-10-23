@@ -94,6 +94,11 @@ pub fn discover_containers_from_files(
             .parent()
             .map(|p| p.to_string_lossy().replace('\\', "/"))
             .unwrap_or_default();
+        // A manifest under a dot directory (`.claude/worktrees/…`,
+        // `.devcontainer/`) packages tooling, not the product.
+        if scan::is_dot_path(&dir) {
+            continue;
+        }
         by_dir.entry(dir).or_default().push(Signal {
             filename: filename.to_string(),
             deploy,
@@ -167,6 +172,7 @@ pub fn discover_containers_from_files(
             dep_dirs: Vec::new(),
             go_module: None,
             clj_paths: Vec::new(),
+            packages: Vec::new(),
         });
     }
     containers
@@ -240,6 +246,7 @@ fn scan_dir(project: &Path, dir: &str, signals: &[Signal]) -> DirScan {
     let mut technology: Option<String> = None;
     let mut go_module: Option<String> = None;
     let mut clj_paths: Vec<String> = Vec::new();
+    let mut packages: Vec<String> = Vec::new();
     // A real unit unless the only thing we saw is a Cargo workspace root.
     let mut is_unit = false;
 
@@ -254,6 +261,7 @@ fn scan_dir(project: &Path, dir: &str, signals: &[Signal]) -> DirScan {
             "Cargo.toml" => match parse_cargo(&text, dir) {
                 CargoManifest::Package {
                     pkg_name,
+                    names,
                     deps,
                     ws_deps,
                     ws_table,
@@ -261,6 +269,7 @@ fn scan_dir(project: &Path, dir: &str, signals: &[Signal]) -> DirScan {
                     is_unit = true;
                     name = name.or(pkg_name);
                     dep_dirs.extend(deps);
+                    packages.extend(names);
                     scan.cargo_ws_deps.extend(ws_deps);
                     scan.cargo_ws_table.extend(ws_table);
                 }
@@ -274,6 +283,7 @@ fn scan_dir(project: &Path, dir: &str, signals: &[Signal]) -> DirScan {
                 let npm = parse_package_json(&text, dir);
                 name = name.or(npm.name);
                 dep_dirs.extend(npm.path_deps);
+                packages.extend(npm.names);
                 scan.npm_name_deps.extend(npm.name_deps);
             }
             "pyproject.toml" => {
@@ -341,6 +351,8 @@ fn scan_dir(project: &Path, dir: &str, signals: &[Signal]) -> DirScan {
     dep_dirs.dedup();
     clj_paths.sort();
     clj_paths.dedup();
+    packages.sort();
+    packages.dedup();
     scan.container = Some(Container {
         dir: dir.to_string(),
         name,
@@ -348,6 +360,7 @@ fn scan_dir(project: &Path, dir: &str, signals: &[Signal]) -> DirScan {
         dep_dirs,
         go_module,
         clj_paths,
+        packages,
     });
     scan
 }
@@ -422,6 +435,8 @@ fn dockerfile_base_image(text: &str) -> Option<String> {
 enum CargoManifest {
     Package {
         pkg_name: Option<String>,
+        /// Every dependency's name, from every dependency table.
+        names: Vec<String>,
         /// Resolved in-repo path deps.
         deps: Vec<String>,
         /// `{ workspace = true }` dep names, resolved in pass 2 through the
@@ -494,10 +509,12 @@ fn parse_cargo(text: &str, manifest_dir: &str) -> CargoManifest {
         .and_then(|n| n.as_str())
         .map(|s| s.to_string());
 
+    let mut names: Vec<String> = Vec::new();
     let mut deps: Vec<String> = Vec::new();
     let mut ws_deps: Vec<String> = Vec::new();
     for tbl in cargo_dep_tables(&value) {
         for (dep_name, spec) in tbl {
+            names.push(dep_name.clone());
             let Some(spec) = spec.as_table() else { continue };
             if let Some(path) = spec.get("path").and_then(|p| p.as_str()) {
                 if let Some(resolved) = resolve_rel(manifest_dir, path) {
@@ -510,6 +527,7 @@ fn parse_cargo(text: &str, manifest_dir: &str) -> CargoManifest {
     }
     CargoManifest::Package {
         pkg_name,
+        names,
         deps,
         ws_deps,
         ws_table,
@@ -544,6 +562,8 @@ struct NpmManifest {
     /// (and friends), or a bare version — npm/yarn workspaces link those by
     /// NAME, so pass 2 matches them against discovered container names.
     name_deps: Vec<String>,
+    /// Every dependency's name.
+    names: Vec<String>,
 }
 
 fn parse_package_json(text: &str, manifest_dir: &str) -> NpmManifest {
@@ -563,6 +583,7 @@ fn parse_package_json(text: &str, manifest_dir: &str) -> NpmManifest {
             continue;
         };
         for (dep_name, spec) in obj {
+            out.names.push(dep_name.clone());
             let Some(s) = spec.as_str() else { continue };
             if let Some(rel) = s.strip_prefix("file:").or_else(|| s.strip_prefix("link:")) {
                 // An absolute path points outside repo semantics — treating it

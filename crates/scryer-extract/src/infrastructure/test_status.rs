@@ -499,6 +499,7 @@ mod tests {
         m.nodes.push(Node {
             style: None,
             layer: None,
+            exercised_by: Vec::new(),
             id: "sym".into(),
             kind: Kind::Symbol,
             name: "alpha".into(),

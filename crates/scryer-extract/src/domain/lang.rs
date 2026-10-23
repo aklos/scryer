@@ -94,7 +94,7 @@ fn family_for_ext(ext: &str) -> Family {
 }
 
 /// One code definition: an addressable symbol.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Def {
     pub name: String,
     /// 1-based inclusive line range of the whole definition.
@@ -107,6 +107,29 @@ pub struct Def {
     /// True when the definition declares a data shape, even if `fields` is empty
     /// (e.g. a tuple struct). Drives whether the node carries `properties`.
     pub is_data_shape: bool,
+    /// The definition's own doc comment as plain text, one paragraph per
+    /// blank-line break: Rust `///` or `/** */` above the item, a JSDoc above
+    /// the declaration or its `export`, a Python docstring, a Go comment block.
+    pub doc: Option<String>,
+    /// What the definition declares inside it, each with its type and doc as
+    /// written: a data shape's fields or variants, a React component's props.
+    pub members: Vec<Member>,
+    /// A React function component: a PascalCase function in a `.tsx`/`.jsx`
+    /// file. Its members are its props, and it is no data shape.
+    pub is_component: bool,
+}
+
+/// One declared member of a definition: a field, a variant, a prop.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Member {
+    pub name: String,
+    /// The type as written, comments dropped and whitespace collapsed; a Rust
+    /// variant's payload; `None` when the code declares none.
+    pub ty: Option<String>,
+    /// The member's own doc comment, as plain text.
+    pub doc: Option<String>,
+    /// Declared optional (`name?: T` in TypeScript).
+    pub optional: bool,
 }
 
 /// An identifier occurrence, used to resolve a reference graph between symbols.
@@ -275,7 +298,7 @@ pub fn parse_file_with(path: &Path, source: &str, parser: &mut Parser) -> Option
     let mut defs: Vec<Def> = Vec::new();
     match family_for_ext(ext) {
         Family::Rust => collect_rust(root, bytes, &mut defs),
-        Family::TsLike => collect_ts(root, bytes, &mut defs),
+        Family::TsLike => collect_ts(root, bytes, &mut defs, matches!(ext, "tsx" | "jsx")),
         Family::Python => collect_python(root, bytes, &mut defs),
         Family::Go => collect_go(root, bytes, &mut defs),
         Family::CLike => collect_c(root, bytes, &mut defs),
@@ -351,6 +374,7 @@ fn parse_vue_sfc(path: &Path, source: &str, parser: &mut Parser) -> Option<FileP
         end_line: total_lines,
         fields: Vec::new(),
         is_data_shape: false,
+        ..Default::default()
     };
 
     let script = vue_script_in_place(source);
@@ -459,42 +483,233 @@ fn push_def(
     fields: Vec<String>,
     data: bool,
 ) {
-    if let Some(name) = name {
-        if is_identifier(&name) {
-            let (start_line, end_line) = line_span(node);
-            defs.push(Def {
-                name,
-                start_line,
-                end_line,
-                fields,
-                is_data_shape: data,
-            });
+    let members = fields.into_iter().map(|name| Member { name, ..Default::default() }).collect();
+    push_documented(defs, name, node, members, data, None);
+}
+
+/// Push a definition with its members and doc. A data shape's member names
+/// are its `fields`; anything else keeps `fields` empty.
+fn push_documented<'d>(
+    defs: &'d mut Vec<Def>,
+    name: Option<String>,
+    node: Node,
+    members: Vec<Member>,
+    data: bool,
+    doc: Option<String>,
+) -> Option<&'d mut Def> {
+    let name = name.filter(|n| is_identifier(n))?;
+    let (start_line, end_line) = line_span(node);
+    let fields = if data { members.iter().map(|m| m.name.clone()).collect() } else { Vec::new() };
+    defs.push(Def {
+        name,
+        start_line,
+        end_line,
+        fields,
+        is_data_shape: data,
+        doc,
+        members,
+        is_component: false,
+    });
+    defs.last_mut()
+}
+
+// --- doc comments ---
+
+/// Doc lines as plain text: each paragraph's lines joined with single spaces,
+/// a list item (`- `, `* `, `1. `) on a line of its own, paragraphs separated
+/// by a blank line, fenced code blocks dropped.
+fn doc_text<S: AsRef<str>>(lines: &[S]) -> Option<String> {
+    let mut paras: Vec<String> = Vec::new();
+    // The paragraph being read, as its lines: one per list item.
+    let mut cur: Vec<String> = Vec::new();
+    let mut fenced = false;
+    let flush = |cur: &mut Vec<String>, paras: &mut Vec<String>| {
+        if !cur.is_empty() {
+            paras.push(cur.join("\n"));
+            cur.clear();
+        }
+    };
+    let is_item = |t: &str| {
+        ["- ", "* ", "+ "].iter().any(|m| t.starts_with(m))
+            || t.split_once(". ").is_some_and(|(n, _)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+    };
+    for line in lines {
+        let t = line.as_ref().trim();
+        if t.starts_with("```") || t.starts_with("~~~") {
+            fenced = !fenced;
+            flush(&mut cur, &mut paras);
+            continue;
+        }
+        if fenced {
+            continue;
+        }
+        if t.is_empty() {
+            flush(&mut cur, &mut paras);
+            continue;
+        }
+        let t = t.split_whitespace().collect::<Vec<_>>().join(" ");
+        match cur.last_mut() {
+            Some(last) if !is_item(&t) => {
+                last.push(' ');
+                last.push_str(&t);
+            }
+            _ => cur.push(t),
         }
     }
+    flush(&mut cur, &mut paras);
+    (!paras.is_empty()).then(|| paras.join("\n\n"))
+}
+
+/// The lines of a `/** … */` (or `/* … */`) block, delimiters and each line's
+/// leading `*` dropped.
+fn block_comment_lines(text: &str) -> Vec<String> {
+    let inner = text.trim_start_matches("/**").trim_start_matches("/*").trim_end_matches("*/");
+    inner
+        .lines()
+        .map(|l| {
+            let l = l.trim();
+            l.strip_prefix('*').unwrap_or(l).trim().to_string()
+        })
+        .collect()
+}
+
+/// A node's source with its comments cut out and whitespace collapsed: how a
+/// type reads as one line of text.
+fn code_text(node: Node, bytes: &[u8]) -> String {
+    let mut cuts: Vec<(usize, usize)> = Vec::new();
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        if n.kind().contains("comment") {
+            cuts.push((n.start_byte(), n.end_byte()));
+            continue;
+        }
+        let mut cursor = n.walk();
+        stack.extend(n.children(&mut cursor));
+    }
+    cuts.sort();
+    let mut out = String::new();
+    let mut at = node.start_byte();
+    for (a, b) in cuts {
+        if a > at {
+            out.push_str(&String::from_utf8_lossy(&bytes[at..a]));
+        }
+        at = at.max(b);
+    }
+    if node.end_byte() > at {
+        out.push_str(&String::from_utf8_lossy(&bytes[at..node.end_byte()]));
+    }
+    // A trailing separator reads as noise once on one line: `{ a: u32, }`.
+    out.split_whitespace().collect::<Vec<_>>().join(" ").replace(", }", " }").replace(", )", ")").replace(", >", " >")
+}
+
+/// Whether a node has the anonymous child token `tok` (`?` of an optional
+/// property).
+fn has_token(node: Node, tok: &str) -> bool {
+    let mut cursor = node.walk();
+    let found = node.children(&mut cursor).any(|c| !c.is_named() && c.kind() == tok);
+    found
+}
+
+/// The `///` lines and `/** */` blocks directly above a Rust item, attributes
+/// and plain comments skipped.
+fn rust_doc(item: Node, bytes: &[u8]) -> Option<String> {
+    let mut chunks: Vec<Vec<String>> = Vec::new();
+    let mut prev = item.prev_sibling();
+    while let Some(p) = prev {
+        let t = p.utf8_text(bytes).unwrap_or_default();
+        match p.kind() {
+            "attribute_item" => {}
+            "line_comment" if t.starts_with("///") && !t.starts_with("////") => {
+                chunks.push(vec![t.trim_start_matches("///").to_string()]);
+            }
+            "block_comment" if t.starts_with("/**") && !t.starts_with("/***") && t != "/**/" => {
+                chunks.push(block_comment_lines(t));
+            }
+            "line_comment" | "block_comment" => {}
+            _ => break,
+        }
+        prev = p.prev_sibling();
+    }
+    chunks.reverse();
+    doc_text(&chunks.concat())
+}
+
+/// The JSDoc directly above a declaration (or its `export`, or a class or
+/// object member): a `/** */` comment ending on the line before, or on the
+/// same line. A file-level doc (`@file`, `@module`) documents the file.
+fn ts_doc(node: Node, bytes: &[u8]) -> Option<String> {
+    let comment = node.prev_named_sibling().filter(|c| c.kind() == "comment")?;
+    let t = comment.utf8_text(bytes).ok()?;
+    if !t.starts_with("/**") || comment.end_position().row + 1 < node.start_position().row {
+        return None;
+    }
+    if ["@file", "@module", "@overview"].iter().any(|tag| t.contains(tag)) {
+        return None;
+    }
+    let lines: Vec<String> = block_comment_lines(t).into_iter().take_while(|l| !l.starts_with('@')).collect();
+    doc_text(&lines)
+}
+
+/// The contiguous `//` (or `/* */`) comment block directly above a Go
+/// declaration, compiler directives (`//go:…`, `//nolint`) left out.
+fn go_doc(node: Node, bytes: &[u8]) -> Option<String> {
+    let mut chunks: Vec<Vec<String>> = Vec::new();
+    let mut cur = node;
+    while let Some(p) = cur.prev_sibling() {
+        if p.kind() != "comment" || p.end_position().row + 1 != cur.start_position().row {
+            break;
+        }
+        let t = p.utf8_text(bytes).unwrap_or_default();
+        let lines = match t.strip_prefix("//") {
+            Some(line) if line.starts_with("go:") || line.starts_with("nolint") => Vec::new(),
+            Some(line) => vec![line.to_string()],
+            None => block_comment_lines(t),
+        };
+        chunks.push(lines);
+        cur = p;
+    }
+    chunks.reverse();
+    doc_text(&chunks.concat())
+}
+
+/// A Python definition's docstring: the string opening its body.
+fn py_doc(def: Node, bytes: &[u8]) -> Option<String> {
+    let first = def.child_by_field_name("body")?.named_child(0)?;
+    py_string_doc(first, bytes)
+}
+
+/// The text of an expression statement that is a lone string literal.
+fn py_string_doc(stmt: Node, bytes: &[u8]) -> Option<String> {
+    if stmt.kind() != "expression_statement" {
+        return None;
+    }
+    let s = stmt.named_child(0).filter(|s| s.kind() == "string")?;
+    let content: String = named_children(s)
+        .into_iter()
+        .filter(|c| c.kind() == "string_content")
+        .filter_map(|c| c.utf8_text(bytes).ok())
+        .collect();
+    let lines: Vec<&str> = content.lines().collect();
+    doc_text(&lines)
 }
 
 // --- Rust ---
 
 fn collect_rust(node: Node, bytes: &[u8], defs: &mut Vec<Def>) {
     for child in named_children(node) {
+        let doc = || rust_doc(child, bytes);
         match child.kind() {
             "function_item" | "const_item" | "static_item" | "macro_definition" | "type_item"
             | "trait_item" => {
-                push_def(
-                    defs,
-                    field_text(child, "name", bytes),
-                    child,
-                    Vec::new(),
-                    false,
-                );
+                push_documented(defs, field_text(child, "name", bytes), child, Vec::new(), false, doc());
             }
             "struct_item" => {
                 let fields = rust_struct_fields(child, bytes);
-                push_def(defs, field_text(child, "name", bytes), child, fields, true);
+                push_documented(defs, field_text(child, "name", bytes), child, fields, true, doc());
             }
             "enum_item" => {
-                let fields = rust_enum_variants(child, bytes);
-                push_def(defs, field_text(child, "name", bytes), child, fields, true);
+                let variants = rust_enum_variants(child, bytes);
+                push_documented(defs, field_text(child, "name", bytes), child, variants, true, doc());
             }
             // Namespacing items carry no symbol of their own — descend for the
             // definitions inside them (impl methods, module items).
@@ -508,134 +723,323 @@ fn collect_rust(node: Node, bytes: &[u8], defs: &mut Vec<Def>) {
     }
 }
 
-fn rust_struct_fields(struct_item: Node, bytes: &[u8]) -> Vec<String> {
+/// A named struct's fields with their types and docs. A tuple struct
+/// (`ordered_field_declaration_list`) names none.
+fn rust_struct_fields(struct_item: Node, bytes: &[u8]) -> Vec<Member> {
     let Some(body) = struct_item.child_by_field_name("body") else {
         return Vec::new();
     };
-    // Named struct => field_declaration_list of field_declaration(name: field_identifier).
-    // Tuple struct => ordered_field_declaration_list (no names).
     named_children(body)
         .into_iter()
         .filter(|n| n.kind() == "field_declaration")
-        .filter_map(|n| field_text(n, "name", bytes))
+        .filter_map(|n| {
+            Some(Member {
+                name: field_text(n, "name", bytes)?,
+                ty: n.child_by_field_name("type").map(|t| code_text(t, bytes)),
+                doc: rust_doc(n, bytes),
+                optional: false,
+            })
+        })
         .collect()
 }
 
-fn rust_enum_variants(enum_item: Node, bytes: &[u8]) -> Vec<String> {
+/// An enum's variants with their docs; a tuple or struct payload is the
+/// variant's type.
+fn rust_enum_variants(enum_item: Node, bytes: &[u8]) -> Vec<Member> {
     let Some(body) = enum_item.child_by_field_name("body") else {
         return Vec::new();
     };
     named_children(body)
         .into_iter()
         .filter(|n| n.kind() == "enum_variant")
-        .filter_map(|n| field_text(n, "name", bytes))
+        .filter_map(|n| {
+            Some(Member {
+                name: field_text(n, "name", bytes)?,
+                ty: n.child_by_field_name("body").map(|t| code_text(t, bytes)),
+                doc: rust_doc(n, bytes),
+                optional: false,
+            })
+        })
         .collect()
 }
 
 // --- TypeScript / JavaScript ---
 
-fn collect_ts(root: Node, bytes: &[u8], defs: &mut Vec<Def>) {
+/// `jsx` marks a `.tsx`/`.jsx` file, where a PascalCase function is a React
+/// component.
+fn collect_ts(root: Node, bytes: &[u8], defs: &mut Vec<Def>, jsx: bool) {
     // Module level only: direct children of the program, unwrapping exports.
     // Descending further would pick up locals (every const/let is a
     // variable_declarator) which are not symbols.
+    // The file's own named types, for a component whose props type is one.
+    let mut shapes: std::collections::HashMap<String, Node> = std::collections::HashMap::new();
+    if jsx {
+        for child in named_children(root) {
+            let node = ts_unwrap_export(child);
+            let body = match node.kind() {
+                "interface_declaration" => node.child_by_field_name("body"),
+                "type_alias_declaration" => node.child_by_field_name("value"),
+                _ => None,
+            };
+            if let (Some(name), Some(body)) = (field_text(node, "name", bytes), body) {
+                shapes.insert(name, body);
+            }
+        }
+    }
     for child in named_children(root) {
-        let node = if child.kind() == "export_statement" {
-            child
-                .child_by_field_name("declaration")
-                .or_else(|| named_children(child).into_iter().next())
-                .unwrap_or(child)
-        } else {
-            child
-        };
-        classify_ts(node, bytes, defs);
+        let ctx = TsCtx { bytes, jsx, shapes: &shapes, outer: child };
+        classify_ts(ts_unwrap_export(child), &ctx, defs);
     }
 }
 
-fn classify_ts(node: Node, bytes: &[u8], defs: &mut Vec<Def>) {
+/// The declaration an `export` statement carries, or the statement itself.
+fn ts_unwrap_export(child: Node) -> Node {
+    if child.kind() == "export_statement" {
+        child
+            .child_by_field_name("declaration")
+            .or_else(|| named_children(child).into_iter().next())
+            .unwrap_or(child)
+    } else {
+        child
+    }
+}
+
+struct TsCtx<'a, 't> {
+    bytes: &'a [u8],
+    jsx: bool,
+    shapes: &'a std::collections::HashMap<String, Node<'t>>,
+    /// The top-level statement (the `export` itself, when exported) whose
+    /// JSDoc documents the declaration.
+    outer: Node<'t>,
+}
+
+fn classify_ts(node: Node, ctx: &TsCtx, defs: &mut Vec<Def>) {
+    let bytes = ctx.bytes;
+    let doc = || ts_doc(ctx.outer, bytes);
+    let name = field_text(node, "name", bytes);
     match node.kind() {
         "function_declaration" | "generator_function_declaration" => {
-            push_def(
-                defs,
-                field_text(node, "name", bytes),
-                node,
-                Vec::new(),
-                false,
-            );
+            if ctx.jsx && name.as_deref().is_some_and(is_pascal_case) {
+                let props = component_props(node, None, ctx);
+                if let Some(def) = push_documented(defs, name, node, props, false, doc()) {
+                    def.is_component = true;
+                }
+            } else {
+                push_documented(defs, name, node, Vec::new(), false, doc());
+            }
         }
         "class_declaration" | "abstract_class_declaration" => {
             let fields = ts_class_fields(node, bytes);
             let data = !fields.is_empty();
-            push_def(defs, field_text(node, "name", bytes), node, fields, data);
+            push_documented(defs, name, node, fields, data, doc());
         }
         "interface_declaration" => {
-            let fields = ts_member_names(node.child_by_field_name("body"), bytes);
-            push_def(defs, field_text(node, "name", bytes), node, fields, true);
+            let fields = ts_members(node.child_by_field_name("body"), bytes);
+            push_documented(defs, name, node, fields, true, doc());
         }
         "type_alias_declaration" => {
             // A type alias is a data shape only when its value is an object type.
-            let value = node.child_by_field_name("value");
-            let fields = value
-                .filter(|v| v.kind() == "object_type")
-                .map(|v| ts_member_names(Some(v), bytes))
-                .unwrap_or_default();
-            let data = value.map(|v| v.kind() == "object_type").unwrap_or(false);
-            push_def(defs, field_text(node, "name", bytes), node, fields, data);
+            let value = node.child_by_field_name("value").filter(|v| v.kind() == "object_type");
+            let fields = value.map(|v| ts_members(Some(v), bytes)).unwrap_or_default();
+            push_documented(defs, name, node, fields, value.is_some(), doc());
         }
         "enum_declaration" => {
-            let fields = ts_member_names(node.child_by_field_name("body"), bytes);
-            push_def(defs, field_text(node, "name", bytes), node, fields, true);
+            let fields = ts_members(node.child_by_field_name("body"), bytes);
+            push_documented(defs, name, node, fields, true, doc());
         }
         "lexical_declaration" | "variable_declaration" => {
             for d in named_children(node) {
                 if d.kind() != "variable_declarator" {
                     continue;
                 }
+                let name = field_text(d, "name", bytes);
                 let value = d.child_by_field_name("value");
-                let is_obj = value.map(|v| v.kind() == "object").unwrap_or(false);
-                let fields = if is_obj {
-                    ts_object_keys(value.unwrap(), bytes)
-                } else {
-                    Vec::new()
-                };
-                push_def(defs, field_text(d, "name", bytes), d, fields, is_obj);
+                if ctx.jsx && name.as_deref().is_some_and(is_pascal_case) {
+                    if let Some(func) = value.and_then(component_function) {
+                        let props = component_props(func, Some(d), ctx);
+                        if let Some(def) = push_documented(defs, name, d, props, false, doc()) {
+                            def.is_component = true;
+                        }
+                        continue;
+                    }
+                }
+                let object = value.filter(|v| v.kind() == "object");
+                let fields = object.map(|v| ts_object_keys(v, bytes)).unwrap_or_default();
+                push_documented(defs, name, d, fields, object.is_some(), doc());
             }
         }
         _ => {}
     }
 }
 
-fn ts_class_fields(class: Node, bytes: &[u8]) -> Vec<String> {
+/// `UserCard`, not `userCard` or `API_URL`.
+fn is_pascal_case(name: &str) -> bool {
+    name.starts_with(|c: char| c.is_ascii_uppercase()) && name.chars().any(|c| c.is_lowercase())
+}
+
+/// The function a component binding holds: an arrow or function expression,
+/// or one wrapped in a call (`memo(…)`, `forwardRef(…)`).
+fn component_function(value: Node) -> Option<Node> {
+    match value.kind() {
+        "arrow_function" | "function_expression" | "function" => Some(value),
+        "call_expression" => value
+            .child_by_field_name("arguments")
+            .and_then(|a| a.named_child(0))
+            .and_then(component_function),
+        _ => None,
+    }
+}
+
+/// A component's props: its first parameter's type — an inline object type,
+/// or a named interface or type alias of the same file — else the names it
+/// destructures; failing both, the type argument of the binding's own
+/// annotation (`const X: FC<Props> = …`).
+fn component_props(func: Node, declarator: Option<Node>, ctx: &TsCtx) -> Vec<Member> {
+    let first = func
+        .child_by_field_name("parameters")
+        .and_then(|p| named_children(p).into_iter().find(|c| c.kind() != "comment"))
+        .or_else(|| func.child_by_field_name("parameter"));
+    let mut props = Vec::new();
+    if let Some(param) = first {
+        if let Some(ty) = param.child_by_field_name("type").and_then(|a| a.named_child(0)) {
+            props = props_of_type(ty, ctx, 0);
+        }
+        if props.is_empty() {
+            let mut pattern = param.child_by_field_name("pattern").unwrap_or(param);
+            if pattern.kind() == "assignment_pattern" {
+                pattern = pattern.child_by_field_name("left").unwrap_or(pattern);
+            }
+            if pattern.kind() == "object_pattern" {
+                props = destructured_names(pattern, ctx.bytes);
+            }
+        }
+    }
+    if props.is_empty() {
+        let annotated = declarator
+            .and_then(|d| d.child_by_field_name("type"))
+            .and_then(|a| a.named_child(0))
+            .filter(|t| t.kind() == "generic_type");
+        if let Some(arg) = annotated.and_then(type_argument) {
+            props = props_of_type(arg, ctx, 0);
+        }
+    }
+    props
+}
+
+/// The first type argument of a generic type (`FC<Props>` → `Props`).
+fn type_argument(generic: Node) -> Option<Node> {
+    let args = named_children(generic).into_iter().find(|c| c.kind() == "type_arguments")?;
+    args.named_child(0)
+}
+
+/// The members a props type declares, a named type of the same file resolved
+/// (one alias deep per step, at most a few steps).
+fn props_of_type(ty: Node, ctx: &TsCtx, depth: u8) -> Vec<Member> {
+    if depth > 3 {
+        return Vec::new();
+    }
+    let bytes = ctx.bytes;
+    match ty.kind() {
+        "object_type" | "interface_body" => ts_members(Some(ty), bytes),
+        "type_identifier" => ty
+            .utf8_text(bytes)
+            .ok()
+            .and_then(|name| ctx.shapes.get(name))
+            .map(|body| props_of_type(*body, ctx, depth + 1))
+            .unwrap_or_default(),
+        "generic_type" => {
+            let own = ty
+                .child_by_field_name("name")
+                .filter(|n| n.kind() == "type_identifier")
+                .map(|n| props_of_type(n, ctx, depth + 1))
+                .unwrap_or_default();
+            if own.is_empty() {
+                // `PropsWithChildren<Props>`: the props are the argument's.
+                type_argument(ty).map(|a| props_of_type(a, ctx, depth + 1)).unwrap_or_default()
+            } else {
+                own
+            }
+        }
+        "intersection_type" => {
+            named_children(ty).into_iter().flat_map(|t| props_of_type(t, ctx, depth + 1)).collect()
+        }
+        "parenthesized_type" => {
+            ty.named_child(0).map(|t| props_of_type(t, ctx, depth + 1)).unwrap_or_default()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// The names an object pattern destructures: `{ title, onClose: close, size = 1 }`
+/// gives `title`, `onClose`, `size`.
+fn destructured_names(pattern: Node, bytes: &[u8]) -> Vec<Member> {
+    named_children(pattern)
+        .into_iter()
+        .filter_map(|n| {
+            let name_node = match n.kind() {
+                "shorthand_property_identifier_pattern" | "shorthand_property_identifier" => Some(n),
+                "pair_pattern" => n.child_by_field_name("key"),
+                "object_assignment_pattern" => n.child_by_field_name("left"),
+                _ => None,
+            }?;
+            let name = name_node.utf8_text(bytes).ok()?.to_string();
+            is_identifier(&name).then(|| Member { name, ..Default::default() })
+        })
+        .collect()
+}
+
+fn ts_class_fields(class: Node, bytes: &[u8]) -> Vec<Member> {
     let Some(body) = class.child_by_field_name("body") else {
         return Vec::new();
     };
     named_children(body)
         .into_iter()
         .filter(|n| n.kind() == "public_field_definition" || n.kind() == "field_definition")
-        .filter_map(|n| field_text(n, "name", bytes))
-        .collect()
-}
-
-/// Names of `property_signature` / `enum_assignment` members in an
-/// interface_body / object_type / enum_body.
-fn ts_member_names(body: Option<Node>, bytes: &[u8]) -> Vec<String> {
-    let Some(body) = body else { return Vec::new() };
-    named_children(body)
-        .into_iter()
-        .filter_map(|n| match n.kind() {
-            "property_signature" | "enum_assignment" => field_text(n, "name", bytes),
-            // Bare enum members appear as a property_identifier child directly.
-            "property_identifier" => n.utf8_text(bytes).ok().map(|s| s.to_string()),
-            _ => None,
+        .filter_map(|n| {
+            let name = field_text(n, "name", bytes).or_else(|| field_text(n, "property", bytes))?;
+            Some(Member {
+                name,
+                ty: ts_annotation(n, bytes),
+                doc: ts_doc(n, bytes),
+                optional: has_token(n, "?"),
+            })
         })
         .collect()
 }
 
-fn ts_object_keys(object: Node, bytes: &[u8]) -> Vec<String> {
+/// The type a `: T` annotation on `node` gives, as text.
+fn ts_annotation(node: Node, bytes: &[u8]) -> Option<String> {
+    let annotation = node.child_by_field_name("type")?;
+    let ty = if annotation.kind() == "type_annotation" { annotation.named_child(0)? } else { annotation };
+    Some(code_text(ty, bytes))
+}
+
+/// The `property_signature` / `enum_assignment` members of an interface_body
+/// / object_type / enum_body, with their types and JSDoc.
+fn ts_members(body: Option<Node>, bytes: &[u8]) -> Vec<Member> {
+    let Some(body) = body else { return Vec::new() };
+    named_children(body)
+        .into_iter()
+        .filter_map(|n| {
+            let (name, ty, optional) = match n.kind() {
+                "property_signature" => (field_text(n, "name", bytes)?, ts_annotation(n, bytes), has_token(n, "?")),
+                "enum_assignment" => (field_text(n, "name", bytes)?, None, false),
+                // Bare enum members appear as a property_identifier child directly.
+                "property_identifier" => (n.utf8_text(bytes).ok()?.to_string(), None, false),
+                _ => return None,
+            };
+            Some(Member { name, ty, doc: ts_doc(n, bytes), optional })
+        })
+        .collect()
+}
+
+fn ts_object_keys(object: Node, bytes: &[u8]) -> Vec<Member> {
     named_children(object)
         .into_iter()
         .filter(|n| n.kind() == "pair")
-        .filter_map(|n| field_text(n, "key", bytes))
-        .filter(|k| is_identifier(k))
+        .filter_map(|n| field_text(n, "key", bytes).map(|k| (n, k)))
+        .filter(|(_, k)| is_identifier(k))
+        .map(|(n, name)| Member { name, doc: ts_doc(n, bytes), ..Default::default() })
         .collect()
 }
 
@@ -650,22 +1054,12 @@ fn collect_python(node: Node, bytes: &[u8], defs: &mut Vec<Def>) {
         };
         match node.kind() {
             "function_definition" => {
-                push_def(
-                    defs,
-                    field_text(node, "name", bytes),
-                    node,
-                    Vec::new(),
-                    false,
-                );
+                push_documented(defs, field_text(node, "name", bytes), node, Vec::new(), false, py_doc(node, bytes));
             }
             "class_definition" => {
-                push_def(
-                    defs,
-                    field_text(node, "name", bytes),
-                    node,
-                    Vec::new(),
-                    false,
-                );
+                let fields = if py_is_record(child, node, bytes) { py_class_fields(node, bytes) } else { Vec::new() };
+                let data = !fields.is_empty();
+                push_documented(defs, field_text(node, "name", bytes), node, fields, data, py_doc(node, bytes));
                 // Methods are symbols too.
                 if let Some(body) = node.child_by_field_name("body") {
                     collect_python(body, bytes, defs);
@@ -674,6 +1068,46 @@ fn collect_python(node: Node, bytes: &[u8], defs: &mut Vec<Def>) {
             _ => {}
         }
     }
+}
+
+/// A class that is a record of typed fields: a `@dataclass`, or a pydantic
+/// `BaseModel`, `TypedDict` or `NamedTuple` subclass.
+fn py_is_record(outer: Node, class: Node, bytes: &[u8]) -> bool {
+    let decorated = outer.kind() == "decorated_definition"
+        && named_children(outer)
+            .into_iter()
+            .filter(|d| d.kind() == "decorator")
+            .any(|d| d.utf8_text(bytes).is_ok_and(|t| t.contains("dataclass")));
+    let based = class.child_by_field_name("superclasses").is_some_and(|s| {
+        named_children(s).into_iter().any(|b| {
+            let t = b.utf8_text(bytes).unwrap_or_default();
+            let leaf = t.rsplit('.').next().unwrap_or(t);
+            matches!(leaf, "BaseModel" | "TypedDict" | "NamedTuple")
+        })
+    });
+    decorated || based
+}
+
+/// A record class's annotated fields (`name: str = ""`), each documented by
+/// the string statement right after it, when there is one.
+fn py_class_fields(class: Node, bytes: &[u8]) -> Vec<Member> {
+    let Some(body) = class.child_by_field_name("body") else { return Vec::new() };
+    let stmts = named_children(body);
+    stmts
+        .iter()
+        .enumerate()
+        .filter_map(|(i, stmt)| {
+            let assign = stmt.named_child(0).filter(|a| stmt.kind() == "expression_statement" && a.kind() == "assignment")?;
+            let ty = assign.child_by_field_name("type")?;
+            let left = assign.child_by_field_name("left").filter(|l| l.kind() == "identifier")?;
+            Some(Member {
+                name: left.utf8_text(bytes).ok()?.to_string(),
+                ty: Some(code_text(ty, bytes)),
+                doc: stmts.get(i + 1).and_then(|next| py_string_doc(*next, bytes)),
+                optional: false,
+            })
+        })
+        .collect()
 }
 
 // --- Go ---
@@ -686,37 +1120,28 @@ fn collect_go(node: Node, bytes: &[u8], defs: &mut Vec<Def>) {
     for child in named_children(node) {
         match child.kind() {
             "function_declaration" | "method_declaration" => {
-                push_def(
-                    defs,
-                    field_text(child, "name", bytes),
-                    child,
-                    Vec::new(),
-                    false,
-                );
+                push_documented(defs, field_text(child, "name", bytes), child, Vec::new(), false, go_doc(child, bytes));
             }
             "type_declaration" => {
                 for spec in named_children(child) {
                     if !matches!(spec.kind(), "type_spec" | "type_alias") {
                         continue;
                     }
+                    // A grouped `type ( … )` documents each spec inside it; a
+                    // single one is documented above the `type` keyword.
+                    let doc = go_doc(spec, bytes).or_else(|| go_doc(child, bytes));
                     // Span the SPEC, not the whole declaration: a grouped
                     // `type ( A …; B … )` block holds several defs.
                     let type_node = spec.child_by_field_name("type");
-                    match type_node.map(|t| t.kind()) {
-                        Some("struct_type") => {
-                            let fields = go_struct_fields(type_node.unwrap(), bytes);
-                            push_def(defs, field_text(spec, "name", bytes), spec, fields, true);
+                    match type_node.filter(|t| t.kind() == "struct_type") {
+                        Some(st) => {
+                            let fields = go_struct_fields(st, bytes);
+                            push_documented(defs, field_text(spec, "name", bytes), spec, fields, true, doc);
                         }
                         // An interface is a method set — behavioral, like a
                         // Rust trait, not a data shape.
-                        _ => {
-                            push_def(
-                                defs,
-                                field_text(spec, "name", bytes),
-                                spec,
-                                Vec::new(),
-                                false,
-                            );
+                        None => {
+                            push_documented(defs, field_text(spec, "name", bytes), spec, Vec::new(), false, doc);
                         }
                     }
                 }
@@ -724,13 +1149,8 @@ fn collect_go(node: Node, bytes: &[u8], defs: &mut Vec<Def>) {
             "const_declaration" | "var_declaration" => {
                 for spec in named_children(child) {
                     if matches!(spec.kind(), "const_spec" | "var_spec") {
-                        push_def(
-                            defs,
-                            field_text(spec, "name", bytes),
-                            spec,
-                            Vec::new(),
-                            false,
-                        );
+                        let doc = go_doc(spec, bytes).or_else(|| go_doc(child, bytes));
+                        push_documented(defs, field_text(spec, "name", bytes), spec, Vec::new(), false, doc);
                     }
                 }
             }
@@ -739,10 +1159,10 @@ fn collect_go(node: Node, bytes: &[u8], defs: &mut Vec<Def>) {
     }
 }
 
-/// Declared field names of a `struct_type`. A `field_declaration` may bind
-/// several names to one type (`X, Y int`); embedded fields declare no
-/// `field_identifier` and contribute none.
-fn go_struct_fields(struct_type: Node, bytes: &[u8]) -> Vec<String> {
+/// Declared fields of a `struct_type`, with their type and doc. A
+/// `field_declaration` may bind several names to one type (`X, Y int`);
+/// embedded fields declare no `field_identifier` and contribute none.
+fn go_struct_fields(struct_type: Node, bytes: &[u8]) -> Vec<Member> {
     let Some(list) = named_children(struct_type)
         .into_iter()
         .find(|n| n.kind() == "field_declaration_list")
@@ -754,10 +1174,12 @@ fn go_struct_fields(struct_type: Node, bytes: &[u8]) -> Vec<String> {
         if decl.kind() != "field_declaration" {
             continue;
         }
+        let ty = decl.child_by_field_name("type").map(|t| code_text(t, bytes));
+        let doc = go_doc(decl, bytes);
         for c in named_children(decl) {
             if c.kind() == "field_identifier" {
                 if let Ok(text) = c.utf8_text(bytes) {
-                    fields.push(text.to_string());
+                    fields.push(Member { name: text.to_string(), ty: ty.clone(), doc: doc.clone(), optional: false });
                 }
             }
         }
@@ -1245,6 +1667,7 @@ fn push_clj_def(list: Node, bytes: &[u8], head: &str, defs: &mut Vec<Def>) {
         end_line,
         fields,
         is_data_shape,
+        ..Default::default()
     });
 }
 
@@ -1550,6 +1973,7 @@ fn collect_clj_string_named_forms(root: Node, bytes: &[u8], out: &mut Vec<Def>) 
                             end_line,
                             fields: Vec::new(),
                             is_data_shape: false,
+                            ..Default::default()
                         });
                     }
                 }
@@ -2013,6 +2437,7 @@ fn collect_string_named_calls(root: Node, bytes: &[u8], out: &mut Vec<Def>) {
                     end_line,
                     fields: Vec::new(),
                     is_data_shape: false,
+                    ..Default::default()
                 });
             }
         }
@@ -2122,6 +2547,117 @@ mod tests {
 
     fn names(parse: &FileParse) -> Vec<&str> {
         parse.defs.iter().map(|d| d.name.as_str()).collect()
+    }
+
+    fn def<'p>(parse: &'p FileParse, name: &str) -> &'p Def {
+        parse.defs.iter().find(|d| d.name == name).unwrap_or_else(|| panic!("no def {name}: {:?}", names(parse)))
+    }
+
+    /// (name, type, doc, optional) of each member, for comparing.
+    fn members(d: &Def) -> Vec<(&str, Option<&str>, Option<&str>, bool)> {
+        d.members.iter().map(|m| (m.name.as_str(), m.ty.as_deref(), m.doc.as_deref(), m.optional)).collect()
+    }
+
+    /// When a Rust item has `///` lines or a `/** */` block above it, attributes between them, its doc is that text, one paragraph per blank-line break.
+    #[test]
+    fn a_rust_items_doc_comment_is_its_doc() {
+        let src = "/// Holds a draft.\n///\n/// Saved on every edit;\n/// never lost.\n///\n/// ```\n/// let d = Draft::new();\n/// ```\n#[derive(Debug)]\npub struct Draft;\n\n/** Saves it.\n * Twice. */\npub fn save() {}\n\n// not a doc\nfn bare() {}\n\nimpl Draft {\n    /// Makes one.\n    pub fn new() -> Self { Draft }\n}\n";
+        let p = parse_file(Path::new("src/draft.rs"), src).unwrap();
+        assert_eq!(def(&p, "Draft").doc.as_deref(), Some("Holds a draft.\n\nSaved on every edit; never lost."));
+        assert_eq!(def(&p, "save").doc.as_deref(), Some("Saves it. Twice."));
+        assert_eq!(def(&p, "bare").doc, None);
+        assert_eq!(def(&p, "new").doc.as_deref(), Some("Makes one."));
+    }
+
+    /// When a Rust struct or enum is a data shape, each field carries its type and doc comment, and each variant its doc and its payload as its type.
+    #[test]
+    fn rust_fields_and_variants_carry_type_and_doc() {
+        let src = "pub struct Draft {\n    /// The text, as typed.\n    #[serde(default)]\n    pub text: String,\n    pub tags: Vec<\n        String,\n    >,\n}\n\npub enum Event {\n    /// Text arrived.\n    Message { text: String },\n    Stopped(u32, String),\n    Done,\n}\n";
+        let p = parse_file(Path::new("src/draft.rs"), src).unwrap();
+        let draft = def(&p, "Draft");
+        assert_eq!(draft.fields, vec!["text", "tags"]);
+        assert_eq!(
+            members(draft),
+            vec![("text", Some("String"), Some("The text, as typed."), false), ("tags", Some("Vec< String >"), None, false)]
+        );
+        assert_eq!(
+            members(def(&p, "Event")),
+            vec![
+                ("Message", Some("{ text: String }"), Some("Text arrived."), false),
+                ("Stopped", Some("(u32, String)"), None, false),
+                ("Done", None, None, false),
+            ]
+        );
+    }
+
+    /// When a TypeScript declaration or its `export` has a JSDoc directly above it, that is its doc, tags dropped, and an interface's members carry their type annotation, JSDoc and optional mark.
+    #[test]
+    fn typescript_jsdoc_and_member_types() {
+        let src = "/** @file The model types. */\n\n/**\n * A draft being written.\n * @see Store\n */\nexport interface Draft {\n  /** The text, as typed. */\n  text: string;\n  tags?: string[];\n  onSave: (d: Draft) => void;\n}\n\n/** Saves it. */\nfunction save() {}\n\n/** Detached. */\n\nexport const limit = 3;\n\nexport class Store {\n  /** How many. */\n  count?: number = 0;\n}\n";
+        let p = parse_file(Path::new("src/model.ts"), src).unwrap();
+        let draft = def(&p, "Draft");
+        assert_eq!(draft.doc.as_deref(), Some("A draft being written."));
+        assert_eq!(
+            members(draft),
+            vec![
+                ("text", Some("string"), Some("The text, as typed."), false),
+                ("tags", Some("string[]"), None, true),
+                ("onSave", Some("(d: Draft) => void"), None, false),
+            ]
+        );
+        assert_eq!(draft.fields, vec!["text", "tags", "onSave"]);
+        assert_eq!(def(&p, "save").doc.as_deref(), Some("Saves it."));
+        assert_eq!(def(&p, "limit").doc, None, "a JSDoc a blank line away documents nothing");
+        assert_eq!(members(def(&p, "Store")), vec![("count", Some("number"), Some("How many."), true)]);
+    }
+
+    /// When a PascalCase function in a `.tsx` file is a React component, its props are its members: an inline object type, a named interface or alias of the same file, or the names it destructures; it is no data shape.
+    #[test]
+    fn react_component_props_are_its_members() {
+        let src = "interface CardProps {\n  /** Shown on top. */\n  title: string;\n  size?: number;\n}\ntype Wrapped = PropsWithChildren<CardProps>;\n\n/** A card. */\nexport function Card({ title }: CardProps) { return <div>{title}</div>; }\n\nexport const Badge = ({ label, tone = \"info\" }: { label: string; tone?: string }) => <span>{label}</span>;\n\nexport const Pill = memo(({ text, onClose: close }) => <i>{text}</i>);\n\nexport const Shell: FC<Wrapped> = (props) => <main />;\n\nexport function helper(x: number) { return x; }\nexport const API_URL = \"/api\";\n";
+        let p = parse_file(Path::new("src/ui/Card.tsx"), src).unwrap();
+        let card = def(&p, "Card");
+        assert!(card.is_component && !card.is_data_shape && card.fields.is_empty());
+        assert_eq!(card.doc.as_deref(), Some("A card."));
+        assert_eq!(members(card), vec![("title", Some("string"), Some("Shown on top."), false), ("size", Some("number"), None, true)]);
+        assert_eq!(
+            members(def(&p, "Badge")),
+            vec![("label", Some("string"), None, false), ("tone", Some("string"), None, true)]
+        );
+        let pill: Vec<&str> = def(&p, "Pill").members.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(pill, vec!["text", "onClose"]);
+        let shell: Vec<&str> = def(&p, "Shell").members.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(shell, vec!["title", "size"]);
+        assert!(!def(&p, "helper").is_component && !def(&p, "API_URL").is_component);
+        let ts = parse_file(Path::new("src/ui/card.ts"), "export function Card(p: { a: string }) { return p.a; }\n").unwrap();
+        assert!(!def(&ts, "Card").is_component, "only .tsx/.jsx files hold components");
+    }
+
+    /// When a Go declaration has a comment block directly above it, that is its doc, and a struct's fields carry their type and doc.
+    #[test]
+    fn go_docs_and_struct_fields() {
+        let src = "package draft\n\n// Draft is what the user types.\n// It is saved often.\ntype Draft struct {\n\t// Text as typed.\n\tText string\n\tX, Y int\n}\n\n//go:generate stringer\n// Save stores it.\nfunc Save() {}\n";
+        let p = parse_file(Path::new("draft.go"), src).unwrap();
+        let draft = def(&p, "Draft");
+        assert_eq!(draft.doc.as_deref(), Some("Draft is what the user types. It is saved often."));
+        assert_eq!(
+            members(draft),
+            vec![("Text", Some("string"), Some("Text as typed."), false), ("X", Some("int"), None, false), ("Y", Some("int"), None, false)]
+        );
+        assert_eq!(def(&p, "Save").doc.as_deref(), Some("Save stores it."));
+    }
+
+    /// When a Python function or class has a docstring it is its doc, and a dataclass is a data shape whose annotated fields carry their type and the string under them.
+    #[test]
+    fn python_docstrings_and_dataclass_fields() {
+        let src = "from dataclasses import dataclass\n\n@dataclass(frozen=True)\nclass Draft:\n    \"\"\"A draft.\n\n    Saved often.\n    \"\"\"\n    text: str = \"\"\n    \"\"\"As typed.\"\"\"\n    tags: list[str]\n\n    def save(self):\n        \"\"\"Stores it.\"\"\"\n\nclass Plain:\n    x = 1\n";
+        let p = parse_file(Path::new("draft.py"), src).unwrap();
+        let draft = def(&p, "Draft");
+        assert!(draft.is_data_shape);
+        assert_eq!(draft.doc.as_deref(), Some("A draft.\n\nSaved often."));
+        assert_eq!(members(draft), vec![("text", Some("str"), Some("As typed."), false), ("tags", Some("list[str]"), None, false)]);
+        assert_eq!(def(&p, "save").doc.as_deref(), Some("Stores it."));
+        assert!(!def(&p, "Plain").is_data_shape);
     }
 
     /// When a `.vue` single-file component is parsed, makes it one definition named after its file, reading its script block's imports and identifiers at their lines in the `.vue` file.

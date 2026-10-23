@@ -342,6 +342,7 @@ mod tests {
             directives: Vec::new(),
             style: None,
             layer: None,
+            exercised_by: Vec::new(),
         }
     }
 

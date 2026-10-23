@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 /// Bumped whenever derivation changes, so a cache from an older binary is
 /// never mistaken for current.
-const DERIVE_VERSION: u32 = 9;
+const DERIVE_VERSION: u32 = 10;
 
 thread_local! {
     static PARSER: RefCell<tree_sitter::Parser> = RefCell::new(tree_sitter::Parser::new());
@@ -122,6 +122,7 @@ fn derive_uncached(project: &Path, files: &[PathBuf], print: u64) -> Result<Deri
         containers: &ctx.containers,
         files: &ctx.files,
         file_edges: &ctx.file_edges,
+        external_imports: &ctx.external_imports,
         lifts: &lifts,
         all_files: &all_files,
         structure: &structure,
