@@ -954,20 +954,25 @@ fn unit_home(
     if inner_path(container_dir, rel).1.contains('/') && components.contains_key(&own_path) {
         return Some(Home::Component(own_path));
     }
-    let mut by_component: BTreeMap<&String, usize> = BTreeMap::new();
-    let mut by_file: BTreeMap<&str, usize> = BTreeMap::new();
-    for dst in edges_from.get(rel).into_iter().flatten() {
-        if let Some(path) = file_component.get(dst).filter(|_| in_container(dst)) {
-            *by_component.entry(path).or_default() += 1;
-            *by_file.entry(dst).or_default() += 1;
+    // The component the test's imports reach most: in its own container
+    // first, else in whichever container of the repo they reach.
+    let most_imported = |within: &dyn Fn(&str) -> bool| -> Option<Home> {
+        let mut by_component: BTreeMap<&String, usize> = BTreeMap::new();
+        let mut by_file: BTreeMap<&str, usize> = BTreeMap::new();
+        for dst in edges_from.get(rel).into_iter().flatten() {
+            if let Some(path) = file_component.get(dst).filter(|_| within(dst)) {
+                *by_component.entry(path).or_default() += 1;
+                *by_file.entry(dst).or_default() += 1;
+            }
         }
-    }
-    let (top, _) = by_component.into_iter().max_by_key(|&(path, n)| (n, std::cmp::Reverse(path)))?;
-    by_file
-        .into_iter()
-        .filter(|(f, _)| &file_component[f] == top)
-        .max_by_key(|&(f, n)| (n, std::cmp::Reverse(f)))
-        .map(|(f, _)| Home::File(f.to_string()))
+        let (top, _) = by_component.into_iter().max_by_key(|&(path, n)| (n, std::cmp::Reverse(path)))?;
+        by_file
+            .into_iter()
+            .filter(|(f, _)| &file_component[f] == top)
+            .max_by_key(|&(f, n)| (n, std::cmp::Reverse(f)))
+            .map(|(f, _)| Home::File(f.to_string()))
+    };
+    most_imported(&in_container).or_else(|| most_imported(&|_| true))
 }
 
 fn push_link(
