@@ -1,9 +1,9 @@
 ---
 title: Welcome to scryer
-description: What's true about your codebase — a C4 model derived from your code and tests, with every claim verified.
+description: Spec-driven development where the spec is your tests — agents write each behaviour as a test before building it and keep the code inside its declared architecture; deterministic checks confirm both.
 hero:
   title: scryer
-  tagline: What's true about your codebase.
+  tagline: Spec-driven development where the spec is your tests.
   actions:
     - text: Get started
       link: /scryer/getting-started/installation/
@@ -16,15 +16,22 @@ hero:
 
 Coding agents write faster than you can read. After a week of agents working in parallel, nobody can say with confidence what is implemented, what was only planned, and what quietly broke.
 
-Scryer answers that with evidence. It reads your repository and derives a [C4](https://c4model.com/) model of it: containers from packaging, components from modules, links from imports, and claims from your behaviour tests. Nothing in the model is written by hand or by an agent; it is computed from the repo, so it cannot drift.
+Spec-driven development answers that with a document written up front. The document is prose, so nothing checks it, and it drifts from the code as soon as the work begins.
+
+In scryer the spec is the test suite. An agent plans a change by writing each behaviour it will add as a todo test and builds until those tests pass. Its imports are checked against the architecture style each container declares, and a green test it doubts gets probed. Every check is deterministic: a test run, the import graph, a probe's red or green.
+
+What comes out is the documentation: a [C4](https://c4model.com/) map derived from the repository, with containers from packaging, components from modules, links from imports, claims from test descriptions, and status from real test runs. Nobody writes it, so it cannot drift. Inside a session scryer drives and never blocks; at the gate, `scryer-mcp check` in CI enforces.
 
 ## How it works
 
 - **[The claim is the test.](/scryer/concepts/claims/)** A behaviour test's description is an EARS claim about the code it tests: *When a save fails, keeps the draft.*
+- **Planning is writing todo tests.** An agent plans a change by writing the claims it will satisfy as todo tests. You read a column of sentences and watch them turn proven.
+- **Run what the change reaches.** The test radius names the tests a change reaches by import; the agent runs them and hands over the JUnit report.
+- **Probes ask whether a green test would notice.** The code under a passing test is broken in an isolated worktree; a break the test misses is a finding.
+- **[Styles are structural claims.](/scryer/concepts/structure/)** A container declares its architecture style in `.scryer/structure.toml`, and the import graph is checked against it. A container with no style yet is a decision to make, not a violation.
 - **The level is the test level.** An e2e test claims for the system, an integration test for its container, a unit test for its component.
-- **[Status is derived.](/scryer/concepts/status/)** A claim is proven when its test is green and nothing it exercises changed since; planned when the test is a todo; stale when the code moved under it; failing when red.
-- **[Styles are structural claims.](/scryer/concepts/structure/)** A container declares its architecture style in `.scryer/structure.toml`, and the import graph is checked against it.
-- **Planning is writing todo tests.** An agent plans a change by writing the claims it will satisfy as todo tests. You read a column of sentences and watch them flip to proven.
+- **[Status comes from test runs.](/scryer/concepts/status/)** A claim is proven when its test passed and nothing it exercises changed since; failing when red; todo when its test is a todo, whether the work is not done yet or the behaviour exists with no test body; unverified when it has no current verdict, because something changed since its last run or it has never run.
+- **Several agents, one spec.** Each session's touched files and todo stubs are recorded, so an agent sees who else is working on what it is about to touch. Awareness, not locks.
 
 ## The C4 hierarchy
 

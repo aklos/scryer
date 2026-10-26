@@ -367,13 +367,26 @@ pub(crate) fn check_report(tree: &DerivedTree, status: &DerivedStatus, gates: &G
             survivors.len()
         ));
     }
+    // A container with no style chosen breaks nothing: a decision still to
+    // make, named in the notes. Only code breaking a declared style fails.
+    let mut unstyled = Vec::new();
     for v in &tree.style_violations {
-        failures.push(format!("structural: {} ({})", v.detail, v.file));
+        if v.kind == "unstyled" {
+            unstyled.push(crate::helpers::breadcrumb(&tree.planned, &v.node_id));
+        } else {
+            failures.push(format!("structural: {} ({})", v.detail, v.file));
+        }
+    }
+    if !unstyled.is_empty() {
+        notes.push(format!(
+            "no style chosen yet for {} (not gating — declare one in structure.toml once the code has a shape)",
+            unstyled.join(", ")
+        ));
     }
     failures.extend(lint_tree(tree).iter().map(|f| format!("lint: {}", lint_line(f))));
     let planned = in_state(ClaimState::Planned).count();
     if planned > 0 {
-        notes.push(format!("{planned} todo test(s) — planned work, not a failure"));
+        notes.push(format!("{planned} todo test(s) — work to do or a test body to write, not a failure"));
     }
     if status.claims.is_empty() {
         notes.push("no claims: no behaviour test carries a description yet".into());
@@ -407,10 +420,10 @@ pub(crate) fn run_setup(args: &[String]) -> Result<(), Box<dyn std::error::Error
 }
 
 /// The ambient one-liner: claims by status, then surviving mutants when there
-/// are any. "scryer: 120 proven · 3 stale · 0 failing · 2 planned".
+/// are any. "scryer: 120 proven · 3 stale · 0 failing · 2 todo".
 pub(crate) fn status_line(t: &DerivedCounts) -> String {
     let mut line = format!(
-        "scryer: {} proven · {} stale · {} failing · {} planned",
+        "scryer: {} proven · {} stale · {} failing · {} todo",
         t.proven, t.stale, t.failing, t.planned
     );
     if t.surviving_mutants > 0 {
@@ -467,25 +480,26 @@ mod tests {
     #[test]
     fn the_status_line_counts_claims_by_status() {
         let mut t = DerivedCounts { proven: 3, stale: 2, failing: 1, planned: 4, ..Default::default() };
-        assert_eq!(status_line(&t), "scryer: 3 proven · 2 stale · 1 failing · 4 planned");
+        assert_eq!(status_line(&t), "scryer: 3 proven · 2 stale · 1 failing · 4 todo");
         t.surviving_mutants = 2;
         assert!(status_line(&t).ends_with(" · 2 surviving mutants"));
         let dir = project();
         let (_, s) = derived_status(dir.path()).unwrap();
-        assert_eq!(status_line(&s.totals), "scryer: 0 proven · 3 stale · 0 failing · 1 planned");
+        assert_eq!(status_line(&s.totals), "scryer: 0 proven · 3 stale · 0 failing · 1 todo");
     }
 
     /// With no report ingested, claims are stale: a note by default, a
-    /// failure under --fail-on-stale. A todo test is never a failure; a
-    /// container with no declared style always is.
+    /// failure under --fail-on-stale. A todo test is never a failure, and
+    /// neither is a container with no style chosen: both are notes.
     #[test]
     fn check_gates_stale_claims_only_when_asked() {
         let dir = project();
         let (tree, status) = derived_status(dir.path()).unwrap();
         let lenient = check_report(&tree, &status, &Gates::default());
         let structural = |r: &CheckReport| r.failures.iter().filter(|f| f.starts_with("structural: ")).count();
-        assert_eq!(structural(&lenient), 1, "the unstyled crate: {:?}", lenient.failures);
-        assert_eq!(lenient.failures.len(), 1, "{:?}", lenient.failures);
+        assert_eq!(structural(&lenient), 0, "the unstyled crate is no failure: {:?}", lenient.failures);
+        assert!(lenient.failures.is_empty(), "{:?}", lenient.failures);
+        assert!(lenient.notes.iter().any(|n| n.starts_with("no style chosen yet")), "{:?}", lenient.notes);
         assert!(lenient.notes.iter().any(|n| n.contains("3 stale")), "{:?}", lenient.notes);
         assert!(lenient.notes.iter().any(|n| n.contains("1 todo test")), "{:?}", lenient.notes);
         let strict = check_report(&tree, &status, &Gates { stale: true, mutants: false });

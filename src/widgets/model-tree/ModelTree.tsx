@@ -21,14 +21,12 @@ import type { Editor } from "../../entities/model/editor";
 import type { ModelDiff } from "../../entities/model/planDiff";
 import {
   collectPlanEntries,
-  combineMarks,
-  groupDrift,
   type MarkPair,
   nodeDrift,
-  resolveMark,
   rollupMarks,
 } from "../../features/change-marks/changeMarks";
-import { MARK_META, type Mark } from "../../entities/model/changeKinds";
+import { attentionState, CLAIM_TONE } from "../../entities/model/claimState";
+import type { DerivedNodeStatus } from "../../entities/model/derived";
 import { kindIcon } from "../../entities/model/kindIcon";
 import { StyleGlyph } from "../../entities/model/styles/StyleGlyph";
 import { styleTable } from "../../entities/model/health";
@@ -68,22 +66,26 @@ const INDENT = 14;
 const GUTTER = 16;
 const ROW = "group/row relative flex items-center gap-1 rounded pr-3 h-[26px] cursor-pointer select-none";
 
-// The change letter for one row — a fixed-width, centered, mono cell pinned to
-// the row's left edge so the letters line up regardless of depth. Renders an
-// empty cell when there's no mark, keeping the label column aligned. A rolled
-// mark (`dim`) is a DESCENDANT's change showing through a collapsed branch —
-// same letter and hue, dimmed so it never reads as the row's own edit.
-function ChangeGutter({ mark, dim }: { mark: Mark | null; dim?: boolean }) {
+// The claim letter for one row — a fixed-width, centered, mono cell pinned to
+// the row's left edge so the letters line up regardless of depth: F when a
+// claim here fails, T when one is a todo test (work to do, or a test body
+// not written yet), in the claim-state
+// hues. Renders an empty cell otherwise, keeping the label column aligned. A
+// rolled letter (`dim`) is a DESCENDANT's state showing through a collapsed
+// branch — same letter and hue, dimmed so it never reads as the row's own.
+const GUTTER_LETTER = { failing: "F", planned: "T" } as const;
+function ClaimGutter({ state, dim }: { state: "failing" | "planned" | null; dim?: boolean }) {
+  const label = state === "failing" ? "A claim here is failing" : "A claim here is a todo test";
   return (
     <span
-      aria-hidden={!mark}
-      title={mark ? (dim ? `${MARK_META[mark].label} — inside this branch` : MARK_META[mark].label) : undefined}
+      aria-hidden={!state}
+      title={state ? (dim ? `${label.replace(" here", " inside this branch")}` : label) : undefined}
       className={`pointer-events-none absolute inset-y-0 left-0 flex items-center justify-center font-mono text-2xs font-bold ${
-        mark ? MARK_META[mark].color : ""
+        state ? CLAIM_TONE[state] : ""
       } ${dim ? "opacity-50" : ""}`}
       style={{ width: GUTTER }}
     >
-      {mark}
+      {state ? GUTTER_LETTER[state] : null}
     </span>
   );
 }
@@ -189,6 +191,7 @@ export function ModelTree({
   previewable,
   testTally,
   structural,
+  claimStatus,
 }: {
   model: ScryModel;
   /** Symbol ids the preview sidecar can render — derived from its export list,
@@ -226,6 +229,9 @@ export function ModelTree({
    *  id — from {@link structuralBySubtree}. Shown on every row, lens or not:
    *  it is the trail from a flagged system down to the file to fix. */
   structural?: ReadonlyMap<string, readonly StyleViolation[]>;
+  /** Claim states per node (own and subtree), from the derived status —
+   *  drives the gutter letter. */
+  claimStatus?: Record<string, DerivedNodeStatus>;
 }) {
   const [width, setWidth] = useState(() => {
     const saved = Number(localStorage.getItem("scryer:treeWidth"));
@@ -617,16 +623,13 @@ export function ModelTree({
     const hiddenSyms =
       !filterActive && node.kind === "component" ? hiddenSymbolCount(node.id) : 0;
     const isDrop = dropKey === `node:${node.id}`;
-    const marks = markOf.get(node.id) ?? { plan: null, drift: null };
-    // The gutter shows this node's OWN mark; when the branch's children are
-    // not on screen (collapsed, or hidden by the altitude toggle), a
-    // descendant's mark rolls up dimmed so the change is never invisible.
-    const ownMark = resolveMark(marks);
+    // The gutter shows this node's OWN claim state; when the branch's
+    // children are not on screen (collapsed, or hidden by the altitude
+    // toggle), a descendant's rolls up dimmed so it is never invisible.
+    const ownMark = attentionState(claimStatus?.[node.id]?.own);
     const childrenOnScreen = row.hasChildren && row.isOpen;
     const rolledMark =
-      ownMark || childrenOnScreen
-        ? null
-        : resolveMark(rolledOf.get(node.id) ?? { plan: null, drift: null });
+      ownMark || childrenOnScreen ? null : attentionState(claimStatus?.[node.id]?.subtree);
 
     return (
       <div
@@ -651,7 +654,7 @@ export function ModelTree({
             : ""
         }`}
       >
-        <ChangeGutter mark={ownMark ?? rolledMark} dim={!ownMark && !!rolledMark} />
+        <ClaimGutter state={ownMark ?? rolledMark} dim={!ownMark && !!rolledMark} />
         {/* Rails are suppressed on the selected row so the ancestor lines pass
             behind the selection band instead of ticking across it. */}
         {!isSel && renderRails(row)}
@@ -772,19 +775,15 @@ export function ModelTree({
   const renderGroup = (row: TreeRow): React.ReactNode => {
     const group = row.group!;
     const isSel = selected?.kind === "group" && selected.id === group.id;
-    const gMark = resolveMark({
-      plan: entryMark.get(group.id) ?? null,
-      drift: groupDrift(group),
-    });
-    // Collapsed folder: members' marks (own + their subtrees) roll up dimmed.
-    const gRolled =
-      gMark || row.isOpen
-        ? null
-        : resolveMark(
-            combineMarks(
-              group.memberIds.flatMap((m) => [markOf.get(m), rolledOf.get(m)]),
-            ),
-          );
+    // Collapsed folder: members' claim states roll up dimmed.
+    const memberStates = group.memberIds.map((m) => attentionState(claimStatus?.[m]?.subtree));
+    const gRolled = row.isOpen
+      ? null
+      : memberStates.includes("failing")
+        ? "failing"
+        : memberStates.includes("planned")
+          ? "planned"
+          : null;
     // Declared member count, shown (quietly) only when collapsed.
     const memberCount = row.isOpen ? 0 : group.memberIds.length;
     const groupLevel =
@@ -812,7 +811,7 @@ export function ModelTree({
           !groupLit(group) && !isSel ? "opacity-40 transition-opacity" : ""
         }`}
       >
-        <ChangeGutter mark={gMark ?? gRolled} dim={!gMark && !!gRolled} />
+        <ClaimGutter state={gRolled} dim={!!gRolled} />
         {!isSel && renderRails(row)}
         <Chevron
           has={row.hasChildren}
@@ -924,7 +923,7 @@ export function ModelTree({
           {(
             [
               { id: "all", label: "All" },
-              { id: "changes", label: "Planned" },
+              { id: "changes", label: "Todo" },
               { id: "tests", label: "Tests" },
             ] as const
           ).map((opt) => (
@@ -933,7 +932,7 @@ export function ModelTree({
               type="button"
               title={
                 opt.id === "changes"
-                  ? "Lens: planned — claims written as todo tests and not yet implemented"
+                  ? "Lens: todo — claims written as todo tests: not built yet, or built with no test body"
                   : opt.id === "tests"
                       ? "Lens: tests — claims with no test attached, failing tests, and tests that let a deliberate break through"
                       : "Show the whole model"
@@ -1019,7 +1018,7 @@ export function ModelTree({
             {q !== ""
               ? "No matches."
               : lens === "changes"
-                ? "Nothing planned — no todo tests."
+                ? "No todo tests."
                 : lens === "drift"
                   ? "No drift — the model and code agree."
                   : "Nothing to look at — every testable claim has a test, and none is failing or hollow."}

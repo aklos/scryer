@@ -38,7 +38,7 @@ Where a test lives decides where its claim sits. An end-to-end test claims for t
 
 ## Planned claims
 
-A todo test is a planned claim: `it.todo`, `test.todo` or `it.skip`, `#[ignore]` or a body that is only `todo!()`, `@pytest.mark.skip`, `[Fact(Skip = …)]`. Writing the claims you intend to satisfy as todo tests is how a change is planned; adding a claim in the app writes one for you.
+A todo test is a todo claim: `it.todo`, `test.todo` or `it.skip`, `#[ignore]` or a body that is only `todo!()`, `@pytest.mark.skip`, `[Fact(Skip = …)]`. Writing the claims you intend to satisfy as todo tests is how a change is planned, and a claim the code already meets but no test checks yet is a todo too; adding a claim in the app writes one for you.
 
 ## Module descriptions
 

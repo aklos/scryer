@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ModelHealthReport, StyleViolation } from "../src/entities/model/health";
-import { structuralBySubtree, structuralNotice } from "../src/entities/model/health";
+import { noStyleNotice, structuralBySubtree, structuralNotice, unstyledContainers } from "../src/entities/model/health";
 import { buildDiagramScene } from "../src/widgets/diagram-canvas/diagramLayout";
 import type { ScryModel } from "../src/entities/model/viewmodel";
 
@@ -50,28 +50,42 @@ const reportWith = (violations: StyleViolation[]) =>
     structural: { violations },
   }) as unknown as ModelHealthReport;
 
-const ASK = "ask the agent to choose the architecture this code should have and refactor to it";
-
 describe("structural notice", () => {
-  it("charges a violation to its node and every ancestor", () => {
+  it("Charges a violation to its node and every ancestor", () => {
     const by = structuralBySubtree(model, reportWith([forbidden, unstyled]));
     expect(by.get("dom")).toEqual([forbidden]);
     expect(by.get("svc")).toEqual([forbidden]);
-    expect(by.get("bare")).toEqual([unstyled]);
-    expect(by.get("sys")).toHaveLength(2);
+    expect(by.get("sys")).toEqual([forbidden]);
     expect(by.has("infra")).toBe(false);
   });
 
-  it("tells the user to have the agent choose an architecture and refactor", () => {
-    expect(structuralNotice([])).toBeNull();
-    expect(structuralNotice([unstyled])).toEqual({
-      unstyledOnly: true,
-      text: `No architectural style declared — ${ASK}`,
-    });
-    expect(structuralNotice([forbidden, unstyled])).toEqual({
-      unstyledOnly: false,
-      text: `Structurally invalid (2 violations) — ${ASK}`,
-    });
+  it("Never counts a container with no style chosen as a violation", () => {
+    const report = reportWith([unstyled]);
+    expect(structuralBySubtree(model, report).size).toBe(0);
+    expect([...unstyledContainers(report)]).toEqual(["bare"]);
+  });
+
+  it("When a container has no style chosen, notes it on the container and names it on the system", () => {
+    const none = new Set(["bare"]);
+    expect(noStyleNotice(none, { id: "bare", kind: "container" }, model)?.text).toMatch(/^No architectural style chosen yet/);
+    expect(noStyleNotice(none, { id: "sys", kind: "system" }, model)?.containers).toEqual(["bare"]);
+    expect(noStyleNotice(none, { id: "svc", kind: "container" }, model)).toBeNull();
+  });
+
+  it("When a container's code breaks its style, names the style on the container and on the component", () => {
+    expect(structuralNotice([], { id: "svc", kind: "container" }, model)).toBeNull();
+    expect(structuralNotice([forbidden], { id: "svc", kind: "container" }, model)).toBe(
+      "1 violation of this container's hexagonal style — ask the agent to refactor the code to it",
+    );
+    expect(structuralNotice([forbidden], { id: "dom", kind: "component" }, model)).toBe(
+      "1 violation of Svc's hexagonal style here — ask the agent to refactor the code to it",
+    );
+  });
+
+  it("When the violations lie in containers below, names those containers instead of asking for a style", () => {
+    expect(structuralNotice([forbidden], { id: "sys", kind: "system" }, model)).toBe(
+      "Inside: Svc breaks its style (1 violation)",
+    );
   });
 });
 

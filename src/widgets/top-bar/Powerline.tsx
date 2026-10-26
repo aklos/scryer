@@ -76,14 +76,14 @@ export function Powerline({ model, agent, health, launch, onOpenSpecial, onOpenS
         onClick={() => onOpenSpecial("session")}
         className="seg"
         style={sb("color-mix(in srgb, var(--text) 4%, var(--surface-canvas))")}
-        title="Claims by derived status — proven, stale, failing, planned. Click for what changed since you last looked."
+        title="Claims by derived status — proven, unverified, failing, todo. Click for what changed since you last looked."
       >
         {counts ? (
           <>
             <span className="pl-strong font-medium">{counts.proven}</span>
             <span className="text-[var(--text-secondary)]">proven</span>
             <span className="text-[var(--text-tertiary)]">
-              · {counts.stale} stale · {counts.failing} failing · {counts.planned} planned
+              · {counts.stale} stale · {counts.failing} failing · {counts.planned} todo
             </span>
           </>
         ) : (

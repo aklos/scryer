@@ -159,7 +159,8 @@ export function Ambox({
   children,
   actions,
 }: {
-  tone: "warning" | "danger" | "info";
+  /** `note` is neutral: something to decide, not something wrong. */
+  tone: "warning" | "danger" | "info" | "note";
   icon: React.ReactNode;
   children: React.ReactNode;
   actions?: React.ReactNode;
@@ -169,13 +170,17 @@ export function Ambox({
       ? "text-red-600 dark:text-red-400"
       : tone === "info"
         ? "text-violet-600 dark:text-violet-400"
-        : "text-orange-600 dark:text-orange-400";
+        : tone === "note"
+          ? "text-[var(--text-tertiary)]"
+          : "text-orange-600 dark:text-orange-400";
   const wash =
     tone === "danger"
       ? "border-red-500/30 bg-red-500/10"
       : tone === "info"
         ? "border-violet-500/30 bg-violet-500/10"
-        : "border-orange-500/30 bg-orange-500/10";
+        : tone === "note"
+          ? "border-[var(--border-strong)] bg-[var(--surface-tint)]"
+          : "border-orange-500/30 bg-orange-500/10";
   return (
     <div className={`flex items-center gap-2.5 rounded-md border ${wash} px-3 py-2 text-xs text-[var(--text-secondary)]`}>
       <span className={`shrink-0 ${iconTone}`}>{icon}</span>

@@ -258,7 +258,9 @@ pub fn compute_derived_status(
         t.caught += tally.caught;
         t.survived += tally.survived;
     }
-    for v in &tree.style_violations {
+    // A container with no style chosen breaks nothing; only code breaking a
+    // declared style counts.
+    for v in tree.style_violations.iter().filter(|v| v.kind != "unstyled") {
         own.entry(v.node_id.as_str()).or_default().style_violations += 1;
     }
     let mut dark: HashMap<&str, Vec<String>> = HashMap::new();

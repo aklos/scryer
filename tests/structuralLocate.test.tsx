@@ -61,14 +61,11 @@ describe("locating structural violations", () => {
     expect(html).toContain("misplaced file");
   });
 
-  it("When only styles are undeclared, counts a subtree's violations in orange", () => {
+  it("Counts a subtree's violations in red, and nothing when there are none", () => {
     expect(renderToStaticMarkup(<StructuralCount violations={[]} />)).toBe("");
-    const red = renderToStaticMarkup(<StructuralCount violations={[forbidden, unstyled]} />);
-    expect(red).toContain('data-structural-count="2"');
+    const red = renderToStaticMarkup(<StructuralCount violations={[forbidden]} />);
+    expect(red).toContain('data-structural-count="1"');
     expect(red).toContain("text-red-600");
-    expect(red).toContain("2 structural violations in this subtree");
-    const orange = renderToStaticMarkup(<StructuralCount violations={[unstyled]} />);
-    expect(orange).toContain("text-orange-600");
-    expect(orange).toContain("declares no architectural style");
+    expect(red).toContain("1 structural violation in this subtree");
   });
 });

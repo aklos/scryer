@@ -415,13 +415,12 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
           onSetConcernLens={setConcernLens}
           testTally={testTally}
           structural={structural}
+          claimStatus={healthReport?.derivedStatus?.nodes}
         />
         {view === "diagram" ? (
           <DiagramView
             model={model}
             previewable={previewable}
-            planDiff={planDiff}
-            committed={committed}
             report={healthReport}
             focusId={diagramFocus}
             selectedId={selected?.kind === "node" ? selected.id : null}

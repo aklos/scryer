@@ -21,6 +21,7 @@ import { GitBranch, History, Users } from "lucide-react";
 import { jumpTo, PageSection } from "../../shared/ui/pagekit";
 import { respElementId } from "../../widgets/source-section/SourceSection";
 import { SpecialBody, SpecialHeader } from "../../widgets/special-page-shell/shell";
+import { CLAIM_LABEL, CLAIM_TONE } from "../../entities/model/claimState";
 import type { ScryModel } from "../../entities/model/viewmodel";
 import type { DerivedStatus } from "../../entities/model/derived";
 import { useAgentIntegration } from "../../features/agent-integration/useAgentIntegration";
@@ -74,12 +75,7 @@ interface Landing {
 const when = (at: number) =>
   new Date(at * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
-const TONE: Record<string, string> = {
-  proven: "text-emerald-700 dark:text-emerald-300",
-  planned: "text-sky-700 dark:text-sky-300",
-  stale: "text-amber-700 dark:text-amber-300",
-  failing: "text-red-700 dark:text-red-300",
-};
+const TONE: Record<string, string> = CLAIM_TONE;
 
 export function LandingPage({
   projectPath,
@@ -286,7 +282,7 @@ function Standing({
         {cells.map(([state, n]) => (
           <span key={state} className="flex items-baseline gap-1.5">
             <b className={`font-mono text-lg ${n > 0 ? TONE[state] : "text-[var(--text-ghost)]"}`}>{n}</b>
-            <span className="text-xs text-[var(--text-muted)]">{state}</span>
+            <span className="text-xs text-[var(--text-muted)]">{CLAIM_LABEL[state]}</span>
           </span>
         ))}
       </div>
@@ -300,7 +296,7 @@ function Standing({
         .filter(([, rows]) => rows.length > 0)
         .map(([state, rows]) => (
           <div key={state} className="mb-2">
-            <div className="text-[11px] font-medium uppercase tracking-wide text-[var(--text-tertiary)]">{state}</div>
+            <div className="text-[11px] font-medium uppercase tracking-wide text-[var(--text-tertiary)]">{CLAIM_LABEL[state]}</div>
             <ul className="flex flex-col">
               {rows.map((c) => (
                 <li key={c.respId}>
@@ -338,8 +334,8 @@ function SessionCard({
 }) {
   const groups: [string, LandingClaim[]][] = [
     ["Newly proven", s.newlyProven],
-    ["Newly planned", s.newlyPlanned],
-    ["Still planned", s.stillPlanned],
+    ["New todo", s.newlyPlanned],
+    ["Still todo", s.stillPlanned],
     ["Newly stale or failing", s.newlyStaleOrFailing],
   ];
   // Only the counts that moved; a block where nothing did says so once.
@@ -384,7 +380,7 @@ function SessionCard({
                     className="flex w-full items-baseline gap-2 rounded px-1 py-0.5 text-left text-sm hover:bg-[var(--surface-hover)]"
                     title={`${c.file}:${c.line}`}
                   >
-                    <span className={`shrink-0 text-xs ${TONE[c.state] ?? ""}`}>{c.state}</span>
+                    <span className={`shrink-0 text-xs ${TONE[c.state] ?? ""}`}>{CLAIM_LABEL[c.state]}</span>
                     <span className="min-w-0 flex-1 truncate text-[var(--text)]">
                       {c.statement}
                       {c.concerns?.map((t) => (

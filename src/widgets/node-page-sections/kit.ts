@@ -6,18 +6,10 @@ import { useState } from "react";
 export const RESP_ROW = "relative grid grid-cols-[18px_22px_1fr] items-baseline";
 export const PROP_ROW = "relative grid grid-cols-[18px_22px_1fr] items-baseline";
 
-// The mockup's `.ctl` overlay, scoped to a statement (`/srow`) or directive
-// (`/drow`) line so each line reveals only its own controls on hover. Same
-// gradient float as the shared CTL; `not-italic` keeps buttons upright on the
-// italic directive rows.
-const CTL_BASE =
-  "pointer-events-none invisible absolute inset-y-0 -right-1 z-10 flex items-center gap-1.5 not-italic pl-9 pr-1 [background-image:linear-gradient(90deg,transparent,var(--surface-tint)_28px)]";
-export const CTL_SROW = `${CTL_BASE} group-hover/srow:visible`;
-export const CTL_DROW = `${CTL_BASE} group-hover/drow:visible`;
-// Header gauge chip — completeness / test-backing readouts on the type line.
-// Bordered mono chips: instruments, not prose.
-export const GAUGE_CHIP =
-  "flex shrink-0 items-center gap-1 rounded border border-[var(--border)] px-1.5 py-0.5 font-mono text-2xs tabular-nums text-[var(--text-tertiary)]";
+// A chip on the page's type line — style, layer, claims. One size and one
+// shape for all of them; each leads with a muted word saying what it is.
+export const TYPE_CHIP =
+  "flex h-5 shrink-0 items-center gap-1.5 rounded border border-[var(--border)] px-1.5 font-mono text-2xs leading-none tabular-nums text-[var(--text-secondary)]";
 
 // Full-cell field highlight: dim on line hover; the focused field drops onto
 // the recessed field surface (Editable adds the accent ring + full-text lift).
@@ -26,8 +18,6 @@ export const GAUGE_CHIP =
 export const STMT_HL_HOVER =
   "group-hover/srow:bg-[color-mix(in_srgb,var(--text)_6%,transparent)]";
 export const STMT_HL = `${STMT_HL_HOVER} focus:bg-[var(--surface-field)]`;
-export const DIR_HL =
-  "group-hover/drow:bg-[color-mix(in_srgb,var(--text)_6%,transparent)] focus:bg-[var(--surface-field)]";
 
 /** Per-section edit toggles for one page. Edits inside a section accumulate
  *  in a local draft and persist only on Done; Cancel discards the draft —

@@ -20,8 +20,8 @@
 import { useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
-  FlaskConical,
   Flag,
+  Shapes,
 } from "lucide-react";
 import type { Node, ScryModel } from "../../entities/model/viewmodel";
 import {
@@ -32,8 +32,9 @@ import {
 } from "../../entities/model/viewmodel";
 import {
   structuralBySubtree,
+  noStyleNotice,
+  unstyledContainers,
   structuralNotice,
-  subtreeTestTone,
   styleTable,
   testStatesOf,
   type StyleViolation,
@@ -43,14 +44,15 @@ import { lookupIcon } from "../../features/search/IconPicker";
 import { ConnectionsSection, ImpliedConnectionsSection } from "../../widgets/connections/ConnectionsSection";
 import { PageMenuProvider, usePageMenu, useCopyId, copyIdItem } from "../../features/search/pageMenu";
 import {
-  Editable,
   NAME_MAX,
   PAGE_COL,
   sanitizeIdentifier,
-  TECHNOLOGY_MAX,
 } from "../../shared/ui/pagekit";
 import type { PageProps } from "../../widgets/node-page-sections/types";
-import { GAUGE_CHIP, useEditSections } from "../../widgets/node-page-sections/kit";
+import { TYPE_CHIP, useEditSections } from "../../widgets/node-page-sections/kit";
+import { CommentsRail } from "../../widgets/comments-rail/CommentsRail";
+import { useComments } from "../../features/comments/useComments";
+import { CLAIM_LABEL, CLAIM_STATES, CLAIM_TONE, describeCounts } from "../../entities/model/claimState";
 import {
   ancestorChain,
   Crumbs,
@@ -198,10 +200,10 @@ function NodePageBody(props: PageProps & { node: Node }) {
   // The header edits (name, technology) accumulate in this draft; the model is
   // written once, on Done — the same nothing-commits-until-Done contract as
   // every SectionEditor. Cancel (or navigating away) simply drops the draft.
-  const titleDraft = useRef<{ name: string; technology: string } | null>(null);
+  const titleDraft = useRef<{ name: string } | null>(null);
   const openTitleEdit = () => {
     if (ed.isEditing("title")) return;
-    titleDraft.current = { name: node.name, technology: node.technology ?? "" };
+    titleDraft.current = { name: node.name };
     ed.toggle("title");
   };
   const commitTitleEdit = () => {
@@ -209,12 +211,9 @@ function NodePageBody(props: PageProps & { node: Node }) {
     titleDraft.current = null;
     ed.toggle("title");
     if (!d || !editor) return;
-    // An emptied title keeps the old name; an emptied technology clears it.
+    // An emptied title keeps the old name.
     const name = d.name.trim() || node.name;
-    const technology = d.technology.trim() || undefined;
-    if (name !== node.name || technology !== node.technology) {
-      editor.updateNode(node.id, { name, technology });
-    }
+    if (name !== node.name) editor.updateNode(node.id, { name });
   };
   const cancelTitleEdit = () => {
     titleDraft.current = null;
@@ -230,7 +229,15 @@ function NodePageBody(props: PageProps & { node: Node }) {
     () => structuralBySubtree(model, report ?? null).get(node.id) ?? [],
     [model, report, node.id],
   );
-  const structural = structuralNotice(structuralViolations);
+  const structural = structuralNotice(structuralViolations, node, model);
+  const noStyle = noStyleNotice(unstyledContainers(report ?? null), node, model);
+  // Comment threads on this node; the system page also keeps the ones whose
+  // node no longer exists, so a moved module's threads are never lost.
+  const comments = useComments(projectPath);
+  const threads = comments.threads.filter(
+    (t) => t.node === node.id || (node.kind === "system" && !model.nodes.some((n) => n.id === t.node)),
+  );
+  const anchor = [...ancestorChain(model, node.parentId), node].map((n) => n.name).join(" / ");
   const [structuralOpen, setStructuralOpen] = useState(false);
   const dataShape = isDataShape(node);
   const resps = node.responsibilities ?? [];
@@ -251,10 +258,11 @@ function NodePageBody(props: PageProps & { node: Node }) {
 
   // Maintenance notices — full-width amboxes stacked at the top of the article
   // body (the wiki hatnote pattern), not chips crammed beside the title.
-  const bannerStack = structural ? (
+  const bannerStack = structural || noStyle ? (
     <>
+      {structural && (
       <Ambox
-        tone={structural.unstyledOnly ? "warning" : "danger"}
+        tone="danger"
         icon={<Flag className="h-3 w-3" />}
         actions={
           <button
@@ -267,14 +275,28 @@ function NodePageBody(props: PageProps & { node: Node }) {
           </button>
         }
       >
-        {structural.text}
+        {structural}
       </Ambox>
+      )}
       {structuralOpen && (
         <StructuralViolationList
           violations={structuralViolations}
           model={model}
           onSelectNode={onSelectNode}
         />
+      )}
+      {noStyle && (
+        <Ambox tone="note" icon={<Shapes className="h-3 w-3" />}>
+          {noStyle.text}
+          {noStyle.containers.map((id, i) => (
+            <span key={id}>
+              {i > 0 && (i === noStyle.containers.length - 1 ? " and " : ", ")}
+              <button type="button" onClick={() => onSelectNode(id)} className={NOTICE_ACTION}>
+                {model.nodes.find((n) => n.id === id)?.name ?? id}
+              </button>
+            </span>
+          ))}
+        </Ambox>
       )}
     </>
   ) : null;
@@ -295,53 +317,34 @@ function NodePageBody(props: PageProps & { node: Node }) {
             {/* Technology — editable in place when the header is in edit mode,
                 accumulating in the title draft (committed by Done); otherwise
                 shown only when set. */}
-            {ed.isEditing("title") ? (
+            {node.technology && (
               <>
                 <span className="text-[var(--text-ghost)]">·</span>
-                <Editable
-                  initial={node.technology ?? ""}
-                  placeholder="technology"
-                  maxLength={TECHNOLOGY_MAX}
-                  onInput={(t) => {
-                    if (titleDraft.current) titleDraft.current.technology = t;
-                  }}
-                  onEnter={commitTitleEdit}
-                  onEscape={cancelTitleEdit}
-                  className="font-mono text-[var(--text-secondary)]"
-                />
+                <span className="font-mono">{node.technology}</span>
               </>
-            ) : (
-              node.technology && (
-                <>
-                  <span className="text-[var(--text-ghost)]">·</span>
-                  <span className="font-mono">{node.technology}</span>
-                </>
-              )
             )}
             {/* Style and layer: the horizontal axis. A container names its
                 style; a component its layer, with the one line the reader
                 needs about it — what it may import. Symbols inherit. */}
             {node.style && (
-              <>
-                <span className="text-[var(--text-ghost)]">·</span>
-                <span
-                  className="rounded border border-[var(--border-subtle)] px-1 text-[10px] tracking-wider"
-                  title={styleDef ? `${styleDef.name}: ${styleDef.description}` : `style: ${node.style}`}
-                >
-                  {node.style}
-                </span>
-              </>
+              <span
+                className={TYPE_CHIP}
+                title={styleDef ? `${styleDef.name}: ${styleDef.description}` : `style: ${node.style}`}
+              >
+                <span className="text-[var(--text-muted)]">style</span>
+                {node.style}
+              </span>
             )}
             {layer && (
               <>
-                <span className="text-[var(--text-ghost)]">·</span>
                 <span
-                  className="rounded border border-[var(--border-subtle)] px-1 text-[10px] uppercase tracking-wider"
+                  className={TYPE_CHIP}
                   title={
                     styleDef?.layers.find((l) => l.name === layer)?.description ??
                     `layer: ${layer}`
                   }
                 >
+                  <span className="text-[var(--text-muted)]">layer</span>
                   {layer}
                 </span>
                 {styleDef && node.kind === "component" && (
@@ -371,71 +374,32 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 </button>
               </>
             )}
-            {/* The ground-truth gauge follows the identity run as a bordered
-                mono chip — an instrument, not prose, but in the same reading
-                line (right-aligned it floats contextless at wide widths). */}
-            {/* Tests attached. The fraction is testable claims WITH a test
-                over testable claims (When/While/If on code-backed hosts);
-                tests on ubiquitous claims count in the tooltip, not the
-                fraction. Shown whenever the subtree has anything to say — a
-                0/5 is exactly the state that must not hide. */}
+            {/* The claims inside this node, by state — the same counts and
+                hues as the map's claim bar and the status line. */}
             {(() => {
-              const h = report?.health.nodes[node.id]?.subtree;
-              if (!h || (h.testable === 0 && h.testedOther === 0)) return null;
-              const covered = h.tested;
-              const extra = h.testedOther;
-              const bonus =
-                extra > 0
-                  ? `; ${extra} more test${extra === 1 ? "" : "s"} on always-active claims`
-                  : "";
-              // The subtree's verdict tone. Green is a state the gauge can
-              // reach, not just the absence of red: the chip goes emerald
-              // once the verdicts below are passing and current, amber when
-              // any is stale, red when any is failing — and stays neutral
-              // only while nothing down there has been run at all.
-              const tone = subtreeTestTone(model, node.id, props.testVerdicts);
-              const toneCls =
-                tone === "failing"
-                  ? "text-red-600 dark:text-red-400"
-                  : tone === "stale"
-                    ? "text-orange-600 dark:text-orange-400"
-                    : tone === "passing"
-                      ? "text-emerald-600 dark:text-emerald-400"
-                      : "";
-              const toneNote =
-                tone === "failing"
-                  ? "; FAILING verdicts below"
-                  : tone === "stale"
-                    ? "; stale verdicts below — re-run to refresh"
-                    : tone === "passing"
-                      ? "; recorded verdicts below are passing"
-                      : "; no test run recorded below yet";
-              if (h.testable === 0) {
-                return (
-                  <span
-                    className={`${GAUGE_CHIP} ${toneCls}`}
-                    title={`${h.tested} claim${h.tested === 1 ? "" : "s"} in this subtree ${h.tested === 1 ? "has a test" : "have tests"} attached${toneNote}`}
-                  >
-                    <FlaskConical className="h-3 w-3" />
-                    {h.tested}
-                  </span>
-                );
-              }
+              const c = report?.derivedStatus?.nodes[node.id]?.subtree;
+              if (!c || c.claims === 0) return null;
               return (
-                <span
-                  className={`${GAUGE_CHIP} ${toneCls}`}
-                  title={`${covered} of ${h.testable} testable claim${h.testable === 1 ? "" : "s"} in this subtree ${covered === 1 && h.testable === 1 ? "has a test" : "have tests"} attached${bonus}${toneNote}`}
-                >
-                  <FlaskConical
-                    className={`h-3 w-3 ${h.untested > 0 && tone === "quiet" ? "opacity-40" : ""}`}
-                  />
-                  {covered}/{h.testable}
+                <span className={TYPE_CHIP} title={`Claims in this subtree: ${describeCounts(c)}`}>
+                  <span className="text-[var(--text-muted)]">
+                    {c.claims} claim{c.claims === 1 ? "" : "s"}:
+                  </span>
+                  {CLAIM_STATES.filter((k) => c[k] > 0).map((k, i) => (
+                    <span key={k} className="flex items-center gap-1">
+                      {i > 0 && <span className="text-[var(--text-ghost)]">·</span>}
+                      <span className={CLAIM_TONE[k]}>
+                        {c[k]} {CLAIM_LABEL[k]}
+                      </span>
+                    </span>
+                  ))}
                 </span>
               );
             })()}
           </>
         }
-        editor={editor}
+        // Only a container's display name lives outside the code, in
+        // structure.toml; everything else is named by its code.
+        editor={node.kind === "container" ? editor : undefined}
         editingName={ed.isEditing("title")}
         onToggleName={openTitleEdit}
         onDone={commitTitleEdit}
@@ -461,7 +425,8 @@ function NodePageBody(props: PageProps & { node: Node }) {
               <DescriptionSection
                 value={node.description}
                 prevValue={committed?.nodes.find((n) => n.id === node.id)?.description}
-                editor={editor}
+                // The description is the module's doc comment: edited in the code.
+                editor={undefined}
                 editing={ed.isEditing("description")}
                 onToggle={() => ed.toggle("description")}
                 onCommit={(v) => editor?.updateNode(node.id, { description: v || undefined })}
@@ -513,7 +478,7 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 <PropertiesSection
                   node={node}
                   prevProps={committed?.nodes.find((n) => n.id === node.id)?.properties ?? []}
-                  editor={editor}
+                  editor={undefined}
                   editing={ed.isEditing("properties")}
                   onToggle={() => ed.toggle("properties")}
                 />
@@ -524,7 +489,8 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 committed={committed}
                 node={node}
                 report={report}
-                editor={editor}
+                // Links come from imports and structure.toml, not from here.
+                editor={undefined}
                 editing={ed.isEditing("connections")}
                 onToggle={() => ed.toggle("connections")}
                 onSelectNode={onSelectNode}
@@ -537,6 +503,11 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 onSelectNode={onSelectNode}
               />
             </article>
+            <CommentsRail
+              threads={threads}
+              onOpen={(text) => comments.open(node.id, anchor, text)}
+              onReply={comments.reply}
+            />
           </div>
       </div>
     </div>

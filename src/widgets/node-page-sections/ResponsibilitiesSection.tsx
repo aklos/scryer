@@ -6,8 +6,7 @@
  * Done, with EARS lint and a live markup preview.
  */
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { useEffect, useState } from "react";
 import {
   CheckCheck,
   CircleDashed,
@@ -49,7 +48,7 @@ import {
   SectionEditor,
   WordDiffText,
 } from "../../shared/ui/pagekit";
-import { CTL_DROW, CTL_SROW, DIR_HL, RESP_ROW, STMT_HL_HOVER } from "./kit";
+import { RESP_ROW, STMT_HL_HOVER } from "./kit";
 import { onAddClaimRequest } from "../../features/derived-tree/addClaim";
 
 // --- responsibilities (the diff view) ---------------------------------------
@@ -322,20 +321,19 @@ function ResponsibilitiesEditor({
   onClose: () => void;
 }) {
   const seededId = seedNewRow ? mintId(initial) : null;
-  const start: RespDraftRow[] = seededId
+  const start: Responsibility[] = seededId
     ? [...initial, { id: seededId, statement: "" }]
     : initial;
 
-  const commit = (draft: RespDraftRow[]) => {
-    // Deleted rows (draft-only `removed` marker) and blank statements (invalid —
-    // the backend flags them) drop out on commit; the removal loop below calls
-    // removeResponsibility for dropped existing rows. A blank concern drops to
+  const commit = (draft: Responsibility[]) => {
+    // Blank statements (invalid — the backend flags them) drop out on commit.
+    // A blank concern drops to
     // untagged; slug normalization and registry minting happen at the write
     // chokepoint (`registerConcerns`).
     const initialStmt = new Map(initial.map((r) => [r.id, r.statement]));
     const cleaned = draft
-      .filter((r) => !r.removed && r.statement.trim() !== "")
-      .map(({ removed: _removed, ...r }) => {
+      .filter((r) => r.statement.trim() !== "")
+      .map((r) => {
         // A statement the user actually touched and left marker-free gets its
         // display markup minted from the positional EARS pass — exactly what
         // the field's mirror previewed. Untouched rows pass through byte-
@@ -360,7 +358,7 @@ function ResponsibilitiesEditor({
   };
 
   return (
-    <SectionEditor<RespDraftRow[]>
+    <SectionEditor<Responsibility[]>
       initial={start}
       onCommit={commit}
       onClose={onClose}
@@ -376,7 +374,7 @@ function ResponsibilitiesEditor({
             }
             className={BTN}
           >
-            Add responsibility
+            Add claim
           </button>
           {/* The EARS forms (rule 21), one glance's worth: condition first,
               response last; no keyword means always-active, verb first. */}
@@ -389,70 +387,28 @@ function ResponsibilitiesEditor({
       )}
     >
       {(draft, setDraft) => {
-        const patchRow = (id: string, patch: Partial<RespDraftRow>) =>
+        const patchRow = (id: string, patch: Partial<Responsibility>) =>
           setDraft((d) => d.map((r) => (r.id === id ? { ...r, ...patch } : r)));
-        // Delete marks the row (struck, with Undo) instead of splicing it —
-        // a stray click on the hover-revealed Delete can't destroy typed work.
-        const removeRow = (id: string) => patchRow(id, { removed: true });
-        const restoreRow = (id: string) => patchRow(id, { removed: false });
         return draft.length === 0 ? (
           <Empty>No tests state a claim here yet.</Empty>
         ) : (
           <ul className="-mx-2 flex flex-col">
-            {orderByConcern(draft, (r) => r.concern).map((r, i) =>
-              r.removed ? (
-                <RemovedRespRow key={r.id} resp={r} index={i + 1} onUndo={() => restoreRow(r.id)} />
-              ) : (
-                <ResponsibilityEditRow
-                  key={r.id}
-                  resp={r}
-                  index={i + 1}
-                  concerns={concerns}
-                  // autoFocus fires at mount only — it lands on the seeded row
-                  // and on rows appended via "Add responsibility".
-                  autoFocus={r.statement === "" && r.id === draft[draft.length - 1].id}
-                  onPatch={patchRow}
-                  onRemove={removeRow}
-                />
-              ),
-            )}
+            {orderByConcern(draft, (r) => r.concern).map((r, i) => (
+              <ResponsibilityEditRow
+                key={r.id}
+                resp={r}
+                index={i + 1}
+                concerns={concerns}
+                // autoFocus fires at mount only — it lands on the seeded row
+                // and on rows appended via "Add claim".
+                autoFocus={r.statement === "" && r.id === draft[draft.length - 1].id}
+                onPatch={patchRow}
+              />
+            ))}
           </ul>
         );
       }}
     </SectionEditor>
-  );
-}
-
-/** A responsibility in the edit draft: `removed` is the soft-delete marker —
- *  the row stays visible (struck, with Undo) and drops out only on Done. */
-type RespDraftRow = Responsibility & { removed?: boolean };
-
-/** A soft-deleted claim row in the editor — struck through with an inline Undo,
- *  the same recipe as {@link MembersEditor}'s dropped rows. */
-function RemovedRespRow({
-  resp,
-  index,
-  onUndo,
-}: {
-  resp: RespDraftRow;
-  index: number;
-  onUndo: () => void;
-}) {
-  return (
-    <li className={`${RESP_ROW} py-[1.5px] [&:not(:first-child)]:mt-2.5`}>
-      <span className="select-none text-center font-mono text-2xs tabular-nums text-[var(--text-ghost)]">
-        {index}
-      </span>
-      <ChangeGlyph kind="delete" />
-      <div className="flex min-w-0 items-baseline gap-2 font-mono text-sm leading-relaxed">
-        <span className="min-w-0 truncate text-[var(--text-muted)] line-through decoration-red-400/50">
-          {stripMarkup(resp.statement).trim() || "(empty)"}
-        </span>
-        <button type="button" onClick={onUndo} className={BTN}>
-          Undo
-        </button>
-      </div>
-    </li>
   );
 }
 
@@ -753,7 +709,7 @@ function RespDiffRow({
                 : "";
           const glyphLabel =
             glyph === "stale"
-              ? "Verdict stale — re-run"
+              ? "Unverified — re-run"
               : glyph === "failing"
                 ? "Tests failing"
                 : glyph === "probed"
@@ -812,205 +768,6 @@ function RespDiffRow({
   );
 }
 
-/** Resolve a concern slug's icon + description from the registry, falling back
- *  to the standard vocabulary, then to a plain Tag — the same lookup
- *  {@link ConcernGlyph} uses. */
-function concernLook(slug: string, concerns: ConcernDef[]) {
-  const entry = concerns.find((c) => c.slug === slug);
-  const std = STANDARD_CONCERNS.get(slug);
-  return {
-    Icon: lookupIcon(entry?.icon ?? std?.icon ?? "Tag") ?? Tag,
-    description: entry?.description ?? std?.description,
-  };
-}
-
-const CONCERN_OPTION =
-  "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-[var(--surface-hover)]";
-
-/** In-place concern picker, anchored to a row's concern glyph. Lists the
- *  registry + standard vocabulary (each with its icon and one-liner), offers
- *  "core flow" to untag, and lets a brand-new slug be typed — normalization and
- *  registry minting happen later at the write chokepoint. Mirrors
- *  {@link IconPicker}'s portal / outside-click / Esc anatomy. */
-function ConcernPicker({
-  anchorRect,
-  current,
-  concerns,
-  onPick,
-  onClose,
-}: {
-  anchorRect: DOMRect;
-  current: string | undefined;
-  concerns: ConcernDef[];
-  onPick: (slug: string | undefined) => void;
-  onClose: () => void;
-}) {
-  const [query, setQuery] = useState("");
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  const containerRef = useRef<HTMLDivElement | null>(null);
-
-  const allSlugs = useMemo(
-    () =>
-      [...new Set([...concerns.map((c) => c.slug), ...STANDARD_CONCERNS.keys()])].sort((a, b) =>
-        a.localeCompare(b),
-      ),
-    [concerns],
-  );
-  const q = query.trim().toLowerCase();
-  const filtered = q ? allSlugs.filter((s) => s.toLowerCase().includes(q)) : allSlugs;
-  const exact = allSlugs.some((s) => s.toLowerCase() === q);
-
-  useLayoutEffect(() => {
-    inputRef.current?.focus();
-  }, []);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onClose();
-      }
-    };
-    const onDown = (e: PointerEvent) => {
-      const el = containerRef.current;
-      if (el && !el.contains(e.target as Node)) onClose();
-    };
-    const t = setTimeout(() => window.addEventListener("pointerdown", onDown, true), 0);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      clearTimeout(t);
-      window.removeEventListener("pointerdown", onDown, true);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [onClose]);
-
-  const pick = (slug: string | undefined) => {
-    onPick(slug);
-    onClose();
-  };
-
-  const W = 260;
-  const H = 320;
-  const left = Math.min(anchorRect.left, window.innerWidth - W - 8);
-  const top = Math.min(anchorRect.bottom + 4, window.innerHeight - H - 8);
-
-  return createPortal(
-    <div
-      ref={containerRef}
-      data-no-pickup
-      onPointerDown={(e) => e.stopPropagation()}
-      onWheel={(e) => e.stopPropagation()}
-      style={{ position: "fixed", left, top, width: W, zIndex: 1200 }}
-      className="rounded border border-[var(--border-overlay)] bg-[var(--surface-overlay)] shadow-xl backdrop-blur-md"
-    >
-      <input
-        ref={inputRef}
-        type="text"
-        placeholder="Filter or type a new concern…"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && query.trim()) {
-            e.preventDefault();
-            pick(query.trim());
-          }
-        }}
-        className="w-full border-b border-[var(--border-subtle)] bg-transparent px-3 py-2 text-xs outline-none placeholder:text-[var(--text-ghost)]"
-        style={{ color: "var(--text)" }}
-      />
-      <div className="max-h-64 overflow-y-auto overscroll-contain p-1 text-xs">
-        <button
-          type="button"
-          onClick={() => pick(undefined)}
-          className={`${CONCERN_OPTION} ${!current ? "bg-[var(--surface-hover)]" : ""}`}
-          title="core domain flow — no concern tag"
-        >
-          <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center" aria-hidden="true">
-            <span className="h-1.5 w-1.5 rounded-full bg-[var(--text-tertiary)]" />
-          </span>
-          <span className="text-[var(--text)]">Core flow</span>
-          <span className="truncate text-[var(--text-ghost)]">no concern tag</span>
-        </button>
-        {filtered.map((slug) => {
-          const { Icon, description } = concernLook(slug, concerns);
-          const active = current === slug;
-          return (
-            <button
-              key={slug}
-              type="button"
-              onClick={() => pick(slug)}
-              className={`${CONCERN_OPTION} ${active ? "bg-[var(--surface-hover)]" : ""}`}
-              title={description ?? slug}
-            >
-              <Icon absoluteStrokeWidth className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
-              <span className="shrink-0 font-mono text-[var(--text)]">{slug}</span>
-              {description && <span className="truncate text-[var(--text-ghost)]">{description}</span>}
-            </button>
-          );
-        })}
-        {q && !exact && (
-          <button
-            type="button"
-            onClick={() => pick(query.trim())}
-            className={CONCERN_OPTION}
-            title="tag a new concern"
-          >
-            <Tag absoluteStrokeWidth className="h-3.5 w-3.5 shrink-0 text-[var(--text-secondary)]" />
-            <span className="font-mono text-[var(--text)]">Use “{query.trim()}”</span>
-            <span className="truncate text-[var(--text-ghost)]">new concern</span>
-          </button>
-        )}
-      </div>
-    </div>,
-    document.body,
-  );
-}
-
-/** The concern marker in the editor: the tagged icon or the untagged dot, in
- *  the same lane the read view shows it — but clickable, opening a
- *  {@link ConcernPicker} to tag / retag / untag in place. */
-function EditConcernGlyph({
-  resp,
-  concerns,
-  onPick,
-}: {
-  resp: Responsibility;
-  concerns: ConcernDef[];
-  onPick: (slug: string | undefined) => void;
-}) {
-  const [rect, setRect] = useState<DOMRect | null>(null);
-  const slug = resp.concern || undefined;
-  const look = slug ? concernLook(slug, concerns) : null;
-  const title = slug
-    ? `concern: ${slug}${look?.description ? ` — ${look.description}` : ""} · click to change`
-    : "core domain flow — click to tag a concern";
-  return (
-    <>
-      <button
-        type="button"
-        title={title}
-        onClick={(e) => setRect(e.currentTarget.getBoundingClientRect())}
-        className="group/concern inline-flex select-none justify-end pr-1.5 text-[var(--text)] hover:text-[var(--text)]"
-      >
-        {look ? (
-          <look.Icon absoluteStrokeWidth className="h-4 w-4 translate-y-[3px]" />
-        ) : (
-          <CoreFlowDot className="opacity-60 group-hover/concern:opacity-100" />
-        )}
-      </button>
-      {rect && (
-        <ConcernPicker
-          anchorRect={rect}
-          current={slug}
-          concerns={concerns}
-          onPick={onPick}
-          onClose={() => setRect(null)}
-        />
-      )}
-    </>
-  );
-}
-
 /** One draft row of the responsibilities form — fully controlled; every
  *  change lands in the section draft, never directly in the model. */
 function ResponsibilityEditRow({
@@ -1019,7 +776,6 @@ function ResponsibilityEditRow({
   concerns,
   autoFocus,
   onPatch,
-  onRemove,
 }: {
   resp: Responsibility;
   index: number;
@@ -1027,10 +783,7 @@ function ResponsibilityEditRow({
   concerns: ConcernDef[];
   autoFocus: boolean;
   onPatch: (id: string, patch: Partial<Responsibility>) => void;
-  onRemove: (id: string) => void;
 }) {
-  const directives = resp.directives ?? [];
-  const setDirectives = (next: string[]) => onPatch(resp.id, { directives: next });
   const lints = lintEars(stripMarkup(resp.statement));
 
   // In-place edit row: each line is a contentEditable span flowing in the same
@@ -1044,11 +797,9 @@ function ResponsibilityEditRow({
       <span className="select-none text-center font-mono text-2xs tabular-nums text-[var(--text-ghost)]">
         {index}
       </span>
-      <EditConcernGlyph
-        resp={resp}
-        concerns={concerns}
-        onPick={(slug) => onPatch(resp.id, { concern: slug })}
-      />
+      {/* The concern is the test's trailing [tag]: shown, kept on reword,
+          changed in the code. */}
+      <ConcernGlyph slug={resp.concern} concerns={concerns} />
       <div className="min-w-0 font-mono text-sm leading-relaxed">
         <div className="group/srow relative">
           {/* Markered source with the styling visible in place: the mirror
@@ -1064,24 +815,8 @@ function ResponsibilityEditRow({
             containerClassName={STMT_HL_HOVER}
             className="block !pr-[180px]"
           />
-          <span className={CTL_SROW}>
-            <button
-              type="button"
-              data-act="add-directive"
-              onClick={() => setDirectives([...directives, ""])}
-              className={BTN}
-            >
-              Directive
-            </button>
-            <button
-              type="button"
-              title="Delete responsibility"
-              onClick={() => onRemove(resp.id)}
-              className={BTN_DANGER}
-            >
-              Delete
-            </button>
-          </span>
+          {/* Only the wording edits here: a claim is a test, so deleting
+              it, tagging it or adding a directive happens in the code. */}
         </div>
 
         {lints.length > 0 && (
@@ -1094,44 +829,6 @@ function ResponsibilityEditRow({
           </div>
         )}
 
-        {directives.length > 0 && (
-          <div className="mt-0.5 flex flex-col gap-0.5">
-            {directives.map((d, i) => (
-              <div
-                key={i}
-                data-drow={resp.id}
-                className="group/drow relative flex items-baseline gap-1.5 text-[var(--text-tertiary)]"
-              >
-                <CornerDownRight className="h-3 w-3 shrink-0 translate-y-px not-italic text-[var(--text-ghost)]" />
-                <Editable
-                  initial={d}
-                  autoFocus={d === ""}
-                  placeholder={'directive — "must …" / "never …"'}
-                  onInput={(t) => {
-                    const next = directives.slice();
-                    next[i] = t;
-                    setDirectives(next);
-                  }}
-                  className={`block min-w-0 flex-1 !pr-[180px] ${DIR_HL}`}
-                />
-                <span className={CTL_DROW}>
-                  <button
-                    type="button"
-                    title="Remove directive"
-                    onClick={() => {
-                      const next = directives.slice();
-                      next.splice(i, 1);
-                      setDirectives(next);
-                    }}
-                    className={BTN_DANGER}
-                  >
-                    Delete
-                  </button>
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
     </li>
   );

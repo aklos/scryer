@@ -112,8 +112,8 @@ describe("testLaneTitle", () => {
     );
   });
 
-  it("When the code moved past the verdict, says stale in words", () => {
-    expect(testLaneTitle(2, verdict({ outcome: "failed", stale: true }))).toContain("STALE");
+  it("When the code moved past the verdict, says unverified in words", () => {
+    expect(testLaneTitle(2, verdict({ outcome: "failed", stale: true }))).toContain("UNVERIFIED");
   });
 });
 

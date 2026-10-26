@@ -1,9 +1,8 @@
 /**
  * The structural-violation marker shared by the diagram card and the tree row:
  * how many violations the structural check charges inside a node's subtree, so
- * the way down to them is visible from any altitude. Orange when every one is
- * a container with no declared style (nothing chosen yet), red otherwise —
- * the same split as the node page's notice.
+ * the way down to them is visible from any altitude. A container with no
+ * style chosen is not among them: nothing was declared, so nothing breaks.
  */
 
 import { Flag } from "lucide-react";
@@ -18,13 +17,8 @@ export function StructuralCount({
 }) {
   const n = violations?.length ?? 0;
   if (n === 0) return null;
-  const unstyledOnly = violations!.every((v) => v.kind === "unstyled");
-  const tone = unstyledOnly
-    ? "text-orange-600 dark:text-orange-400"
-    : "text-red-600 dark:text-red-400";
-  const title = unstyledOnly
-    ? `${n} container${n === 1 ? "" : "s"} in this subtree declare${n === 1 ? "s" : ""} no architectural style`
-    : `${n} structural violation${n === 1 ? "" : "s"} in this subtree`;
+  const tone = "text-red-600 dark:text-red-400";
+  const title = `${n} structural violation${n === 1 ? "" : "s"} in this subtree`;
   return (
     <span
       data-structural-count={n}

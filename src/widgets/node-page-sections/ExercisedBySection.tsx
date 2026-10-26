@@ -7,18 +7,14 @@
  */
 
 import { useMemo } from "react";
-import type { ClaimState, DerivedStatus } from "../../entities/model/derived";
+import type { DerivedStatus } from "../../entities/model/derived";
+import { CLAIM_LABEL, CLAIM_TONE } from "../../entities/model/claimState";
 import type { ScryModel } from "../../entities/model/viewmodel";
 import { jumpTo, PageSection } from "../../shared/ui/pagekit";
 import { respElementId } from "../source-section/SourceSection";
 import { StatementText } from "../../entities/model/markup";
 
-const TONE: Record<ClaimState, string> = {
-  proven: "text-emerald-700 dark:text-emerald-300",
-  planned: "text-sky-700 dark:text-sky-300",
-  stale: "text-amber-700 dark:text-amber-300",
-  failing: "text-red-700 dark:text-red-300",
-};
+const TONE = CLAIM_TONE;
 
 export function ExercisedBySection({
   claimIds,
@@ -59,7 +55,7 @@ export function ExercisedBySection({
               }}
               className="flex w-full items-baseline gap-2 rounded px-1 py-0.5 text-left font-mono text-sm hover:bg-[var(--surface-hover)]"
             >
-              {r.state && <span className={`w-14 shrink-0 text-xs ${TONE[r.state]}`}>{r.state}</span>}
+              {r.state && <span className={`w-14 shrink-0 text-xs ${TONE[r.state]}`}>{CLAIM_LABEL[r.state]}</span>}
               <span className="min-w-0 flex-1 text-[var(--text-secondary)]">
                 <StatementText text={r.statement} />
               </span>

@@ -357,7 +357,7 @@ export function testLaneTitle(
           ? "FAILING"
           : "ERRORED (the runner never got to assert)";
   if (verdict.stale) {
-    return `${attached} — last verdict ${said}, but the code or tests changed since: STALE. Re-run to refresh.`;
+    return `${attached} — last verdict ${said}, but the code or tests changed since: UNVERIFIED. Re-run to refresh.`;
   }
   return `${attached} — ${said} (${verdict.cases} case${verdict.cases === 1 ? "" : "s"}).`;
 }
@@ -712,7 +712,9 @@ export function rollupTestFindings(
 
 /** Structural violations charged to each node's subtree, keyed by node id: a
  *  violation counts on the node it is charged to and on every ancestor, so a
- *  container's or system's page knows what is wrong anywhere inside it. */
+ *  container's or system's page knows what is wrong anywhere inside it. A
+ *  container with no style chosen breaks nothing and is not counted (see
+ *  {@link unstyledContainers}). */
 export function structuralBySubtree(
   model: Pick<ScryModel, "nodes">,
   report: ModelHealthReport | null,
@@ -721,6 +723,7 @@ export function structuralBySubtree(
   const parent = new Map<string, string | undefined>();
   for (const n of model.nodes) parent.set(n.id, n.parentId);
   for (const v of report?.structural?.violations ?? []) {
+    if (v.kind === "unstyled") continue;
     let id: string | undefined = v.node;
     const seen = new Set<string>();
     while (id && !seen.has(id)) {
@@ -734,28 +737,64 @@ export function structuralBySubtree(
   return out;
 }
 
-/** The one line a structurally invalid subtree reads as, or null when nothing
- *  inside it is wrong. Findings that are only containers with no declared
- *  style mean no architecture was chosen yet; anything else is code or links
- *  breaking one. Either way the fix is the same conversation with the agent. */
+/** The structural notice for one node's page, worded for where the node
+ *  stands: the container whose style is broken is asked to refactor; a
+ *  component inside it is told whose style it breaks; anything above
+ *  containers only says which containers inside break theirs — the ask
+ *  belongs on their pages, not on the system's. A container with no style
+ *  chosen is not a violation (see {@link noStyleNotice}). */
 export function structuralNotice(
   violations: readonly StyleViolation[],
-): { unstyledOnly: boolean; text: string } | null {
+  node: { id: string; kind: string },
+  model: Pick<ScryModel, "nodes">,
+): string | null {
   const n = violations.length;
   if (n === 0) return null;
-  const ask = "ask the agent to choose the architecture this code should have and refactor to it";
-  if (violations.every((v) => v.kind === "unstyled")) {
+  const count = (k: number) => `${k} violation${k === 1 ? "" : "s"}`;
+  const byId = new Map(model.nodes.map((m) => [m.id, m] as const));
+  const containers = [...new Set(violations.map((v) => v.container))];
+  const styleOf = (id: string) => (byId.get(id)?.style ? `${byId.get(id)!.style} style` : "style");
+  const nameOf = (id: string) => byId.get(id)?.name || id;
+  const refactor = "ask the agent to refactor the code to it";
+
+  if (containers.length === 1 && containers[0] === node.id)
+    return `${count(n)} of this container's ${styleOf(node.id)} — ${refactor}`;
+  if (containers.length === 1 && (node.kind === "component" || node.kind === "symbol"))
+    return `${count(n)} of ${nameOf(containers[0])}'s ${styleOf(containers[0])} here — ${refactor}`;
+  return `Inside: ${listNames(containers.map(nameOf))} break${containers.length === 1 ? "s its" : " their"} style (${count(n)})`;
+}
+
+/** "A", "A and B", "A, B and C". */
+function listNames(names: string[]): string {
+  return names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/** The containers with no architectural style chosen yet, by id. Not a
+ *  violation: nothing was declared, so nothing is broken — a decision still
+ *  to make, once the code has a shape worth naming. */
+export function unstyledContainers(report: ModelHealthReport | null): Set<string> {
+  return new Set((report?.structural?.violations ?? []).filter((v) => v.kind === "unstyled").map((v) => v.container));
+}
+
+/** The note a page carries about styles not chosen yet: on the container
+ *  itself, what to do; on anything above, which containers inside have
+ *  none. Null when there is nothing to say. */
+export function noStyleNotice(
+  unstyled: ReadonlySet<string>,
+  node: { id: string; kind: string },
+  model: Pick<ScryModel, "nodes">,
+): { text: string; containers: string[] } | null {
+  if (unstyled.has(node.id))
     return {
-      unstyledOnly: true,
-      text:
-        n === 1
-          ? `No architectural style declared — ${ask}`
-          : `${n} containers declare no architectural style — ${ask}`,
+      text: "No architectural style chosen yet. When the code has a recognisable shape, ask the agent to declare it in structure.toml; giving it the shape it should have is a refactor of its own.",
+      containers: [],
     };
-  }
+  if (node.kind !== "system") return null;
+  const inside = model.nodes.filter((n) => n.parentId === node.id && unstyled.has(n.id));
+  if (inside.length === 0) return null;
   return {
-    unstyledOnly: false,
-    text: `Structurally invalid (${n} violation${n === 1 ? "" : "s"}) — ${ask}`,
+    text: `No style chosen yet for ${inside.length === 1 ? "" : `${inside.length} containers: `}`,
+    containers: inside.map((n) => n.id),
   };
 }
 

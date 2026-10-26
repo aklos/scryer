@@ -8,9 +8,9 @@ No tool writes a claim's status. It is computed from the last ingested test repo
 | Status | Means |
 |--------|-------|
 | **proven** | the test was green, and neither it nor the code it exercises has changed since |
-| **stale** | the test or the code it exercises changed since its verdict, or no report has covered it yet |
+| **unverified** | the test or the code it exercises changed since its verdict, or no report has covered it yet — re-running it settles it to proven or failing (agents see it as `stale`) |
 | **failing** | the test was red |
-| **planned** | the test is a todo |
+| **todo** | the test is a todo: work not done yet, or behaviour with no test body written |
 
 Feed a run by handing scryer its JUnit report: the agent calls `ingest_test_report`, or the app picks up reports written to a watched report directory.
 
@@ -20,8 +20,8 @@ A separate mark asks whether a green test would notice a bug. An agent's probe (
 
 ## Health
 
-The status bar and node pages count what needs attention: planned, stale and failing claims, components with code and no claims, files no test reaches by import (dark code), surviving mutants, and [style](/scryer/concepts/structure/) violations.
+The status bar and node pages count what needs attention: todo, unverified and failing claims, components with code and no claims, files no test reaches by import (dark code), surviving mutants, and [style](/scryer/concepts/structure/) violations.
 
 ## Since you last looked
 
-The app opens on a page listing every agent session since you last opened the project, titled by its task (or the first component it touched), with the claims it newly proved, newly planned or left planned, the ones now stale or failing, and the components more than one session touched.
+The app opens on a page listing every agent session since you last opened the project, titled by its task (or the first component it touched), with the claims it newly proved, newly added as todo or left todo, the ones now unverified or failing, and the components more than one session touched.
