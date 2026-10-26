@@ -52,6 +52,23 @@ describe("assignPorts", () => {
     for (const id of ["l", "m", "r"]) expect(Math.abs(at(id) - 340)).toBeLessThan(90);
   });
 
+  it("Spaces the ports on one side of a card an even step apart, however many share it", () => {
+    const steps = (n: number) => {
+      const targets = Array.from({ length: n }, (_, i) => card(`t${i}`, i * 240 - 240, 250));
+      const ports = assignPorts([card("hub", 0, 0), ...targets], targets.map((t) => ({ id: t.id, source: "hub", target: t.id })), "down");
+      const xs = targets.map((t) => ports.get(t.id)!.sourceShift).sort((a, b) => a - b);
+      return xs.slice(1).map((x, i) => x - xs[i]);
+    };
+    expect(new Set([...steps(2), ...steps(3), ...steps(4)])).toEqual(new Set([16]));
+  });
+
+  it("When an edge's two ends nearly line up, slides a port along its side so the edge runs straight", () => {
+    // A card a little right of the one above it: one edge, no lane.
+    const boxes = [card("a", 0, 0), card("b", 30, 250)];
+    const p = assignPorts(boxes, [{ id: "ab", source: "a", target: "b" }], "down").get("ab")!;
+    expect(portPoint(boxes[0], p.sourceSide, p.sourceShift).x).toBe(portPoint(boxes[1], p.targetSide, p.targetShift).x);
+  });
+
   it("Parts a reverse pair onto two ports that run side by side, never one line on the other", () => {
     const boxes = [card("a", 0, 0), card("b", 500, 0)];
     const ports = assignPorts(

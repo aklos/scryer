@@ -30,7 +30,7 @@ export type DiagramMode = "arch" | "styled" | "code";
 /** How a code-tier symbol reads at a glance — the three things a symbol can be
  *  (mirrors `kindIcon`/`typeTag`): a data shape (`model`), a component the
  *  preview sidecar can render (`visual`, derived — never stored on the node),
- *  or plain `code`. Drives the muted class line under each dot. */
+ *  or plain `code`. Picks the symbol's glyph. */
 export type SymbolClass = "code" | "model" | "visual";
 
 export interface DiagramNode {
@@ -48,8 +48,9 @@ export interface DiagramNode {
   description?: string;
   /** Has its own children — so the renderer can mark it drillable. */
   hasChildren: boolean;
-  /** Number of direct children — shown on the card in place of a bare flag. */
-  childCount: number;
+  /** Its direct children — what a drill into it shows; the card's foot
+   *  counts them by state. */
+  childIds: string[];
   /** Fan-in at this level (how many symbols depend on it) — encodes centrality. */
   degree: number;
   /** Rendered dot diameter (px) on the code tier, sized relative to the graph's
@@ -141,13 +142,12 @@ function dotSizeFor(inDegree: number, maxInDegree: number): number {
   return MIN_DOT + (MAX_DOT - MIN_DOT) * Math.pow(t, 0.85);
 }
 
-// Label geometry for the centered-below layout: the disc sits on top, the name
-// (and a muted class line) stack beneath it, all horizontally centered. The
-// collision box is the union of the disc and that text block.
+// Label geometry for the centered-below layout: the glyph sits on top, the
+// name beneath it, both horizontally centered. The collision box is the union
+// of the glyph and the name.
 const DISC_LABEL_GAP = 5; // vertical gap between disc bottom and the name
 const NAME_H = 15; // text-xs name line
-const SUB_H = 12; // text-[10px] class line
-const LABEL_BLOCK_H = NAME_H + SUB_H; // both label lines stack under the disc
+const LABEL_BLOCK_H = NAME_H; // the name under the glyph
 // Estimated rendered label width (px): text-xs ≈ 6.2px/glyph, capped at the
 // 130px truncate the dot label uses.
 const estLabelWidth = (name: string) =>
@@ -174,9 +174,9 @@ export async function buildDiagramScene(
   styles: ReadonlyMap<string, StyleDef> = styleTable(report),
 ): Promise<DiagramScene> {
   const byId = new Map(model.nodes.map((n) => [n.id, n]));
-  const childCounts = new Map<string, number>();
+  const childIdsOf = new Map<string, string[]>();
   for (const n of model.nodes)
-    if (n.parentId) childCounts.set(n.parentId, (childCounts.get(n.parentId) ?? 0) + 1);
+    if (n.parentId) (childIdsOf.get(n.parentId) ?? childIdsOf.set(n.parentId, []).get(n.parentId)!).push(n.id);
 
   const children = model.nodes.filter((n) => (n.parentId ?? null) === focusId);
   const childIds = new Set(children.map((c) => c.id));
@@ -316,8 +316,8 @@ export async function buildDiagramScene(
       external: Boolean(n.external),
       technology: n.technology,
       description: n.description,
-      hasChildren: (childCounts.get(n.id) ?? 0) > 0,
-      childCount: childCounts.get(n.id) ?? 0,
+      hasChildren: childIdsOf.has(n.id),
+      childIds: childIdsOf.get(n.id) ?? [],
       degree: degree.get(n.id) ?? 0,
       reference,
       symbolClass: previewable.has(n.id) ? "visual" : isDataShape(n) ? "model" : "code",

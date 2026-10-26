@@ -35,6 +35,15 @@ export const CLAIM_LABEL: Record<ClaimState, string> = {
   failing: "failing",
 };
 
+/** One letter per state, where words don't fit: the tree's gutter, a map
+ *  card's foot. */
+export const CLAIM_LETTER: Record<ClaimState, string> = {
+  proven: "P",
+  planned: "T",
+  stale: "U",
+  failing: "F",
+};
+
 /** The state that needs a reader's attention, if any: a failing claim first,
  *  then a todo one. Proven and stale are the resting states and mark
  *  nothing. */
@@ -43,6 +52,31 @@ export function attentionState(c: DerivedCounts | undefined): "failing" | "plann
   if (c.failing > 0) return "failing";
   if (c.planned > 0) return "planned";
   return null;
+}
+
+/** The one state a node reads as, from its subtree's counts: the most
+ *  urgent its claims hold — failing, then todo, then unverified, then
+ *  proven. Null for a subtree with no claims. */
+export function overallState(c: DerivedCounts | undefined): ClaimState | null {
+  if (!c) return null;
+  for (const s of ["failing", "planned", "stale", "proven"] as const) if (c[s] > 0) return s;
+  return null;
+}
+
+/** A node's direct children, each counted once in the state it reads as:
+ *  the counts sum to `total` less the children with no claims. */
+export interface ChildTally {
+  total: number;
+  byState: Record<ClaimState, number>;
+}
+
+export function childTally(children: (DerivedCounts | undefined)[]): ChildTally {
+  const byState: Record<ClaimState, number> = { proven: 0, stale: 0, failing: 0, planned: 0 };
+  for (const c of children) {
+    const s = overallState(c);
+    if (s) byState[s]++;
+  }
+  return { total: children.length, byState };
 }
 
 /** "3 failing · 12 unverified" — the non-zero states in a fixed order. */

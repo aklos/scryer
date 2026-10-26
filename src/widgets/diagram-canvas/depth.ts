@@ -30,6 +30,17 @@ const BAND_TOP = 44;
 const BAND_H = 118;
 const MIN_PITCH_X = 150;
 const BAND_PAD = 26;
+/** Pitch between the lines of one wrapped band — tighter than between
+ *  bands, so a band's lines read as one. */
+const LINE_PITCH = 112;
+/** A wrapped band never has fewer per line than this. */
+const MIN_PER_LINE = 6;
+/** A row of the component's own symbols sets the level's width up to this
+ *  many; past it, it wraps too. */
+const MAX_MEMBER_LINE = 12;
+/** How much wider than tall a wrapped band's block is laid (lines ≈
+ *  per-line / this). */
+const LINE_ASPECT = 2;
 
 /** BFS depth from the entry set over the internal edges (source → target).
  *  Unreachable symbols (cycles with no entry, or isolated) land one row past
@@ -102,29 +113,54 @@ export function depthLayout(members: DepthMember[], ghosts: string[], edges: Sty
   const sizeOf = new Map(members.map((m) => [m.id, m]));
   const pitchFor = (ids: string[]) =>
     Math.max(MIN_PITCH_X, ...ids.map((id) => (sizeOf.get(id)?.labelW ?? 120) + 30));
-  const spans = ordered.map((b) => (b.length - 1) * pitchFor(b));
-  const span = Math.max(0, ...spans);
+  // A band wider than the level wraps into lines, so a few symbols with
+  // thirty dependencies don't stretch the level into a strip too thin to
+  // read. The level is as wide as its widest row of its own symbols, and
+  // never narrower than a near-square block of its largest band.
+  const largest = Math.max(0, ...ordered.map((b) => b.length));
+  const perLine = Math.max(
+    MIN_PER_LINE,
+    Math.ceil(Math.sqrt(largest * LINE_ASPECT)),
+    ...ordered.slice(callers.length ? 1 : 0, callers.length ? 1 + rowIds.length : rowIds.length).map((b) =>
+      Math.min(b.length, MAX_MEMBER_LINE),
+    ),
+  );
+  const linesOf = (ids: string[]) =>
+    Array.from({ length: Math.ceil(ids.length / perLine) }, (_, i) => ids.slice(i * perLine, (i + 1) * perLine));
+  // Every other line steps half a pitch over, so an edge to a far line
+  // runs between the dots of the nearer one.
+  const widthOf = (ids: string[]) => {
+    const lines = linesOf(ids);
+    return (Math.min(ids.length, perLine) - 1 + (lines.length > 1 ? 0.5 : 0)) * pitchFor(ids);
+  };
+  const span = Math.max(0, ...ordered.map(widthOf));
 
   const centers = new Map<string, { x: number; y: number }>();
   const regions: LayerRegion[] = [];
-  let bi = 0;
+  let y = 0;
   const place = (ids: string[], caption: string | null, ghost: boolean) => {
     const pitch = pitchFor(ids);
-    const w = (ids.length - 1) * pitch;
-    const start = (span - w) / 2;
-    ids.forEach((id, i) => centers.set(id, { x: start + i * pitch, y: bi * ROW_PITCH }));
+    const lines = linesOf(ids);
+    const top = y;
+    lines.forEach((line, li) => {
+      const shift = li % 2 ? pitch / 2 : 0;
+      const w = (line.length - 1) * pitch + (lines.length > 1 ? pitch / 2 : 0);
+      const start = (span - w) / 2 + shift;
+      line.forEach((id, i) => centers.set(id, { x: start + i * pitch, y }));
+      y += li < lines.length - 1 ? LINE_PITCH : 0;
+    });
     if (caption !== null) {
       regions.push({
         layer: caption,
         shape: "rect",
         x: -MIN_PITCH_X / 2 - BAND_PAD,
-        y: bi * ROW_PITCH - BAND_TOP,
+        y: top - BAND_TOP,
         w: span + MIN_PITCH_X + 2 * BAND_PAD,
-        h: BAND_H,
+        h: BAND_H + (y - top),
         ghost,
       });
     }
-    bi++;
+    y += ROW_PITCH;
   };
   let k = 0;
   if (callers.length) place(ordered[k++], "called from", true);

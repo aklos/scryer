@@ -14,18 +14,18 @@
 import type { NodeProps, Node as RFNode } from "@xyflow/react";
 import type { DiagramNode } from "./diagramLayout";
 import type { StyleViolation } from "../../entities/model/health";
-import type { DerivedCounts } from "../../entities/model/derived";
-import { CLAIM_LABEL, CLAIM_TONE } from "../../entities/model/claimState";
+import { CLAIM_LABEL, CLAIM_LETTER, CLAIM_TONE, type ChildTally } from "../../entities/model/claimState";
 import { StructuralCount } from "../../entities/model/StructuralCount";
 import { NodeHandles } from "../../shared/diagram/NodeHandles";
 import { ShapeBackground, resolveShape, getContentInsets } from "../../entities/model/shapes";
+import { builtinStyles } from "../../entities/model/styles";
 import { StyleGlyph } from "../../entities/model/styles/StyleGlyph";
 
 export interface CardData extends Record<string, unknown> {
   node: DiagramNode;
   selected: boolean;
-  /** The claim states in this node's subtree. */
-  claims?: DerivedCounts;
+  /** Its direct children, by the state each reads as. */
+  children?: ChildTally;
   /** The state a reader should look at here: failing, then planned. */
   attention?: "failing" | "planned" | null;
   /** A selection exists elsewhere and this node isn't a neighbour — fade it. */
@@ -59,26 +59,45 @@ const KIND_WORD: Partial<Record<DiagramNode["kind"], string>> = {
   component: "Component",
 };
 
-/** The claim states inside a node, in words along the card's foot — the
- *  states that need a look first: "1 failing · 10 unverified · 2 proven". */
+/** The card's foot: how many children a drill into it shows, then how
+ *  many of them read as each state, the ones needing a look first, in the
+ *  tree's letters: "6 · 1F 2T 3P". A child with no claims counts only in
+ *  the total. */
 const FOOT_ORDER = ["failing", "planned", "stale", "proven"] as const;
-function ClaimCounts({ c }: { c: DerivedCounts }) {
-  const shown = FOOT_ORDER.filter((k) => c[k] > 0);
-  if (shown.length === 0) return null;
-  const text = shown.map((k) => `${c[k]} ${CLAIM_LABEL[k]}`).join(" · ");
+
+function ChildCounts({ t }: { t: ChildTally }) {
+  const shown = FOOT_ORDER.filter((k) => t.byState[k] > 0);
+  const said = [`${t.total} ${t.total === 1 ? "child" : "children"}`, ...shown.map((k) => `${t.byState[k]} ${CLAIM_LABEL[k]}`)];
+  const bare = t.total - shown.reduce((n, k) => n + t.byState[k], 0);
+  // The hover spells the letters out: what each child counts as, and why.
+  const hover = [
+    `${t.total} ${t.total === 1 ? "child" : "children"} inside, each counted once by its most urgent claim:`,
+    ...shown.map((k) => `${t.byState[k]}${CLAIM_LETTER[k]} — ${CLAIM_LABEL[k]}`),
+    ...(bare ? [`${bare} with no claims`] : []),
+  ].join("\n");
   return (
     <div
-      className="pointer-events-auto absolute bottom-1.5 left-3 right-8 z-10 truncate text-[9px] tabular-nums"
-      aria-label={`Claims inside: ${text}`}
+      className="pointer-events-auto absolute bottom-1.5 left-3 right-3 z-10 flex gap-2 font-mono text-[10px] tabular-nums"
+      aria-label={said.join(", ")}
+      title={hover}
     >
-      {shown.map((k, i) => (
+      <span className="text-[var(--text-muted)]">{t.total}</span>
+      {shown.length > 0 && <span className="-mx-1 text-[var(--text-ghost)]">·</span>}
+      {shown.map((k) => (
         <span key={k} className={CLAIM_TONE[k]}>
-          {i > 0 && <span className="text-[var(--text-ghost)]"> · </span>}
-          {c[k]} {CLAIM_LABEL[k]}
+          {t.byState[k]}
+          {CLAIM_LETTER[k]}
         </span>
       ))}
     </div>
   );
+}
+
+/** The style glyph's hover: the architecture style by name, and what it
+ *  asks of the code. */
+function styleHover(style: string): string {
+  const def = builtinStyles.find((d) => d.name === style);
+  return `Architecture style: ${style}${def?.description ? `\n${def.description}` : ""}`;
 }
 
 function isExpandable(kind: DiagramNode["kind"]): boolean {
@@ -98,10 +117,14 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
   const isGhost = node.reference;
   // Ghosts live elsewhere — no drill affordance; double-click navigates instead.
   const expandable = isExpandable(node.kind) && !isExternal && !isGhost;
-  // Subgraph highlight: faded when a selection elsewhere doesn't touch this node.
-  const dimClass = data.dimmed ? "opacity-30" : isGhost ? "opacity-60" : "";
+  // Subgraph highlight: faded when a selection elsewhere doesn't touch this
+  // node. A reference is not faded: its hollow dashed frame says it lives
+  // elsewhere, and its name keeps full contrast.
+  const dimClass = data.dimmed ? "opacity-30" : "";
 
   // Person nodes: silhouette above, no background rect, normal text layout.
+  // On a deeper level a person is a reference: hollow, like every reference.
+  // Solid, not dashed — the dash is the external systems' alone.
   if (node.kind === "person") {
     const longDesc = (node.description?.length ?? 0) > 80;
     // The silhouette outline — shared by the fade fill, the generating barber,
@@ -110,7 +133,7 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
     return (
       <div
         data-gen={genState(data.pending)}
-        className={`relative h-[160px] w-[180px] transition-opacity ${data.dimmed ? "opacity-30" : ""}`}
+        className={`relative h-[160px] w-[180px] transition-opacity ${dimClass}`}
       >
         <NodeHandles />
         <div
@@ -135,13 +158,26 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
                 <stop offset="100%" stopColor={selected ? "var(--scryer-select-stroke)" : "var(--scryer-outline-stroke)"} stopOpacity="0" />
               </linearGradient>
             </defs>
-            <path d={`${silhouette} Z`} fill={`url(#person-fade-${id})`} />
-            <path
-              d={silhouette}
-              fill="none"
-              stroke={`url(#person-stroke-${id})`}
-              strokeWidth={selected ? 2.5 : 1}
-            />
+            {isGhost ? (
+              // A reference is the card stroke at full strength, closed
+              // along the bottom, with no fill.
+              <path
+                d={`${silhouette} Z`}
+                fill="none"
+                className={selected ? "stroke-[var(--text)]" : "stroke-[var(--map-card-stroke)]"}
+                strokeWidth={selected ? 2.5 : 1.25}
+              />
+            ) : (
+              <>
+                <path d={`${silhouette} Z`} fill={`url(#person-fade-${id})`} />
+                <path
+                  d={silhouette}
+                  fill="none"
+                  stroke={`url(#person-stroke-${id})`}
+                  strokeWidth={selected ? 2.5 : 1}
+                />
+              </>
+            )}
           </svg>
           <div
             className="flex w-full flex-col items-center transition-opacity duration-500"
@@ -197,8 +233,8 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
         />
         <NodeHandles />
 
-        {/* Claim states, along the foot. Ghosts are counted at home. */}
-        {!isGhost && !data.pending && data.claims && <ClaimCounts c={data.claims} />}
+        {/* Its children by state, along the foot. Ghosts are counted at home. */}
+        {!isGhost && !data.pending && expandable && data.children && <ChildCounts t={data.children} />}
 
         {/* Structural violations inside, top-left. Ghosts are counted at home. */}
         {!isGhost && !data.pending && (
@@ -211,7 +247,11 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
         {/* The style's glyph, top-right: what shape the inside takes. Gives
             way to the drill button on select. */}
         {node.style && !isGhost && !(expandable && selected) && (
-          <div className="absolute right-2.5 top-2 z-10 opacity-80" aria-label={`Drawn as ${node.style}`}>
+          <div
+            className="absolute right-2.5 top-2 z-10 opacity-80"
+            aria-label={`Drawn as ${node.style}`}
+            title={styleHover(node.style)}
+          >
             <StyleGlyph style={node.style} />
           </div>
         )}
@@ -232,13 +272,6 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
             >
               &#8599;
             </button>
-          </div>
-        )}
-
-        {/* Direct-child count. */}
-        {expandable && node.childCount > 0 && (
-          <div className="pointer-events-none absolute bottom-1.5 right-2.5 z-10 text-[11px] font-medium tabular-nums text-[var(--text-ghost)]">
-            {node.childCount}
           </div>
         )}
 

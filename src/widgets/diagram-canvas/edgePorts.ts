@@ -4,9 +4,12 @@
  * columns — and an edge between two places along it leaves its source's foot
  * and enters its target's head (the reverse when it climbs); any other edge
  * (one along a row, one into the column beside the rows) runs side to side.
- * Edges sharing a side of a card spread along it, ordered by where each is
- * heading, so none piles onto another and none crosses its neighbour at the
- * card. A reverse pair gets two ports: two lines, never one on the other.
+ * Edges sharing a side of a card spread along it, one even step apart,
+ * ordered by where each is heading, so none piles onto another and none
+ * crosses its neighbour at the card. A reverse pair gets two ports: two
+ * lines, never one on the other. Then an edge whose ends nearly line up has
+ * one of its ports slid along its side until they do, where the side has
+ * room, so it runs straight instead of jogging.
  */
 
 import type { Pt } from "../../shared/diagram/edgeGeometry";
@@ -40,10 +43,13 @@ export interface Port {
   flow: "down" | "across";
 }
 
-/** Widest step between two ports on one side. */
-const PORT_GAP = 22;
-/** Share of a side's length its ports may spread over. */
-const PORT_SPAN = 0.7;
+/** Step between two ports on one side, the same everywhere. */
+const PORT_GAP = 16;
+/** Share of a side's length its ports may spread over: a crowded side
+ *  closes its steps up to fit. */
+const PORT_SPAN = 0.8;
+/** Nearest a port comes to its side's corners. */
+const PORT_INSET = 20;
 
 /** A side's middle point, moved `shift` along the side. */
 export function portPoint(b: PortBox, side: Side, shift = 0): Pt {
@@ -118,11 +124,14 @@ export function assignPorts(
       });
     }
   }
-  for (const [k, members] of groups) {
-    if (members.length < 2) continue;
+  const lenOf = (k: string) => {
     const [id, side] = k.split("\0") as [string, Side];
     const b = box.get(id)!;
-    const len = side === "top" || side === "bottom" ? b.w : b.h;
+    return side === "top" || side === "bottom" ? b.w : b.h;
+  };
+  for (const [k, members] of groups) {
+    if (members.length < 2) continue;
+    const len = lenOf(k);
     const gap = Math.min(PORT_GAP, (len * PORT_SPAN) / (members.length - 1));
     members.sort((p, q) => p.key - q.key || p.tie.localeCompare(q.tie));
     members.forEach((m, i) => {
@@ -131,6 +140,40 @@ export function assignPorts(
       if (m.end === "source") p.sourceShift = shift;
       else p.targetShift = shift;
     });
+  }
+
+  // Straighten: an edge with no lane whose ports nearly line up slides one
+  // of them (the target's first) along its side to line up exactly, if it
+  // stays clear of its side's corners and of the ports beside it. Nearest
+  // misses first, so a small fix never loses its spot to a larger one.
+  const sideOf = new Map<string, string>();
+  for (const [k, members] of groups) for (const m of members) sideOf.set(`${m.edge.id}\0${m.end}`, k);
+  const shiftOf = (id: string, end: "source" | "target") => (end === "source" ? out.get(id)!.sourceShift : out.get(id)!.targetShift);
+  const misses = edges
+    .filter((e) => out.has(e.id) && !e.waypoints?.length)
+    .map((e) => {
+      const p = out.get(e.id)!;
+      const a = portPoint(box.get(e.source)!, p.sourceSide, p.sourceShift);
+      const b = portPoint(box.get(e.target)!, p.targetSide, p.targetShift);
+      const horizontal = p.sourceSide === "top" || p.sourceSide === "bottom";
+      return { e, d: horizontal ? a.x - b.x : a.y - b.y };
+    })
+    .filter((m) => m.d !== 0)
+    .sort((m, n) => Math.abs(m.d) - Math.abs(n.d));
+  for (const { e, d } of misses) {
+    for (const [end, by] of [["target", d], ["source", -d]] as const) {
+      const k = sideOf.get(`${e.id}\0${end}`)!;
+      const to = shiftOf(e.id, end) + by;
+      const half = lenOf(k) / 2 - PORT_INSET;
+      const others = groups.get(k)!.filter((m) => m.edge.id !== e.id || m.end !== end).map((m) => shiftOf(m.edge.id, m.end));
+      const from = shiftOf(e.id, end);
+      // Room, and no neighbour passed or crowded on the way.
+      const clear = others.every((o) => Math.abs(o - to) >= PORT_GAP * 0.75 && Math.sign(o - from) === Math.sign(o - to));
+      if (Math.abs(to) > half || !clear) continue;
+      if (end === "source") out.get(e.id)!.sourceShift = to;
+      else out.get(e.id)!.targetShift = to;
+      break;
+    }
   }
   return out;
 }

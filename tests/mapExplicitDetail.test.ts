@@ -1,7 +1,8 @@
 /**
  * The map shows what it means without asking for clicks: a red edge always
  * carries its reason, a layer's description opens on a click of its ⓘ, and
- * map content carries no hover tooltips at all.
+ * the only hover tooltips on it spell out a card's shorthand: its foot's
+ * letters and its style glyph.
  */
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
@@ -51,9 +52,12 @@ describe("layer descriptions", () => {
 });
 
 describe("map content", () => {
-  it("carries no hover tooltips", () => {
+  it("Carries no hover tooltips beyond the two that spell out a card's shorthand", () => {
+    const card = readFileSync("src/widgets/diagram-canvas/DiagramCard.tsx", "utf8");
+    expect(card.match(/title=\{/g)).toEqual(["title={", "title={"]);
+    expect(card).toMatch(/title=\{hover\}/);
+    expect(card).toMatch(/title=\{styleHover\(node\.style\)\}/);
     for (const f of [
-      "src/widgets/diagram-canvas/DiagramCard.tsx",
       "src/widgets/diagram-canvas/DiagramView.tsx",
       "src/widgets/diagram-canvas/StyleRegions.tsx",
       "src/shared/diagram/RelationshipEdge.tsx",

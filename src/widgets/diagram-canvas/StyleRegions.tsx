@@ -7,6 +7,7 @@
 
 import { useEffect, useState } from "react";
 import { ViewportPortal } from "@xyflow/react";
+import { Info } from "lucide-react";
 import type { LayerRegion } from "./styled";
 import { toggleOpen } from "./edgePanel";
 
@@ -37,144 +38,152 @@ function bounds(regions: LayerRegion[]): { x: number; y: number; w: number; h: n
   return { x: x0 - pad, y: y0 - pad, w: x1 - x0 + 2 * pad, h: y1 - y0 + 2 * pad };
 }
 
-/** A layer's description, opened by its ⓘ — wraps, unlike SVG text. */
-function CaptionPanel({ x, y, anchor, text }: { x: number; y: number; anchor: "middle" | "start"; text: string }) {
-  const w = 240;
+/** The frame that holds the whole drawing — the cards' bounds widened to
+ *  every region behind them, label room included — so fitting the view
+ *  never cuts a ring or a band off at the edge. */
+export function drawingBounds(
+  cards: { x: number; y: number; width: number; height: number },
+  regions: LayerRegion[],
+): { x: number; y: number; width: number; height: number } {
+  if (regions.length === 0) return cards;
+  const r = bounds(regions);
+  const x = Math.min(cards.x, r.x), y = Math.min(cards.y, r.y);
+  return {
+    x,
+    y,
+    width: Math.max(cards.x + cards.width, r.x + r.w) - x,
+    height: Math.max(cards.y + cards.height, r.y + r.h) - y,
+  };
+}
+
+/** Where a region's label sits (flow coordinates: the left end, or the
+ *  middle, of its first line) and how it reads. */
+interface LabelSpot {
+  x: number;
+  y: number;
+  anchor: "middle" | "start";
+  size: number;
+  boundary: boolean;
+}
+
+function labelSpots(regions: LayerRegion[]): LabelSpot[] {
+  let hexSeen = 0;
+  return regions.map((r) => {
+    if (r.shape === "rect")
+      return r.boundary
+        ? { x: r.x + 14, y: r.y + 8, anchor: "start", size: 13, boundary: true }
+        : { x: r.x + 14, y: r.y + 7, anchor: "start", size: 10, boundary: false };
+    if (r.shape === "ring") return { x: r.cx, y: r.cy - r.r + 7, anchor: "middle", size: 10, boundary: false };
+    // Hexagons: the ring cards sit on the top and bottom edges, so the
+    // innermost label goes to its bottom edge (below the centre card) and
+    // outer labels to the left vertex, reading inward.
+    const inner = hexSeen++ === 0;
+    return inner
+      ? { x: r.cx, y: r.cy + r.r * 0.866 - 29, anchor: "middle", size: 10, boundary: false }
+      : { x: r.cx - r.r * 0.92, y: r.cy - 15, anchor: "start", size: 10, boundary: false };
+  });
+}
+
+/**
+ * The regions' labels, each with an info button that opens the layer's
+ * description beneath it. Drawn above the cards and edges, so nothing runs
+ * over a label or an open description, and a click reaches the button.
+ */
+function RegionLabels({ regions }: { regions: LayerRegion[] }) {
+  // Which layers have their description open. Nothing opens on hover: the
+  // button is a button, and a new drawing starts closed.
+  const [open, setOpen] = useState<ReadonlySet<number>>(new Set());
+  useEffect(() => setOpen(new Set()), [regions]);
+  const spots = labelSpots(regions);
   return (
-    <foreignObject x={anchor === "middle" ? x - w / 2 : x} y={y + 8} width={w} height={120} className="overflow-visible">
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className={`pointer-events-auto rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-[10px] leading-snug text-[var(--text-secondary)] ${
-          anchor === "middle" ? "mx-auto w-fit" : "w-fit"
-        }`}
-      >
-        {text}
-      </div>
-    </foreignObject>
+    <ViewportPortal>
+      {regions.map((r, i) => {
+        const at = spots[i];
+        const isOpen = open.has(i);
+        const shift = at.anchor === "middle" ? "-50%" : "0";
+        return (
+          <div
+            key={i}
+            className="pointer-events-none absolute left-0 top-0 flex flex-col"
+            style={{
+              transform: `translate(${at.x}px, ${at.y}px) translateX(${shift})`,
+              alignItems: at.anchor === "middle" ? "center" : "flex-start",
+              zIndex: 4,
+            }}
+          >
+            <div
+              className={`flex items-center gap-1 whitespace-nowrap font-semibold leading-none ${
+                at.boundary ? "text-[var(--text-tertiary)]" : "uppercase text-[var(--text-ghost)]"
+              }`}
+              style={{ fontSize: at.size, letterSpacing: at.boundary ? 0.2 : 1.5 }}
+            >
+              {r.layer}
+              {r.caption && (
+                <button
+                  type="button"
+                  aria-label={`${r.layer} layer description`}
+                  aria-expanded={isOpen}
+                  className={`nodrag nopan pointer-events-auto flex shrink-0 items-center rounded-full p-0.5 transition-colors hover:text-[var(--text-secondary)] ${
+                    isOpen ? "text-[var(--text-secondary)]" : ""
+                  }`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setOpen((prev) => toggleOpen(prev, i));
+                  }}
+                >
+                  <Info className="h-3 w-3" strokeWidth={2} />
+                </button>
+              )}
+            </div>
+            {isOpen && r.caption && (
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="nodrag nopan pointer-events-auto mt-1.5 w-max max-w-[260px] rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5 text-[11px] leading-snug text-[var(--text-secondary)] shadow-lg"
+              >
+                {r.caption}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </ViewportPortal>
   );
 }
 
 export function StyleRegions({ regions }: { regions: LayerRegion[] }) {
-  // Which layers have their description open. Nothing opens on hover: the ⓘ
-  // is a button, and a new drawing starts closed.
-  const [open, setOpen] = useState<ReadonlySet<number>>(new Set());
-  useEffect(() => setOpen(new Set()), [regions]);
   if (regions.length === 0) return null;
   const b = bounds(regions);
-  let hexSeen = 0;
   return (
-    <ViewportPortal>
-      <div
-        className="pointer-events-none absolute"
-        style={{ transform: `translate(${b.x}px, ${b.y}px)`, width: b.w, height: b.h, zIndex: -1 }}
-      >
-        <svg width={b.w} height={b.h} viewBox={`${b.x} ${b.y} ${b.w} ${b.h}`} className="overflow-visible">
-          {regions.map((r, i) => {
-            const label = r.boundary ? r.layer : r.layer.toUpperCase();
-            // A ghost band is open: no fill, a dotted edge — the world beyond
-            // this level, not a layer of it. A boundary is the C4 frame round
-            // the level's own node: no fill, a long dash in the map's ink.
-            const common = r.boundary
-              ? { fill: "none", stroke: "var(--map-boundary)", strokeWidth: 1.5, strokeDasharray: "10 6" }
-              : r.ghost
-              ? { fill: "none", stroke: "var(--border-subtle)", strokeWidth: 1, strokeDasharray: "2 6" }
-              : {
-                  fill: "var(--surface-tint)",
-                  fillOpacity: 0.35,
-                  stroke: "var(--border)",
-                  strokeWidth: 1,
-                  strokeDasharray: "4 4",
-                };
-            // The layer's description opens beside its label on a click of
-            // the ⓘ, and closes on a second one.
-            const full = r.caption ?? "";
-            const isOpen = open.has(i);
-            const caption = full ? (
-              <tspan
-                fill={isOpen ? "var(--text-secondary)" : "var(--text-ghost)"}
-                fontWeight={400}
-                letterSpacing={0}
-                opacity={isOpen ? 1 : 0.7}
-                fontSize={11}
-                className="pointer-events-auto cursor-pointer"
-                role="button"
-                aria-label={`${r.layer} layer description`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setOpen((prev) => toggleOpen(prev, i));
-                }}
-              >
-                {"  ⓘ"}
-              </tspan>
-            ) : null;
-            const captionBelow = (x: number, y: number, anchor: "middle" | "start") =>
-              isOpen && full ? <CaptionPanel x={x} y={y} anchor={anchor} text={full} /> : null;
-            if (r.shape === "rect") {
-              return (
-                <g key={i}>
-                  <rect x={r.x} y={r.y} width={r.w} height={r.h} rx={12} {...common} />
-                  <text
-                    x={r.x + 14}
-                    y={r.y + (r.boundary ? 20 : 16)}
-                    fontSize={r.boundary ? 13 : 10}
-                    letterSpacing={r.boundary ? 0.2 : 1.5}
-                    fill={r.boundary ? "var(--text-tertiary)" : "var(--text-ghost)"}
-                    fontWeight={600}
-                  >
-                    {label}
-                    {caption}
-                  </text>
-                  {captionBelow(r.x + 14, r.y + 16, "start")}
-                </g>
-              );
-            }
-            if (r.shape === "ring") {
-              return (
-                <g key={i}>
-                  <circle cx={r.cx} cy={r.cy} r={r.r} {...common} />
-                  <text
-                    x={r.cx}
-                    y={r.cy - r.r + 16}
-                    textAnchor="middle"
-                    fontSize={10}
-                    letterSpacing={1.5}
-                    fill="var(--text-ghost)"
-                    fontWeight={600}
-                  >
-                    {label}
-                    {caption}
-                  </text>
-                  {captionBelow(r.cx, r.cy - r.r + 16, "middle")}
-                </g>
-              );
-            }
-            // Hexagons: the ring cards sit on the top and bottom edges, so the
-            // innermost label goes to its bottom edge (below the centre card)
-            // and outer labels to the left vertex, reading inward.
-            const inner = hexSeen++ === 0;
-            const lx = inner ? r.cx : r.cx - r.r * 0.92;
-            const ly = inner ? r.cy + r.r * 0.866 - 20 : r.cy - 6;
-            return (
-              <g key={i}>
-                <polygon points={hexPoints(r.cx, r.cy, r.r)} {...common} strokeDasharray={undefined} />
-                <text
-                  x={lx}
-                  y={ly}
-                  textAnchor={inner ? "middle" : "start"}
-                  fontSize={10}
-                  letterSpacing={1.5}
-                  fill="var(--text-ghost)"
-                  fontWeight={600}
-                >
-                  {label}
-                  {caption}
-                </text>
-                {captionBelow(lx, ly, inner ? "middle" : "start")}
-              </g>
-            );
-          })}
-        </svg>
-      </div>
-    </ViewportPortal>
+    <>
+      <ViewportPortal>
+        <div
+          className="pointer-events-none absolute"
+          style={{ transform: `translate(${b.x}px, ${b.y}px)`, width: b.w, height: b.h, zIndex: -1 }}
+        >
+          <svg width={b.w} height={b.h} viewBox={`${b.x} ${b.y} ${b.w} ${b.h}`} className="overflow-visible">
+            {regions.map((r, i) => {
+              // A ghost band is open: no fill, a dotted edge — the world beyond
+              // this level, not a layer of it. A boundary is the C4 frame round
+              // the level's own node: no fill, a long dash in the map's ink.
+              const common = r.boundary
+                ? { fill: "none", stroke: "var(--map-boundary)", strokeWidth: 1.5, strokeDasharray: "10 6" }
+                : r.ghost
+                ? { fill: "none", stroke: "var(--border-subtle)", strokeWidth: 1, strokeDasharray: "2 6" }
+                : {
+                    fill: "var(--surface-tint)",
+                    fillOpacity: 0.35,
+                    stroke: "var(--border)",
+                    strokeWidth: 1,
+                    strokeDasharray: "4 4",
+                  };
+              if (r.shape === "rect") return <rect key={i} x={r.x} y={r.y} width={r.w} height={r.h} rx={12} {...common} />;
+              if (r.shape === "ring") return <circle key={i} cx={r.cx} cy={r.cy} r={r.r} {...common} />;
+              return <polygon key={i} points={hexPoints(r.cx, r.cy, r.r)} {...common} strokeDasharray={undefined} />;
+            })}
+          </svg>
+        </div>
+      </ViewportPortal>
+      <RegionLabels regions={regions} />
+    </>
   );
 }

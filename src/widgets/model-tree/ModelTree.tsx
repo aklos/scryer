@@ -25,7 +25,7 @@ import {
   nodeDrift,
   rollupMarks,
 } from "../../features/change-marks/changeMarks";
-import { attentionState, CLAIM_TONE } from "../../entities/model/claimState";
+import { attentionState, CLAIM_LETTER, CLAIM_TONE } from "../../entities/model/claimState";
 import type { DerivedNodeStatus } from "../../entities/model/derived";
 import { kindIcon } from "../../entities/model/kindIcon";
 import { StyleGlyph } from "../../entities/model/styles/StyleGlyph";
@@ -73,7 +73,6 @@ const ROW = "group/row relative flex items-center gap-1 rounded pr-3 h-[26px] cu
 // hues. Renders an empty cell otherwise, keeping the label column aligned. A
 // rolled letter (`dim`) is a DESCENDANT's state showing through a collapsed
 // branch — same letter and hue, dimmed so it never reads as the row's own.
-const GUTTER_LETTER = { failing: "F", planned: "T" } as const;
 function ClaimGutter({ state, dim }: { state: "failing" | "planned" | null; dim?: boolean }) {
   const label = state === "failing" ? "A claim here is failing" : "A claim here is a todo test";
   return (
@@ -85,7 +84,7 @@ function ClaimGutter({ state, dim }: { state: "failing" | "planned" | null; dim?
       } ${dim ? "opacity-50" : ""}`}
       style={{ width: GUTTER }}
     >
-      {state ? GUTTER_LETTER[state] : null}
+      {state ? CLAIM_LETTER[state] : null}
     </span>
   );
 }

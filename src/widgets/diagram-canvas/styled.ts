@@ -232,16 +232,27 @@ function packCenter(ids: string[], centers: Map<string, { x: number; y: number }
 }
 
 /** Place ids evenly on a circle of at least `minR`, growing the radius until
- *  neighbouring cards have room. Returns the radius used. */
+ *  neighbouring cards have room. The ring is turned so the cards sit, on
+ *  average, at the angles they prefer (`prefer`: toward what they touch);
+ *  with no preference it starts at `startAngle`. Returns the radius used. */
 function ringPlace(
   ids: string[],
   minR: number,
   startAngle: number,
   centers: Map<string, { x: number; y: number }>,
+  prefer: Map<string, number> = new Map(),
 ): number {
   const n = ids.length;
   const minArc = Math.hypot(CARD_W, CARD_H) + 30;
   const r = Math.max(minR, n <= 1 ? minR : (n * minArc) / (2 * Math.PI));
+  const step = (2 * Math.PI) / Math.max(n, 1);
+  const wants = ids.flatMap((id, i) => (prefer.has(id) ? [prefer.get(id)! - i * step] : []));
+  if (wants.length) {
+    // Circular mean of each card's wanted start.
+    const sx = wants.reduce((t, a) => t + Math.cos(a), 0);
+    const sy = wants.reduce((t, a) => t + Math.sin(a), 0);
+    if (Math.hypot(sx, sy) > 1e-9) startAngle = Math.atan2(sy, sx);
+  }
   ids.forEach((id, i) => {
     const a = startAngle + (2 * Math.PI * i) / Math.max(n, 1);
     centers.set(id, { x: r * Math.cos(a), y: r * Math.sin(a) });
@@ -252,6 +263,17 @@ function ringPlace(
 /** Order a ring's ids by the mean angle of the neighbours already placed, so
  *  a shell card sits over the core it calls. */
 function orderByAngle(ids: string[], edges: StyledEdge[], centers: Map<string, { x: number; y: number }>): string[] {
+  return byAngle(ids, edges, centers).order;
+}
+
+/** Each id's preferred angle — the circular mean of its placed neighbours'
+ *  — and the ids in that order (ids with no placed neighbour last). */
+function byAngle(
+  ids: string[],
+  edges: StyledEdge[],
+  centers: Map<string, { x: number; y: number }>,
+): { order: string[]; prefer: Map<string, number> } {
+  const prefer = new Map<string, number>();
   const key = new Map<string, number>();
   ids.forEach((id, i) => {
     const ns: number[] = [];
@@ -267,15 +289,25 @@ function orderByAngle(ids: string[], edges: StyledEdge[], centers: Map<string, {
       const sx = ns.reduce((s, a) => s + Math.cos(a), 0);
       const sy = ns.reduce((s, a) => s + Math.sin(a), 0);
       key.set(id, Math.atan2(sy, sx));
+      prefer.set(id, Math.atan2(sy, sx));
     }
   });
-  return [...ids].sort((a, b) => key.get(a)! - key.get(b)!);
+  return { order: [...ids].sort((a, b) => key.get(a)! - key.get(b)!), prefer };
 }
 
 function ringsLayout(def: StyleDef, members: StyledMember[], ghosts: string[], edges: StyledEdge[]): StyledLayout {
   const bands = bandsByLayer(def, members); // outer → inner
   const centers = new Map<string, { x: number; y: number }>();
   const regions: LayerRegion[] = [];
+  // Outside cards go in a band above (callers) or below (what it uses), as
+  // on the rows drawing. Stand them far off on their side while the rings
+  // are laid, so each ring turns its cards toward them.
+  const memberIds = new Set(members.map((m) => m.id));
+  const sides = ghostSides(ghosts, memberIds, edges);
+  const inG = ghosts.filter((g) => sides.get(g) === "in");
+  const outG = ghosts.filter((g) => sides.get(g) === "out");
+  for (const g of inG) centers.set(g, { x: 0, y: -1e5 });
+  for (const g of outG) centers.set(g, { x: 0, y: 1e5 });
   const inner = bands[bands.length - 1];
   let r = 0;
   if (inner) {
@@ -284,18 +316,42 @@ function ringsLayout(def: StyleDef, members: StyledMember[], ghosts: string[], e
   }
   for (let i = bands.length - 2; i >= 0; i--) {
     const b = bands[i];
-    const ordered = orderByAngle(b.ids, edges, centers);
-    const used = ringPlace(ordered, r + PAD + CARD_H / 2 + 10, -Math.PI / 2, centers);
+    const { order, prefer } = byAngle(b.ids, edges, centers);
+    const used = ringPlace(order, r + PAD + CARD_H / 2 + 10, -Math.PI / 2, centers, prefer);
     r = used + CARD_H / 2 + PAD;
     regions.push({ layer: b.layer === "?" ? "unlayered" : b.layer, caption: describe(def, b.layer), shape: "ring", cx: 0, cy: 0, r });
   }
-  if (ghosts.length) {
-    const ordered = orderByAngle(ghosts, edges, centers);
-    const used = ringPlace(ordered, r + PAD + CARD_H / 2 + 20, -Math.PI / 2 + 0.3, centers);
-    regions.push({ layer: "outside", caption: "what this container talks to", ghost: true, shape: "ring", cx: 0, cy: 0, r: used + CARD_H / 2 + PAD });
-  }
   // Innermost region first so the renderer paints outer rings underneath.
   regions.reverse();
+  const row = (ids: string[], y: number, layer: string) => {
+    if (ids.length === 0) return;
+    // Each over the mean x of the cards it touches.
+    const meanX = new Map<string, number>();
+    ids.forEach((id, i) => {
+      const xs: number[] = [];
+      for (const e of edges) {
+        const other = e.source === id ? e.target : e.target === id ? e.source : null;
+        const p = other && memberIds.has(other) ? centers.get(other) : undefined;
+        if (p) xs.push(p.x);
+      }
+      meanX.set(id, xs.length ? xs.reduce((t, x) => t + x, 0) / xs.length : 1e6 + i);
+    });
+    const ordered = [...ids].sort((a, b) => meanX.get(a)! - meanX.get(b)!);
+    const w = (ordered.length - 1) * PITCH_X;
+    ordered.forEach((id, i) => centers.set(id, { x: -w / 2 + i * PITCH_X, y }));
+    regions.push({
+      layer,
+      ghost: true,
+      shape: "rect",
+      x: -w / 2 - CARD_W / 2 - PAD,
+      y: y - CARD_H / 2 - PAD - LABEL_ROOM,
+      w: w + CARD_W + 2 * PAD,
+      h: CARD_H + 2 * PAD + LABEL_ROOM,
+    });
+  };
+  const gap = PAD * 2 + LABEL_ROOM + CARD_H / 2;
+  row(inG, -r - gap, "called from");
+  row(outG, r + gap, "depends on");
   return { centers, regions };
 }
 
@@ -453,11 +509,13 @@ function hexagonLayout(def: StyleDef, members: StyledMember[], ghosts: string[],
   // Ghosts: callers on the far left, dependencies on the far right.
   const memberIds = new Set(members.map((m) => m.id));
   const sides = ghostSides(ghosts, memberIds, edges);
-  const ghostX = sideX + CARD_W + PAD * 2;
+  // A side with no cards of its own leaves its place to the outside column,
+  // rather than a gap between the hexagon and what talks to it.
+  const ghostX = (side: string) => (ids(side).length ? sideX + CARD_W + PAD * 2 : sideX);
   const inG = ghosts.filter((g) => sides.get(g) === "in");
   const outG = ghosts.filter((g) => sides.get(g) === "out");
-  column(inG, -ghostX, inG.length ? "driven by" : null, true);
-  column(outG, ghostX, outG.length ? "drives" : null, true);
+  column(inG, -ghostX(driving), inG.length ? "driven by" : null, true);
+  column(outG, ghostX(driven), outG.length ? "drives" : null, true);
 
   return { centers, regions };
 }

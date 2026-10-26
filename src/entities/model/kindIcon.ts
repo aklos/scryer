@@ -20,6 +20,14 @@ type IconNode = Pick<Node, "kind" | "external" | "technology" | "properties" | "
  *  symbol → eye, data-shape symbol → database, code symbol → braces, else the
  *  C4 box family by altitude. `previewable` is DERIVED by the caller from the
  *  preview sidecar's export list — it is never a fact stored on the node. */
+/** A symbol's glyph by what it is — the same ones `kindIcon` gives it in the
+ *  tree: plain code, a data shape, a component the sidecar can render. */
+export const SYMBOL_ICON: Record<"code" | "model" | "visual", ComponentType<LucideProps>> = {
+  code: Code,
+  model: Database,
+  visual: Eye,
+};
+
 export function kindIcon(node: IconNode, previewable = false): ComponentType<LucideProps> {
   if (node.kind === "person") return User;          // an actor — human, regardless of external
   if (node.external) return Cloud;                  // the world: a third-party service

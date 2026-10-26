@@ -27,6 +27,7 @@ import {
   Background,
   BackgroundVariant,
   ConnectionMode,
+  ControlButton,
   Controls,
   useReactFlow,
   useUpdateNodeInternals,
@@ -36,10 +37,11 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { ChevronRight, CornerLeftUp } from "lucide-react";
+import { ChevronRight, CornerLeftUp, Maximize } from "lucide-react";
 import type { ScryModel } from "../../entities/model/viewmodel";
 import { concernCounts } from "../../entities/model/viewmodel";
-import { attentionState, CLAIM_TONE } from "../../entities/model/claimState";
+import { attentionState, childTally, CLAIM_TONE } from "../../entities/model/claimState";
+import { SYMBOL_ICON } from "../../entities/model/kindIcon";
 import { assignAllHandles, getHandlePositions } from "../../shared/diagram/edgeRouting";
 import { edgeShape } from "../../shared/diagram/edgeGeometry";
 import { placeLabels } from "../../shared/diagram/labelPlacement";
@@ -49,77 +51,77 @@ import { CenterHandle } from "../../shared/diagram/NodeHandles";
 import { RelationshipEdge, edgeText, type EdgeData } from "../../shared/diagram/RelationshipEdge";
 import { buildDiagramScene, CARD_W, CARD_H, type DiagramScene, type DiagramNode } from "./diagramLayout";
 import { useDotSim } from "./useDotSim";
-import { StyleRegions } from "./StyleRegions";
+import { drawingBounds, StyleRegions } from "./StyleRegions";
 import { structuralBySubtree, type ModelHealthReport } from "../../entities/model/health";
 
 type DotData = CardData;
 type RFDot = RFNode<DotData, "dot">;
 
-/** The C4-style class word shown under each dot — the three things a symbol can
- *  be (mirrors `kindIcon`/`typeTag`). */
+/** The class word for a symbol's label, now that its glyph says it. */
 const SYMBOL_CLASS_LABEL: Record<DiagramNode["symbolClass"], string> = {
-  code: "Code",
-  model: "Model",
-  visual: "Visual",
+  code: "code",
+  model: "data shape",
+  visual: "visual",
 };
 
-/** A code-tier dot (symbol): a disc with its name and class centered beneath
- *  it — the constellation cousin of the arch tiers' C4 cards. A symbol at
- *  rest reads ghost-grey; a failing or planned claim on it tints the disc via
- *  `bg-current` inheriting the state's hue. */
-function DotNode({ data }: NodeProps<RFDot>) {
+/** A code-tier symbol: its type's glyph — the tree's, so a symbol looks the
+ *  same everywhere — sized by fan-in, with its name beneath. The glyph's
+ *  tone says what is known about it: full for a symbol with claims, ghost
+ *  for one with none (a big ghost glyph is a hub nobody has described, the
+ *  find worth making), the state's hue when a claim on it fails or is a
+ *  todo. */
+export function DotNode({ data }: NodeProps<RFDot>) {
   const { node, selected, attention } = data;
   const meta = attention
-    ? { color: CLAIM_TONE[attention], label: attention === "failing" ? "A claim here is failing" : "A claim here is a todo test" }
+    ? { color: CLAIM_TONE[attention], label: attention === "failing" ? "a claim here is failing" : "a claim here is a todo test" }
     : null;
   const ghost = node.reference;
-  // Dot size encodes fan-in — the more depended-upon a symbol, the larger it
+  // Size encodes fan-in — the more depended-upon a symbol, the larger it
   // reads. Sized relative to the busiest hub on this level (see diagramLayout).
   const dia = node.dotSize;
-  // A ghost (lives elsewhere) reads hollow: an outlined ring, no fill. The dash
-  // is reserved for true externals, so an external ghost is hollow + dashed, an
-  // internal ghost hollow + solid. A symbol with NO claims is hollow too — a
-  // big hollow dot is a hub nobody has described, the find worth making.
+  const Icon = SYMBOL_ICON[node.symbolClass];
   const undescribed = !ghost && !node.hasClaims;
-  const discClass = ghost
-    ? `border ${node.external ? "border-dashed" : ""} border-[var(--text-muted)] bg-transparent`
-    : undescribed
-      ? `border-2 ${meta ? `border-current ${meta.color}` : "border-[var(--text-ghost)]"} bg-transparent`
-      : meta
-        ? `bg-current ${meta.color}`
-        : "bg-[var(--text-ghost)]";
+  // A ghost lives elsewhere: its state is told on its own level, never here.
+  const tone = ghost
+    ? "text-[var(--text-muted)]"
+    : meta
+      ? meta.color
+      : undescribed
+        ? "text-[var(--text-ghost)]"
+        : "text-[var(--text-secondary)]";
   // Subgraph highlight: faded when a selection elsewhere doesn't touch this
-  // dot. Leaves (undescribed, one caller at most) rest faded so the important
-  // dots carry the level.
+  // symbol. Leaves (undescribed, one caller at most) rest faded so the
+  // important ones carry the level.
   const leaf = undescribed && node.degree <= 1;
   const dimClass = data.dimmed ? "opacity-20" : ghost ? "opacity-70" : leaf ? "opacity-45" : "";
+  const said = [node.name, SYMBOL_CLASS_LABEL[node.symbolClass], ghost ? "referenced — double-click to open" : meta?.label]
+    .filter(Boolean)
+    .join(", ");
   return (
     <div className={`flex flex-col items-center transition-opacity ${dimClass}`}>
       <span
         style={{ width: dia, height: dia }}
-        className={`relative shrink-0 rounded-full ${discClass} ${
-          selected ? "ring-2 ring-[var(--border-strong)] ring-offset-1 ring-offset-[var(--surface-canvas)]" : ""
+        className={`relative flex shrink-0 items-center justify-center rounded-md ${tone} ${
+          selected ? "ring-2 ring-[var(--border-strong)] ring-offset-2 ring-offset-[var(--surface-canvas)]" : ""
         }`}
-        aria-label={ghost ? `${node.name} (referenced — double-click to open)` : meta?.label}
+        aria-label={said}
       >
+        {/* The stroke thickens a little with size, so a hub's glyph holds
+            its weight without the small ones going bold. */}
+        <Icon width={dia} height={dia} absoluteStrokeWidth strokeWidth={1.5 + dia / 40} />
         <CenterHandle />
       </span>
-      <div className="mt-1.5 flex flex-col items-center leading-tight">
-        <span
-          className={`max-w-[130px] truncate text-center text-xs ${
-            ghost
-              ? "italic text-[var(--text-muted)]"
-              : selected
-                ? "font-medium text-[var(--text)]"
-                : "text-[var(--text-secondary)]"
-          }`}
-        >
-          {node.name || "·"}
-        </span>
-        <span className="text-[10px] tracking-wider text-[var(--text-ghost)]">
-          {SYMBOL_CLASS_LABEL[node.symbolClass]}
-        </span>
-      </div>
+      <span
+        className={`mt-1.5 max-w-[130px] truncate text-center text-xs leading-tight ${
+          ghost
+            ? "italic text-[var(--text-muted)]"
+            : selected
+              ? "font-medium text-[var(--text)]"
+              : "text-[var(--text-secondary)]"
+        }`}
+      >
+        {node.name || "·"}
+      </span>
     </div>
   );
 }
@@ -204,7 +206,7 @@ function DiagramInner({
   concernLens?: string | null;
 }) {
   const [scene, setScene] = useState<DiagramScene | null>(null);
-  const { fitView } = useReactFlow();
+  const { fitBounds, getNodes, getNodesBounds } = useReactFlow();
   const updateNodeInternals = useUpdateNodeInternals();
 
   // The rendered React Flow nodes. Real state, not a memo projection: RF's
@@ -329,7 +331,9 @@ function DiagramInner({
           data: {
             node: n,
             selected: n.id === selectedId,
-            claims: claimsOf?.[n.id]?.subtree,
+            children: n.childIds.length
+              ? childTally(n.childIds.map((c) => claimsOf?.[c]?.subtree))
+              : undefined,
             attention: attentionState(claimsOf?.[n.id]?.subtree),
             dimmed:
               (highlight.active && !highlight.neighbors.has(n.id)) ||
@@ -485,15 +489,27 @@ function DiagramInner({
     return out;
   }, [scene, rfNodes, selectedId, highlight, concernLit, pendingIds]);
 
+  // Fit the whole drawing — the cards and the regions behind them — so a
+  // ring or a band label is never cut off at the edge.
+  const regions = scene?.regions;
+  const fitDrawing = useCallback(
+    (duration = 300) => {
+      const nodes = getNodes();
+      if (nodes.length === 0) return;
+      void fitBounds(drawingBounds(getNodesBounds(nodes), regions ?? []), { padding: 0.08, duration });
+    },
+    [getNodes, getNodesBounds, fitBounds, regions],
+  );
+
   // Refit when the level changes (a fresh scene of a different size/shape).
   const fitKey = `${focusId ?? "root"}:${rfNodes.length}`;
   const lastFit = useRef("");
   useEffect(() => {
     if (rfNodes.length === 0 || lastFit.current === fitKey) return;
     lastFit.current = fitKey;
-    const t = setTimeout(() => void fitView({ padding: 0.2, duration: 300 }), 0);
+    const t = setTimeout(() => fitDrawing(), 0);
     return () => clearTimeout(t);
-  }, [fitKey, rfNodes.length, fitView]);
+  }, [fitKey, rfNodes.length, fitDrawing]);
 
   // Edges route off the card handles, but React Flow doesn't know a handle's
   // real position until it has MEASURED the card — so an edge that mounts before
@@ -646,7 +662,16 @@ function DiagramInner({
               className="!bg-[var(--surface-canvas)]"
             />
             {scene?.regions && <StyleRegions regions={scene.regions} />}
-            <Controls showInteractive={false} className="!shadow-none" />
+            <Controls showInteractive={false} showFitView={false} className="!shadow-none">
+              <ControlButton
+                onClick={() => fitDrawing()}
+                className="react-flow__controls-fitview"
+                aria-label="Fit the whole drawing"
+                title="Fit view"
+              >
+                <Maximize />
+              </ControlButton>
+            </Controls>
           </ReactFlow>
         )}
       </div>

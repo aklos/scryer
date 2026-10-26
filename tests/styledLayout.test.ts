@@ -62,6 +62,52 @@ describe("styledLayout", () => {
     expect(laid.regions.map((r) => r.layer)).toEqual(["shell", "core"]);
   });
 
+  it("rings: callers from outside sit in a band above the rings and what the container uses in a band below, each ring turned so its cards face the outside cards they talk to", () => {
+    const laid = styledLayout(
+      style("core-shell"),
+      [
+        { id: "c", layer: "core" },
+        { id: "s", layer: "shell" },
+      ],
+      ["cli", "db", "net"],
+      [
+        { source: "cli", target: "s" },
+        { source: "s", target: "db" },
+        { source: "s", target: "net" },
+        { source: "s", target: "c" },
+      ],
+    );
+    const at = (id: string) => laid.centers.get(id)!;
+    const ring = laid.regions.find((r) => r.layer === "shell")!;
+    const reach = ring.shape === "ring" ? ring.r : 0;
+    expect(at("cli").y + CARD_H / 2).toBeLessThan(-reach);
+    for (const g of ["db", "net"]) expect(at(g).y - CARD_H / 2).toBeGreaterThan(reach);
+    expect(at("db").y).toBe(at("net").y);
+    // The shell card turns toward the side with more of its traffic: below.
+    expect(at("s").y).toBeGreaterThan(0);
+    const bands = laid.regions.filter((r) => r.ghost).map((r) => [r.layer, r.shape]);
+    expect(bands).toEqual([["called from", "rect"], ["depends on", "rect"]]);
+  });
+
+  it("hexagon: when a side has no cards of its own, the outside cards on that side take its place beside the hexagon rather than a column further out", () => {
+    const edges = [{ source: "caller", target: "d" }];
+    const lone = styledLayout(style("library"), [{ id: "d", layer: "domain" }, { id: "i", layer: "infrastructure" }], ["caller"], edges);
+    const withSide = styledLayout(
+      style("hexagonal"),
+      [{ id: "d", layer: "domain" }, { id: "p", layer: "presentation" }],
+      ["caller"],
+      [...edges, { source: "caller", target: "p" }],
+    );
+    const hexR = (l: typeof lone) => {
+      const h = l.regions.filter((r) => r.shape === "hex").at(-1)!;
+      return h.shape === "hex" ? h.r : 0;
+    };
+    // Empty driving side: the callers stand where it would.
+    expect(-lone.centers.get("caller")!.x - CARD_W / 2).toBeLessThan(hexR(lone) + CARD_W);
+    // A driving side of its own: the callers stand beyond it.
+    expect(withSide.centers.get("caller")!.x).toBeLessThan(withSide.centers.get("p")!.x - CARD_W);
+  });
+
   it("hexagon: domain centre, application ring, presentation left, infrastructure right", () => {
     const laid = styledLayout(
       style("hexagonal"),
