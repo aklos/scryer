@@ -411,15 +411,12 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         homes.push((rel, lift, level, home));
     }
 
-    // A product file with a module doc and claims of its own is a
-    // sub-component of its directory component, unless it is that
+    // A product file with a module doc is a sub-component of its directory
+    // component: the doc declares it one, tested or not. Unless it is that
     // directory's root, whose doc describes the directory itself.
-    let sub_files: BTreeSet<&str> = homes
-        .iter()
-        .filter_map(|(_, _, _, h)| match h {
-            Home::File(f) => Some(f.as_str()),
-            _ => None,
-        })
+    let sub_files: BTreeSet<&str> = file_component
+        .keys()
+        .copied()
         .filter(|f| {
             let comp = &components[&file_component[f]];
             input.lifts[*f].module_description.is_some()

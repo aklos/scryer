@@ -184,6 +184,24 @@ mod tests {
         assert_eq!((parent.kind, parent.name.as_str()), (Kind::Container, "web"));
     }
 
+    /// When a file inside a directory component has a module doc but no
+    /// claims of its own, it is still a sub-component, holding its symbols.
+    #[test]
+    fn a_documented_file_is_a_sub_component_without_claims() {
+        let dir = cargo_workspace();
+        let d = dir.path();
+        write(d, "crates/core/src/store/index.rs", "//! Finds stored text by key.\npub fn find() {}\n");
+        let tree = derived_tree_uncached(d).unwrap();
+        let m = &tree.planned;
+        let named = |name: &str| m.nodes.iter().find(|n| n.name == name).unwrap();
+        let (store, index) = (named("store"), named("index"));
+        assert_eq!(index.kind, Kind::Component);
+        assert_eq!(index.parent_id.as_deref(), Some(store.id.as_str()));
+        assert_eq!(index.description.as_deref(), Some("Finds stored text by key."));
+        assert_eq!(named("find").parent_id.as_deref(), Some(index.id.as_str()));
+        assert_eq!(tree.file_nodes["crates/core/src/store/index.rs"], index.id);
+    }
+
     /// When a styled crate has files outside its source root, asks them for no layer, and still flags a source module that matches no declared layer.
     #[test]
     fn only_source_modules_are_asked_for_a_layer() {
