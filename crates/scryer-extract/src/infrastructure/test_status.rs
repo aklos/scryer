@@ -266,21 +266,17 @@ pub fn read_test_statuses(r: &ModelRef) -> Result<Vec<ClaimTestStatus>, String> 
 /// staleness check re-fingerprints each claim's code, so a caller asking about
 /// a handful must not pay for the whole model.
 fn statuses_for(r: &ModelRef, only: Option<&BTreeSet<&str>>) -> Result<Vec<ClaimTestStatus>, String> {
-    let cache = read_cache(r);
-    if cache.results.is_empty() {
+    let mut cache = read_cache(r);
+    let siblings = sibling_caches(r);
+    if cache.results.is_empty() && siblings.is_empty() {
         return Ok(Vec::new());
     }
     let model = working_model(r)?;
     let project = r.project_path();
-    let live: BTreeSet<&str> = model
-        .nodes
-        .iter()
-        .flat_map(|n| n.responsibilities.iter())
-        .chain(model.groups.iter().flat_map(|g| g.responsibilities.iter()))
-        .map(|resp| resp.id.as_str())
-        .collect();
+    let live = live_claims(&model);
     let mut files = FileCache::new();
     let mut project_files: Option<BTreeSet<String>> = None;
+    adopt_sibling_verdicts(r, &model, &mut cache, siblings, &mut files, &mut project_files);
     let mut out = Vec::new();
     for rec in &cache.results {
         if !live.contains(rec.resp_id.as_str())
@@ -306,6 +302,96 @@ fn statuses_for(r: &ModelRef, only: Option<&BTreeSet<&str>>) -> Result<Vec<Claim
     }
     out.sort_by(|a, b| a.resp_id.cmp(&b.resp_id));
     Ok(out)
+}
+
+/// The ids of every claim in `model`.
+fn live_claims(model: &ScryModel) -> BTreeSet<&str> {
+    model
+        .nodes
+        .iter()
+        .flat_map(|n| n.responsibilities.iter())
+        .chain(model.groups.iter().flat_map(|g| g.responsibilities.iter()))
+        .map(|resp| resp.id.as_str())
+        .collect()
+}
+
+/// The verdict caches of the project's other git worktrees, those holding
+/// any. A main checkout with no `.git/worktrees` has none, so it is not
+/// asked of git.
+fn sibling_caches(r: &ModelRef) -> Vec<TestStatusCache> {
+    let project = r.project_path();
+    let git = project.join(".git");
+    if git.is_dir() && !git.join("worktrees").is_dir() {
+        return Vec::new();
+    }
+    let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let here = canon(project);
+    scryer_core::worktree::list_worktrees(project)
+        .into_iter()
+        .filter(|w| canon(&w.path) != here)
+        .map(|w| read_cache(&ModelRef::ProjectLocal(w.path)))
+        .filter(|c| !c.results.is_empty())
+        .collect()
+}
+
+/// Take into `cache` each verdict another worktree recorded of code this
+/// checkout holds unchanged (the same fingerprints) where this checkout has
+/// no fresh verdict of its own, or only an older one. So a new worktree
+/// starts with the evidence its base has, and a merged branch brings its
+/// runs back. Adopted records are written to this checkout's cache, so they
+/// outlive the worktree that ran them.
+fn adopt_sibling_verdicts(
+    r: &ModelRef,
+    model: &ScryModel,
+    cache: &mut TestStatusCache,
+    siblings: Vec<TestStatusCache>,
+    files: &mut FileCache,
+    project_files: &mut Option<BTreeSet<String>>,
+) {
+    if siblings.is_empty() {
+        return;
+    }
+    let project = r.project_path();
+    let live = live_claims(model);
+    let mut current: HashMap<String, BTreeMap<String, String>> = HashMap::new();
+    let mut adopted: Vec<ClaimRecord> = Vec::new();
+    for rec in siblings.into_iter().flat_map(|c| c.results) {
+        if rec.fingerprints.is_empty() || !live.contains(rec.resp_id.as_str()) {
+            continue;
+        }
+        let ours = adopted.iter().chain(&cache.results).find(|c| c.resp_id == rec.resp_id);
+        if let Some(o) = ours {
+            // Ours is of the same code and no older, or provably of the
+            // code as it stands and so not of the sibling's.
+            if (o.fingerprints == rec.fingerprints && o.recorded_at >= rec.recorded_at)
+                || (o.fingerprints != rec.fingerprints && provably_fresh(model, o, project) == Some(true))
+            {
+                continue;
+            }
+        }
+        let now = current
+            .entry(rec.resp_id.clone())
+            .or_insert_with(|| claim_fingerprints(model, &rec.resp_id, project, files, project_files));
+        if *now != rec.fingerprints {
+            continue;
+        }
+        adopted.retain(|a| a.resp_id != rec.resp_id);
+        adopted.push(rec);
+    }
+    if adopted.is_empty() {
+        return;
+    }
+    // Re-read before writing, so a run ingested since this read is kept.
+    let mut on_disk = read_cache(r);
+    for rec in adopted {
+        for results in [&mut on_disk.results, &mut cache.results] {
+            match results.iter_mut().find(|c| c.resp_id == rec.resp_id) {
+                Some(existing) => *existing = rec.clone(),
+                None => results.push(rec.clone()),
+            }
+        }
+    }
+    let _ = write_cache(r, &on_disk);
 }
 
 /// Where the project's radius test command is stored: one template line,
@@ -458,10 +544,11 @@ pub fn read_derived_status(
     use scryer_core::derived_tree::{compute_derived_status, read_mutations_at};
     let project = r.project_path();
     let tree = crate::infrastructure::derived_tree::derived_tree(project)?;
-    let cache = read_cache(r);
+    let mut cache = read_cache(r);
     let mutations = read_mutations_at(r);
     let mut files = FileCache::new();
     let mut project_files: Option<BTreeSet<String>> = None;
+    adopt_sibling_verdicts(r, &tree.planned, &mut cache, sibling_caches(r), &mut files, &mut project_files);
     let mut fresh = |id: &str, fp: &BTreeMap<String, String>, at: u64| {
         scryer_core::derived_tree::anchors_untouched_since(&tree.planned, project, id, fp, at)
             || claim_fingerprints(&tree.planned, id, project, &mut files, &mut project_files) == *fp
@@ -619,6 +706,51 @@ mod tests {
         assert_eq!(statuses[0].resp_id, "r1");
         assert_eq!(statuses[0].outcome, TestOutcome::Passed);
         assert!(!statuses[0].stale);
+    }
+
+    /// `project()` committed to git, and a linked worktree of it.
+    fn with_worktree() -> (tempfile::TempDir, ModelRef, tempfile::TempDir, ModelRef) {
+        let (dir, r) = project();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .current_dir(dir.path())
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        git(&["add", "."]);
+        git(&["commit", "-qm", "base"]);
+        let root = tempfile::tempdir().unwrap();
+        let wt = root.path().join("wt");
+        git(&["worktree", "add", "-q", wt.to_str().unwrap()]);
+        (dir, r, root, ModelRef::ProjectLocal(wt))
+    }
+
+    /// When another worktree of the project ran a claim's test on code this
+    /// checkout holds unchanged, reads that verdict as its own, and keeps it
+    /// once that worktree is gone.
+    #[test]
+    fn a_verdict_from_another_worktree_counts_where_the_code_is_the_same() {
+        let (_dir, main, _root, wt) = with_worktree();
+        ingest_report_file(&wt, REPORT).unwrap();
+        let s = read_test_statuses(&main).unwrap();
+        assert_eq!((s.len(), s[0].outcome, s[0].stale), (1, TestOutcome::Passed, false));
+        std::fs::remove_dir_all(wt.project_path()).unwrap();
+        let s = read_test_statuses(&main).unwrap();
+        assert_eq!((s.len(), s[0].stale), (1, false));
+    }
+
+    /// If another worktree's verdict was taken of code this checkout holds
+    /// differently, then ignores it.
+    #[test]
+    fn a_verdict_from_another_worktree_on_other_code_is_ignored() {
+        let (_dir, main, _root, wt) = with_worktree();
+        std::fs::write(wt.project_path().join("src/m.ts"), IMPL_TS.replace("return 1", "return 2")).unwrap();
+        ingest_report_file(&wt, REPORT).unwrap();
+        assert!(read_test_statuses(&main).unwrap().is_empty());
     }
 
     #[test]
