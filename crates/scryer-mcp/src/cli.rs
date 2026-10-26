@@ -10,7 +10,7 @@
 //! safe to call from prompts; `check` and `lint` are gates and exit non-zero
 //! on findings.
 
-use scryer_core::derived_tree::{DerivedCounts, DerivedStatus, DerivedTree};
+use scryer_core::derived_tree::{ClaimState, DerivedCounts, DerivedStatus, DerivedTree};
 use scryer_core::ModelRef;
 use std::path::{Path, PathBuf};
 
@@ -57,10 +57,22 @@ pub(crate) fn run_statusline() -> Result<(), Box<dyn std::error::Error>> {
         Some(d) => d,
         None => return Ok(()),
     };
-    if let Some((_, s)) = find_project(&start).and_then(|p| derived_status(&p).ok()) {
-        println!("{}", status_line(&s.totals));
+    let Some(project) = find_project(&start) else { return Ok(()) };
+    if let Ok((tree, status)) = derived_status(&project) {
+        let r = ModelRef::ProjectLocal(project);
+        let landing = statusline_session(&input).map(|id| {
+            let entries = scryer_core::session::read_session(&r, &id);
+            scryer_core::derived_tree::landing(&[(id, entries)], &tree, &status, 0)
+        });
+        println!("{}", session_line(landing.as_ref().and_then(|l| l.sessions.first())));
     }
     Ok(())
+}
+
+/// The harness's session id, from Claude Code's statusline payload.
+pub(crate) fn statusline_session(input: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(input).ok()?;
+    v["session_id"].as_str().filter(|s| !s.is_empty()).map(str::to_string)
 }
 
 /// Where to start the project walk, from Claude Code's statusline payload:
@@ -329,7 +341,7 @@ pub(crate) struct CheckReport {
 }
 
 pub(crate) fn check_report(tree: &DerivedTree, status: &DerivedStatus, gates: &Gates) -> CheckReport {
-    use scryer_core::derived_tree::{ClaimState, ProbeMark};
+    use scryer_core::derived_tree::ProbeMark;
     let mut failures = Vec::new();
     let mut notes = Vec::new();
     let at = |id: &str| {
@@ -436,6 +448,29 @@ pub(crate) fn status_line(t: &DerivedCounts) -> String {
     line
 }
 
+/// The statusline for one agent session: the claims its edits reached, by
+/// status. Stale is left out: what a session edits reads stale until its
+/// tests run again, which is the work under way, not news.
+/// "scryer: 4 proven · 0 failing · 2 todo".
+pub(crate) fn session_line(s: Option<&scryer_core::derived_tree::LandingSession>) -> String {
+    let Some(s) = s else { return "scryer: nothing yet this session".to_string() };
+    let failing = s.newly_stale_or_failing.iter().filter(|c| c.state == ClaimState::Failing).count();
+    let mut line = format!(
+        "scryer: {} proven · {} failing · {} todo",
+        s.newly_proven.len(),
+        failing,
+        s.newly_planned.len() + s.still_planned.len()
+    );
+    if s.surviving_mutants > 0 {
+        line.push_str(&format!(
+            " · {} surviving mutant{}",
+            s.surviving_mutants,
+            if s.surviving_mutants == 1 { "" } else { "s" }
+        ));
+    }
+    line
+}
+
 fn status_json(t: &DerivedCounts) -> String {
     let mut v = serde_json::to_value(t).unwrap_or_default();
     v["statusLine"] = serde_json::json!(status_line(t));
@@ -486,6 +521,25 @@ mod tests {
         let dir = project();
         let (_, s) = derived_status(dir.path()).unwrap();
         assert_eq!(status_line(&s.totals), "scryer: 0 proven · 3 stale · 0 failing · 1 todo");
+    }
+
+    /// When the statusline is given a session, counts only the claims that session's edits reached, and leaves stale ones out.
+    #[test]
+    fn the_statusline_counts_only_this_sessions_claims() {
+        let dir = project();
+        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        scryer_core::session::record_touch(&r, "s1", "crates/notes/src/draft.rs").unwrap();
+        let (tree, status) = derived_status(dir.path()).unwrap();
+        let line = |id: &str| {
+            let entries = scryer_core::session::read_session(&r, id);
+            let l = scryer_core::derived_tree::landing(&[(id.to_string(), entries)], &tree, &status, 0);
+            session_line(l.sessions.first())
+        };
+        assert_eq!(line("s1"), "scryer: 0 proven · 0 failing · 1 todo");
+        assert_eq!(line("s2"), "scryer: nothing yet this session");
+        let payload = serde_json::json!({ "session_id": "s1", "cwd": "/c" }).to_string();
+        assert_eq!(statusline_session(&payload).as_deref(), Some("s1"));
+        assert_eq!(statusline_session("not json"), None);
     }
 
     /// With no report ingested, claims are stale: a note by default, a
