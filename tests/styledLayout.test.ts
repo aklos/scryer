@@ -243,6 +243,32 @@ describe("classifyStyledEdge", () => {
 });
 
 describe("composition", () => {
+  it("hexagon: each outside card sits level with the cards it links to, so a caller wired into composition stands beside the composition band", () => {
+    const laid = styledLayout(
+      style("hexagonal"),
+      [
+        { id: "w", layer: "composition" },
+        { id: "d", layer: "domain" },
+        { id: "a", layer: "application" },
+        { id: "p", layer: "presentation" },
+        { id: "i", layer: "infrastructure" },
+      ],
+      ["cli", "user"],
+      [
+        { source: "w", target: "p" },
+        { source: "cli", target: "w" },
+        { source: "user", target: "p" },
+      ],
+    );
+    const at = (id: string) => laid.centers.get(id)!;
+    expect(at("cli").y).toBe(at("w").y);
+    expect(at("user").y).toBe(at("p").y);
+    // The outside column's region still wraps both.
+    const band = laid.regions.find((r) => r.layer === "driven by")!;
+    expect(band.shape === "rect" && band.y).toBeLessThan(at("cli").y - CARD_H / 2);
+    expect(band.shape === "rect" && band.y + band.h).toBeGreaterThan(at("user").y + CARD_H / 2);
+  });
+
   const hex = style("hexagonal");
   it("hexagon: composition is a band above the whole drawing", () => {
     const laid = styledLayout(

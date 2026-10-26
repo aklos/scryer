@@ -405,6 +405,31 @@ export function rootStrip(
   };
 }
 
+/** Positions as close to `want` (ascending) as a minimum `gap` allows, in
+ *  order: runs of cards that would overlap share one offset, the mean of what
+ *  each wants. A card with nothing to sit level with (`want` past 1e5) goes
+ *  below the rest. */
+function seat(want: number[], gap: number): number[] {
+  const known = want.filter((y) => y < 1e5);
+  let last = known.length ? Math.max(...known) : 0;
+  const ys = want.map((y) => (y < 1e5 ? y : (last += gap)));
+  const blocks: { start: number; n: number; pos: number }[] = [];
+  ys.forEach((y, i) => {
+    blocks.push({ start: i, n: 1, pos: y });
+    for (;;) {
+      const b = blocks[blocks.length - 1], a = blocks[blocks.length - 2];
+      if (!a || a.pos + a.n * gap <= b.pos) break;
+      // b's cards want b.pos + k·gap; seated after a's, they want
+      // (b.pos − a.n·gap) as the merged block's start.
+      const pos = (a.pos * a.n + (b.pos - a.n * gap) * b.n) / (a.n + b.n);
+      blocks.splice(-2, 2, { start: a.start, n: a.n + b.n, pos });
+    }
+  });
+  const out: number[] = [];
+  for (const b of blocks) for (let k = 0; k < b.n; k++) out.push(b.pos + k * gap);
+  return out;
+}
+
 /**
  * Cockburn's drawing, read off the style's layer order. The last four layers
  * are the hexagon: the driving side (presentation) as a column on the LEFT,
@@ -447,8 +472,12 @@ function hexagonLayout(def: StyleDef, members: StyledMember[], ghosts: string[],
       key.set(id, ys.length ? ys.reduce((s, y) => s + y, 0) / ys.length : 1e6 + i);
     });
     const ordered = [...colIds].sort((a, b) => key.get(a)! - key.get(b)!);
-    const h = (ordered.length - 1) * (CARD_H + 40);
-    ordered.forEach((id, i) => centers.set(id, { x, y: -h / 2 + i * (CARD_H + 40) }));
+    // An outside column is seated, each card level with what it links to;
+    // a side column is packed around the hexagon's middle.
+    const ys = ghost ? seat(ordered.map((id) => key.get(id)!), CARD_H + 40) : ordered.map((_, i) => i * (CARD_H + 40));
+    const mid = ghost ? 0 : (ys[ys.length - 1] - ys[0]) / 2;
+    ordered.forEach((id, i) => centers.set(id, { x, y: ys[i] - mid }));
+    const [top, bottom] = [ys[0] - mid, ys[ys.length - 1] - mid];
     if (layer !== null) {
       regions.push({
         layer,
@@ -456,9 +485,9 @@ function hexagonLayout(def: StyleDef, members: StyledMember[], ghosts: string[],
         ghost,
         shape: "rect",
         x: x - CARD_W / 2 - PAD,
-        y: -h / 2 - CARD_H / 2 - PAD - LABEL_ROOM,
+        y: top - CARD_H / 2 - PAD - LABEL_ROOM,
         w: CARD_W + 2 * PAD,
-        h: h + CARD_H + 2 * PAD + LABEL_ROOM,
+        h: bottom - top + CARD_H + 2 * PAD + LABEL_ROOM,
       });
     }
   };
