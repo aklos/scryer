@@ -6,9 +6,9 @@
   </h1>
 
   <p>
-    <b>What's true about your codebase.</b>
+    <b>Spec-driven development where the spec is your tests.</b>
     <br />
-    A C4 model derived from your code and tests, with every claim verified, for people and agent swarms working together.
+    Coding agents write each behaviour as a test before they build it, and keep the code inside its declared architecture. Deterministic checks confirm both. What's left is a live, verified map of what your codebase does.
     <br />
     <br />
     <a href="#how-it-works">How it works</a>
@@ -37,27 +37,51 @@
 
 Coding agents write faster than you can read. After a week, or a weekend of three agents running in parallel, nobody can say with confidence what is implemented, what was only planned, and what quietly broke. Ask the agent and it guesses from whatever code it has open.
 
-Scryer answers that question with evidence. It reads your repository and derives a [C4](https://c4model.com/) model of it: containers from packaging, components from modules, links from imports, and claims from your behaviour tests. A claim is proven when its test is green and the code it exercises has not changed since. It is planned when the test is a todo. It is stale when the code moved under it. Nothing in the model is written by hand or by an agent; it is computed from the repo, so it cannot drift.
+Spec-driven development answers that with a document written up front: a spec, a plan, a task list. The document is prose, so nothing checks it, and it starts drifting from the code as soon as the work begins.
 
-The same model is the plan. An agent plans a change by writing the claims it intends to satisfy as todo tests, in EARS grammar, one sentence each. You read a column of sentences instead of an essay, and watch them flip to proven as the work lands.
+In scryer the spec is the test suite. An agent plans a change by writing each behaviour it will add as a todo test, one sentence per test, and builds until those tests pass. Its imports are checked against the architecture style each container declares. A green test it doubts gets probed: the code under it is broken on purpose, to see whether the test notices. Every one of those checks is deterministic: a test run, the import graph, a probe's red or green. No model grades another model's work.
+
+What comes out is the documentation. Scryer derives a [C4](https://c4model.com/) map of the repository: containers from packaging, components from modules, links from imports, claims from test descriptions, and each claim's status from real test runs. You read a column of sentences instead of an essay, see which hold right now, and see what changed since you last looked. Nobody writes the map, so it cannot drift.
+
+Inside a session scryer drives and never blocks: MCP tools, session hooks and a skill steer Claude Code, Codex or Copilot CLI through the loop. At the gate it enforces: `scryer-mcp check` in CI fails on failing claims, architecture violations and malformed claim text.
 
 ## How it works
 
+### The spec is the tests
+
 **The claim is the test.** A behaviour test's description, the `///` doc comment on a Rust test, the string in `it("…")`, a pytest docstring, a .NET `DisplayName`, is an EARS claim about the code it tests: *When a save fails, keeps the draft.* Scryer lifts those sentences and lints them live. One test, one claim.
 
-**The level is the test level.** An end-to-end test claims for the system. An integration test at a deployable's boundary claims for its container. A unit test claims for its component. The tree you see is the test pyramid with the C4 vocabulary on it.
+**The level is the test level.** An end-to-end test claims for the system. An integration test at a deployable's boundary claims for its container. A unit test claims for its component. The map is the test pyramid with the C4 vocabulary on it.
 
-**Status is derived.** After a test run, hand scryer the JUnit report. Each claim becomes proven, failing, or planned, and a later edit to the test or to the code it exercises makes the verdict stale until the next run. Health counts what needs attention: planned, stale, failing, components with no claims, files no test reaches, surviving mutants, architecture violations.
+### Agents write the spec first
 
-**Styles are structural claims.** A container declares its architecture style in `.scryer/structure.toml`, hexagonal, library, feature-sliced, and the layers it has. The import graph is checked against it deterministically, and a violation is a red row like any other failing claim. It is fixed by moving the code, or, when the declared style was a guess, by declaring the shape the code actually has; never by loosening a rule to let one violation through.
+**A plan is a set of todo tests.** Before building, an agent calls `orient` with its task and files, and writes each claim it will satisfy as a todo test in the file orient names. You review the plan as sentences, and they turn proven as the work lands. A todo is also how you record behaviour that exists but has no test body yet.
+
+**Run what the change reaches.** `get_test_radius` names the tests a change reaches by import, as the exact command to run. The agent runs them and hands scryer the JUnit report.
+
+**Several agents, one spec.** Each session's touched files and todo stubs are recorded. An agent orienting on a file sees that another session edited it, that a todo there belongs to someone else, or that their test radius overlaps. Awareness, not locks: coordination happens through the repo.
+
+**Decisions live with the code.** A node's description is its module's doc comment, and that is where an architectural decision goes: what was decided and why, beside the code it governs, read by every agent that orients there. No separate ADR files to drift.
+
+**Comments are issues on the code.** You or an agent can open a comment thread on any node, from the rail beside its page or with the `comment` tool: a question, a request, a decision to respect. An agent working on that code sees the open threads in `orient` and when it reads a file there, replies, and closes a thread only by explicitly marking it addressed, saying what it did. Threads are committed under `.scryer/comments/`, one file per event, so they travel with the branch, merge without conflicts, and show from every worktree at once.
+
+**Nothing talks at turn end.** Session hooks record what an agent touched and put the claims for a file in front of it when it reads that file. They emit no errors, no summaries, no gates.
+
+### Deterministic checks
+
+**Status comes from test runs.** A claim is proven when its test passed and neither the test nor the code it exercises changed since; failing when it is red; todo when its test is a todo; stale when it has no current verdict, because something changed since its last run or it has never been run.
 
 **Probes ask whether a green test would notice.** `open_probe` lets an agent break the code a passing test exercises, in an isolated worktree, and run the test expecting red. A break that survives is a finding on the claim. Mutation reports from cargo-mutants or Stryker feed the same mark without an agent in the loop.
 
+**Styles are structural claims.** A container declares its architecture style in `.scryer/structure.toml` (hexagonal, library, feature-sliced, …) and the layers it has. The import graph is checked against it, and a file being edited shows the agent which layer it is on and what that layer may import. A violation is fixed by moving the code or, when the declared style was a guess, by declaring the shape the code actually has; never by loosening a rule to let one violation through. A container with no style yet is a decision still to make, not a violation. Tooling containers (`tooling = true`) are part of the codebase but held to no style.
+
+**The gate.** `scryer-mcp check` fails on failing claims, architecture violations and claim text that breaks the grammar. Stale claims and surviving mutants are notes by default and failures with `--fail-on-stale` and `--fail-on-mutants`.
+
+### Reading the result
+
+**The map.** The desktop app shows the derived C4 map level by level, a page per node with its claims and their status, and what changed since you last looked: newly proven, still todo, newly stale or failing, and which components more than one session touched. Health counts what needs attention: todo, stale and failing claims, components with no claims, files no test reaches, surviving mutants, architecture violations.
+
 **Concerns cut across.** A trailing `[persistence]` or `[auth]` on a claim tags it with a concern. The concern lens dims everything else, so you can read down a component or across a concern.
-
-**Several agents, one substrate.** Each session's touched files and planned stubs are recorded. An agent orienting on a file sees that another session edited it, that a todo there belongs to someone else, or that their test radius overlaps. Awareness, not locks: nothing blocks, and coordination happens through the repo.
-
-**Nothing talks at turn end.** Session hooks record what an agent touched and put the claims for a file in front of it when it reads that file. They emit no errors, no summaries, no gates.
 
 ## Getting started
 
@@ -87,8 +111,8 @@ Download the latest release for your platform from the [releases page](https://g
    uses = ["payments-db"]
    ```
 
-4. Give your agent a task. It orients, writes the claims it will satisfy as todo tests, builds, runs the radius, and ingests the report. Open scryer's landing page to see what changed since you last looked: newly proven, still planned, newly stale, and which components more than one session touched.
-5. Run `scryer-mcp check` in CI to fail on failing claims, violations, or lint errors in claim text.
+4. Give your agent a task. It orients, writes the claims it will satisfy as todo tests, builds, runs the radius, and ingests the report. Open scryer's landing page to see what changed since you last looked: newly proven, still todo, newly stale, and which components more than one session touched.
+5. Run `scryer-mcp check` in CI to fail on failing claims, architecture violations, or lint errors in claim text.
 
 ## Writing claims
 
@@ -101,7 +125,7 @@ EARS, subject dropped, condition first, one response per claim:
 | State | `While <state>, <response>` | While settlement is unconfirmed, holds funds in escrow |
 | Unwanted | `If <condition>, then <response>` | If the bank times out, then retries once |
 
-A trailing `[tag]` names a concern. A todo test (`it.todo`, `#[ignore]`, `@pytest.mark.skip`, `[Fact(Skip = …)]`) is a planned claim. A `[manual]` tag keeps a test out of the model.
+A trailing `[tag]` names a concern. A todo test (`it.todo`, `#[ignore]`, `@pytest.mark.skip`, `[Fact(Skip = …)]`) is a todo claim. A `[manual]` tag keeps a test out of the model.
 
 ## MCP server
 
@@ -172,6 +196,7 @@ The server reads the C4 tree derived from your code — containers from packagin
 - `ingest_test_report` — record a run's JUnit XML against the claims; a later edit to the test or the code it exercises makes the verdict stale.
 - `ingest_mutation_report` — record a cargo-mutants or Stryker run; surviving mutants mark the code they landed in.
 - `open_probe` / `close_probe` — break the code a passing test exercises in an isolated worktree and see whether the test notices; a surviving break is a finding.
+- `comments` / `comment` — read the comment threads on a node, reply to one, close it as addressed, or open one to ask the user something.
 
 ### The scryer skill
 
@@ -181,7 +206,7 @@ The server reads the C4 tree derived from your code — containers from packagin
 
 The server's own instructions, worth keeping in the project's CLAUDE.md (or AGENTS.md) too:
 
-> Scryer reads this project's architecture from its code: containers from packaging, components from modules, claims from behaviour tests. A behaviour test's description is an EARS claim about the code it tests, subject dropped, condition first: `<verb> <object>` when always true; `When <trigger>, <response>`; `While <state>, <response>`; `If <unwanted condition>, then <response>`. One pattern and one response per test; a cross-cutting concern is a trailing `[tag]`. The test's level is the claim's level: an e2e test claims for the whole system, an integration test at a deployable's boundary for its container, a unit test for its component — write a claim at the level it speaks for. Before building, `orient {task, files}` and write each claim you will satisfy as a todo test in the file orient names; a todo test is work to do. Run only what `get_test_radius` names, then `ingest_test_report`. A surviving probe (`open_probe`) is a finding: strengthen the test. Every tool takes an optional absolute `project`, defaulting to the working directory.
+> Scryer reads this project's architecture from its code: containers from packaging, components from modules, claims from behaviour tests. A behaviour test's description is an EARS claim about the code it tests, subject dropped, condition first: `<verb> <object>` when always true; `When <trigger>, <response>`; `While <state>, <response>`; `If <unwanted condition>, then <response>`. One pattern and one response per test; a cross-cutting concern is a trailing `[tag]`. The test's level is the claim's level: an e2e test claims for the whole system, an integration test at a deployable's boundary for its container, a unit test for its component — write a claim at the level it speaks for. Before building, `orient {task, files}` and write each claim you will satisfy as a todo test in the file orient names; a todo test is work to do. Run only what `get_test_radius` names, then `ingest_test_report`. A surviving probe (`open_probe`) is a finding: strengthen the test. An open comment thread on code you work on is an ask: reply with `comment`, and mark it addressed only when it is done. Every tool takes an optional absolute `project`, defaulting to the working directory.
 
 ## Tech
 
