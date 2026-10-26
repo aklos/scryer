@@ -1,6 +1,7 @@
 pub mod agent_settings;
 pub mod agent_setup;
 pub mod build_edges;
+pub mod comments;
 pub mod concerns;
 pub mod derived_status;
 pub mod derived_tree;

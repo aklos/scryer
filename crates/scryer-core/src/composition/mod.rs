@@ -7,6 +7,7 @@
 
 pub mod agent_setup;
 pub mod codebase;
+pub mod comments;
 pub mod derived_store;
 pub mod edges;
 pub mod session;

@@ -15,6 +15,8 @@ claim's level: an e2e test claims for the whole system, an integration test at a
 boundary for its container, a unit test for its component — write a claim at the level it speaks \
 for. Before building, `orient {task, files}` and write each claim you will satisfy as a todo test \
 in the file orient names; a todo test is work to do. Run only what `get_test_radius` names, then \
-`ingest_test_report`. A surviving probe (`open_probe`) is a finding: strengthen the test. Every \
+`ingest_test_report`. A surviving probe (`open_probe`) is a finding: strengthen the test. An open \
+comment thread on code you work on is an ask: reply with `comment`, and mark it addressed only when \
+it is done. Every \
 tool takes an optional absolute `project`, defaulting to the working directory. The `scryer` skill, \
 when installed, has the full loop with examples.";

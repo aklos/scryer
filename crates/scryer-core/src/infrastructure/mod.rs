@@ -1,4 +1,5 @@
 pub mod agent_config;
+pub mod comment_store;
 pub mod derived_tree_cache;
 pub mod edges_cache;
 pub mod scan;

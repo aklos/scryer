@@ -261,7 +261,7 @@ fn normalize_project_rel(model_ref: &ModelRef, path: &str) -> String {
 }
 
 /// Load the derived tree, or the error result to answer with.
-fn load_or_err(model_ref: &ModelRef) -> Result<derived::Loaded, CallToolResult> {
+pub(crate) fn load_or_err(model_ref: &ModelRef) -> Result<derived::Loaded, CallToolResult> {
     derived::load(model_ref).map_err(|e| {
         CallToolResult::error(vec![Content::text(format!(
             "Could not derive the tree for {model_ref}: {e}"
@@ -391,6 +391,18 @@ impl Peers {
     }
 }
 
+/// How many open comment threads a file entry lists.
+const COMMENTS_SHOWN: usize = 3;
+
+/// One open thread in a line: its id, where it is, what it asks, and how
+/// far the conversation got.
+pub(crate) fn thread_line(t: &scryer_core::comments::Thread) -> String {
+    let first = t.events.first().map(|e| e.text.as_str()).unwrap_or("");
+    let replies = t.events.len().saturating_sub(1);
+    let tail = if replies == 0 { String::new() } else { format!(" ({replies} repl{})", if replies == 1 { "y" } else { "ies" }) };
+    format!("{} on {}: {}{tail}", t.id, t.anchor, clip(first, 160))
+}
+
 /// What the tree says about one file: its node chain, layer, module
 /// description, claims and where new stubs go — and what other live sessions
 /// are doing near it.
@@ -402,6 +414,7 @@ pub(crate) fn file_report(loaded: &derived::Loaded, peers: &Peers, file: &str, c
     let shown = claims_cap.unwrap_or(claims.len());
     let more = claims.len().saturating_sub(shown);
     let style = derived::style_guidance(loaded, node, file);
+    let threads = node.map(|n| loaded.open_threads_on(&n.id)).unwrap_or_default();
     let mut v = serde_json::json!({
         "file": file,
         "node": node.map(|n| n.id.clone()),
@@ -415,6 +428,9 @@ pub(crate) fn file_report(loaded: &derived::Loaded, peers: &Peers, file: &str, c
         "claims": claims.iter().take(shown).map(|c| loaded.claim_line(c)).collect::<Vec<_>>(),
         "moreClaims": (more > 0).then(|| format!("{more} more — locate {{file}}")),
         "stubs": derived::stub_file(tree, node, file),
+        "comments": threads.iter().take(COMMENTS_SHOWN).map(|t| thread_line(t)).collect::<Vec<_>>(),
+        "moreComments": (threads.len() > COMMENTS_SHOWN)
+            .then(|| format!("{} more open — comments {{on}}", threads.len() - COMMENTS_SHOWN)),
     });
     if node.is_none() {
         v["note"] = serde_json::json!("No container or component holds this file — dark code, or not product code.");

@@ -15,9 +15,30 @@ pub(crate) struct Loaded {
     /// The style table the tree was checked against: the built-ins plus the
     /// project's own, for the rule a file's layer is held to.
     pub styles: scryer_core::style::Styles,
+    /// The project's comment threads, open ones first.
+    pub threads: Vec<scryer_core::comments::Thread>,
 }
 
 impl Loaded {
+    /// The open threads on `node` and on every node above it: what people
+    /// and other agents asked of the code this file belongs to.
+    pub(crate) fn open_threads_on(&self, node: &str) -> Vec<&scryer_core::comments::Thread> {
+        let model = &self.tree.planned;
+        let mut chain = Vec::new();
+        let mut cur = Some(node.to_string());
+        while let Some(id) = cur {
+            if chain.contains(&id) || chain.len() > 64 {
+                break;
+            }
+            cur = model.nodes.iter().find(|n| n.id == id).and_then(|n| n.parent_id.clone());
+            chain.push(id);
+        }
+        self.threads
+            .iter()
+            .filter(|t| t.status == scryer_core::comments::ThreadStatus::Open && chain.contains(&t.node))
+            .collect()
+    }
+
     pub(crate) fn status_of(&self, c: &DerivedClaim) -> Option<&ClaimStatus> {
         self.status.claims.iter().find(|s| s.resp_id == c.id)
     }
@@ -59,7 +80,8 @@ impl Loaded {
 /// recorded verdicts, probes and mutation runs.
 pub(crate) fn load(r: &ModelRef) -> Result<Loaded, String> {
     let (tree, status) = scryer_extract::test_status::derived_status(r)?;
-    Ok(Loaded { tree, status, styles: scryer_core::load_styles(r.project_path()) })
+    let threads = scryer_core::comments::threads(r.project_path());
+    Ok(Loaded { tree, status, styles: scryer_core::load_styles(r.project_path()), threads })
 }
 
 /// How many of a file's style violations a file entry lists before pointing

@@ -7,7 +7,7 @@ description: How to plan, build and verify code in a project Scryer reads. Scrye
 
 # Working in a Scryer project
 
-Scryer reads this repository and derives its C4 tree: containers from packaging, components from modules and directories, links from imports. Claims come from behaviour tests: **a test's description is a claim** about the code it tests, and its status (proven, stale, failing, planned) comes from test reports. You never edit a model. There is none. You write code and tests; Scryer reads them.
+Scryer reads this repository and derives its C4 tree: containers from packaging, components from modules and directories, links from imports. Claims come from behaviour tests: **a test's description is a claim** about the code it tests, and its status (proven, stale, failing, todo) comes from test reports. You never edit a model. There is none. You write code and tests; Scryer reads them.
 
 The loop: **orient → write the claims as todo tests → build → run what the change reaches → ingest the report → probe what you doubt.**
 
@@ -69,6 +69,8 @@ Make the todos pass and turn each into a real test: drop `#[ignore]` / `.todo` /
 
 **Where code goes.** A container may declare an architecture style in `.scryer/structure.toml` (hexagonal, feature-sliced, core-shell, library, …) with layers. Respect what the file's layer may import. When a file breaks its container's style, **fix it by moving code** to the layer it belongs in. Never change the style, the layers or `structure.toml` to make a finding go away, unless the user asks. A container declared `tooling = true` (demos, harnesses, dev apps) is not held to style rules; orient says so.
 
+**Decisions live in the module's doc comment.** A node's description is its module doc comment (`//!` in Rust, the file's leading `/** */` in TypeScript, a module docstring in Python). When you make a design decision a later reader needs (why this shape, what was rejected, what must stay true), record it there in a sentence or two: the decision and its reason. No separate ADR files; the doc comment travels with the code it explains.
+
 ## 4. Verify
 
 1. `get_test_radius` (no `files` = this session's edits) names the tests your change reaches and, when configured, the exact command. Run those, never the whole suite.
@@ -89,6 +91,14 @@ Several agents may be working in this repository at once. Nothing locks.
 - `othersTodos`: todo tests another session wrote here. They are that session's work. Leave them alone unless the user asks.
 - `radiusOverlap`: your change reaches files another session is editing. Run the radius tests before you finish.
 
+## Comments
+
+People and other agents leave comment threads on nodes: questions, requests, decisions to respect. `orient`, `locate` and the overlay on a file you read list the open threads on its node and the nodes above it; `comments` lists them all.
+
+- An open thread is an ask. If your task touches it, answer it with `comment {thread, text}`.
+- Close a thread only when its ask is done: `comment {thread, text, addressed: true}`, saying in `text` what you did and where. A reply never closes a thread on its own, and an ask you only partly did stays open.
+- To ask the user or another agent something you cannot settle yourself, open a thread: `comment {on, text}` with `on` a file, node id or node name. Keep it to one ask; don't narrate your work there.
+
 ## Without the MCP server
 
 The same answers come from the CLI: `scryer-mcp status` (counts and what needs attention), `scryer-mcp check` (structural and test gates, non-zero on findings), `scryer-mcp lint` (claim wording), `scryer-mcp export` (the derived tree as JSON).
@@ -96,6 +106,6 @@ The same answers come from the CLI: `scryer-mcp status` (counts and what needs a
 ## Don't
 
 - Don't write a claim anywhere but in a test.
-- Don't mark anything proven by hand or edit files under `.scryer/` other than `structure.toml` when the user asks.
+- Don't mark anything proven by hand or edit files under `.scryer/` other than `structure.toml` when the user asks. Comment threads are written through `comment`, never by hand.
 - Don't loosen a style to clear a violation.
 - Don't delete another session's todo tests.

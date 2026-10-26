@@ -81,6 +81,9 @@ pub fn run() {
             derived::edit_claim_text,
             derived::add_claim_stub,
             derived::rename_container,
+            derived::list_comments,
+            derived::open_comment,
+            derived::reply_comment,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

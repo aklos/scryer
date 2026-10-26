@@ -44,6 +44,38 @@ pub(crate) fn rename_container(cwd: String, node_id: String, name: String) -> Re
     scryer_extract::claim_files::rename_container(std::path::Path::new(&cwd), &node_id, &name)
 }
 
+/// Every comment thread in the project, open ones first, across its live
+/// worktrees.
+#[tauri::command]
+pub(crate) fn list_comments(cwd: String) -> Vec<scryer_core::comments::Thread> {
+    scryer_core::comments::threads(std::path::Path::new(&cwd))
+}
+
+/// Open a thread on a node, written by the person at the app.
+#[tauri::command]
+pub(crate) fn open_comment(
+    cwd: String,
+    node_id: String,
+    anchor: String,
+    text: String,
+) -> Result<scryer_core::comments::Thread, String> {
+    use scryer_core::comments::{open_thread, Author};
+    open_thread(std::path::Path::new(&cwd), &node_id, &anchor, Author::Human, &text)
+}
+
+/// Reply to a thread from the app; `status` closes ("addressed") or reopens
+/// ("open") it.
+#[tauri::command]
+pub(crate) fn reply_comment(
+    cwd: String,
+    thread: String,
+    text: String,
+    status: Option<scryer_core::comments::ThreadStatus>,
+) -> Result<scryer_core::comments::Thread, String> {
+    use scryer_core::comments::{reply, Author};
+    reply(std::path::Path::new(&cwd), &thread, Author::Human, &text, status)
+}
+
 #[cfg(test)]
 mod tests {
     fn write(dir: &std::path::Path, rel: &str, text: &str) {

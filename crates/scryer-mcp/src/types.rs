@@ -88,3 +88,26 @@ pub(crate) struct CloseProbeRequest {
     #[serde(default)]
     pub survivors: Vec<String>,
 }
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct CommentsRequest {
+    pub project: Option<String>,
+    /// A project-relative file, a node id or a node name: the threads on that node and the nodes above it. Omit for every thread in the project.
+    pub on: Option<String>,
+    /// Also list addressed threads (default: open ones only).
+    #[serde(default)]
+    pub include_addressed: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct CommentRequest {
+    pub project: Option<String>,
+    /// The thread to reply to. Omit to open a new thread `on` a node.
+    pub thread: Option<String>,
+    /// For a new thread: a project-relative file, a node id or a node name.
+    pub on: Option<String>,
+    /// What you say: the question, or what you did and where.
+    pub text: String,
+    /// true marks the thread addressed (only once the ask is done); false reopens it. Omit for a plain reply.
+    pub addressed: Option<bool>,
+}

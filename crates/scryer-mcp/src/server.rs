@@ -28,7 +28,7 @@ pub struct ScryerServer {
 
 impl ScryerServer {
     pub fn new() -> Self {
-        let tool_router = Self::tool_router_read() + Self::tool_router_testing();
+        let tool_router = Self::tool_router_read() + Self::tool_router_testing() + Self::tool_router_comments();
         let tools = tool_router
             .list_all()
             .into_iter()
@@ -183,8 +183,8 @@ mod surface {
             .collect()
     }
 
-    /// The daily set and nothing else: reads of the derived tree and the
-    /// test loop.
+    /// The daily set and nothing else: reads of the derived tree, the test
+    /// loop, and the comment threads.
     #[test]
     fn the_surface_is_the_daily_set() {
         let mut names: Vec<String> = descriptions().into_iter().map(|(n, _)| n).collect();
@@ -193,6 +193,8 @@ mod surface {
             names,
             [
                 "close_probe",
+                "comment",
+                "comments",
                 "get_test_radius",
                 "ingest_mutation_report",
                 "ingest_test_report",

@@ -17,6 +17,11 @@ pub use domain::{build_edges as build_edges_derive, ears, ids, rules, seed, styl
 pub use domain::ids::*;
 
 /// The project's git worktrees: the probe tree and the live checkouts.
+pub mod comments {
+    pub use crate::composition::comments::*;
+    pub use crate::domain::comments::*;
+}
+
 pub mod worktree {
     pub use crate::composition::worktree::*;
 }

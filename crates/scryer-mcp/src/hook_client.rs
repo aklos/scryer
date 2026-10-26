@@ -414,8 +414,15 @@ fn render_overlay(overlay: &serde_json::Value) -> Option<String> {
     let violations: Vec<&str> = overlay["violations"].as_array().into_iter().flatten().filter_map(|v| v.as_str()).collect();
     let rule = overlay["style"].as_str();
     let tooling = overlay["tooling"].as_str();
+    let comments: Vec<&str> = overlay["comments"].as_array().into_iter().flatten().filter_map(|c| c.as_str()).collect();
     overlay["node"].as_str()?;
-    if claims.is_empty() && description.is_none() && violations.is_empty() && rule.is_none() && tooling.is_none() {
+    if claims.is_empty()
+        && description.is_none()
+        && violations.is_empty()
+        && rule.is_none()
+        && tooling.is_none()
+        && comments.is_empty()
+    {
         return None;
     }
     let file = overlay["file"].as_str().unwrap_or("this file");
@@ -434,6 +441,9 @@ fn render_overlay(overlay: &serde_json::Value) -> Option<String> {
     }
     for v in &violations {
         out.push_str(&format!("{v}\n"));
+    }
+    for c in &comments {
+        out.push_str(&format!("open comment {c}\n"));
     }
     if let Some(d) = description {
         out.push_str(&format!("{d}\n"));
