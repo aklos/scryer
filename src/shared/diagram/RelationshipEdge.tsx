@@ -2,9 +2,11 @@
  * The relationship edge for the diagram — a port of the pre-pivot canvas edge:
  * a dashed chord with a clipped arrowhead and a label/method pill. A reverse
  * pair splits into parallel lanes, code-tier edges inset to their dots' rims,
- * same-ring edges in a styled level bow outward, and edges light or fade with
- * the selection. An edge carrying structural violations is drawn red, and
- * clicking it lists the reasons beside it.
+ * same-ring edges in a styled level bow outward, a long box-tier link follows
+ * its lane, a quiet edge (one the drawing already implies) sits faint, and
+ * edges light or fade with
+ * the selection. An edge carrying structural violations is drawn red, its
+ * reason always written on it. Edges take no clicks.
  */
 
 import {
@@ -14,6 +16,7 @@ import {
   type Edge as RFEdge,
 } from "@xyflow/react";
 import { getThemedHex } from "../theme/theme";
+import { edgeShape } from "./edgeGeometry";
 
 export interface EdgeData extends Record<string, unknown> {
   label?: string;
@@ -27,35 +30,65 @@ export interface EdgeData extends Record<string, unknown> {
   highlighted?: boolean;
   /** A selection exists elsewhere — this edge isn't part of it, so it fades. */
   dimmed?: boolean;
+  /** Says what the drawing already says (a legal step between a style's
+   *  layers, a tooling link): drawn faint, its label only when lit, so the
+   *  links that say something new stand out. */
+  quiet?: boolean;
   /** A reverse edge runs between the same two nodes — offset to a parallel lane
    *  so the two straight chords don't overlap. */
   parallel?: boolean;
   /** Bow the edge outward from a centre (styled rings: a same-ring chord
    *  would otherwise cut through the layers inside). */
   bow?: { cx: number; cy: number; offset: number };
-  /** Structural violations charged on this pair — drawn red so the map
-   *  exposes the code's disorder instead of tidying it away. The reasons show
-   *  only while `open`. */
+  /** Turn at these points (flow coordinates) on the way, corners rounded:
+   *  out of its port, across a gap, down a lane between the cards it passes. */
+  waypoints?: { x: number; y: number }[];
+  /** Where along its side each end meets its card, from the side's middle
+   *  (px): the edges on one side spread out rather than pile up. */
+  sourceShift?: number;
+  targetShift?: number;
+  /** Where the label pill goes, chosen for the whole level so it hides no
+   *  other edge (`placeLabels`). Absent: the line's own middle. */
+  labelAt?: { x: number; y: number };
+  /** Structural violations charged on this pair — drawn red, the first
+   *  reason written on it, so the map exposes the code's disorder instead of
+   *  tidying it away. */
   violations?: string[];
-  /** The user clicked this edge: list its violation reasons beside it. */
-  open?: boolean;
 }
 
-/** Gap between a dot's rim and where the line/arrow starts, so it kisses the
- *  rim instead of overlapping the disc. Added to each end's own radius. */
-const DOT_GAP = 3;
-/** Sideways shift (px) for an edge that shares a node pair with its reverse, so
- *  the two land as separate parallel lanes instead of on top of each other. */
-const PARALLEL_GAP = 5;
 /** Perpendicular nudge (px) for a parallel edge's label, pushing the pill to its
  *  lane's outer side so it hugs its own line instead of straddling both lanes. */
 const PARALLEL_LABEL_GAP = 12;
 export type RFRelEdge = RFEdge<EdgeData, "rel">;
 
-/** An edge lists its violation reasons only while it is the clicked one —
- *  never because a node selection lights it. */
-export function showsViolationPanel(data: EdgeData | undefined): boolean {
-  return !!data?.open && (data.violations?.length ?? 0) > 0;
+/** A label reads in full (its pill) while a selected end lights its edge,
+ *  and always on a red edge; otherwise it recedes into faint text behind the
+ *  drawing. */
+export function labelInFull(data: EdgeData | undefined, selected = false): boolean {
+  return !!(selected || data?.highlighted || data?.violations?.length);
+}
+
+/** What an edge says on it: a red edge its first reason (and how many more),
+ *  any other its label. */
+export function edgeText(data: EdgeData | undefined): string | undefined {
+  const v = data?.violations ?? [];
+  if (v.length) return v.length > 1 ? `${v[0]} (+${v.length - 1} more)` : v[0];
+  return data?.label;
+}
+
+/** How strongly an edge draws: lit edges (at a selected end) in full; a
+ *  quiet one faint and thin with no label; the rest of a selection's level
+ *  faded further. */
+export function edgeLook(
+  data: EdgeData | undefined,
+  selected = false,
+): { opacity: number; width: number; label: boolean } {
+  const lit = !!(selected || data?.highlighted);
+  const red = (data?.violations?.length ?? 0) > 0;
+  const isDot = !!data?.dot;
+  const opacity = lit ? 1 : data?.dimmed ? (data?.quiet ? 0.1 : 0.18) : red ? 0.95 : isDot || data?.quiet ? 0.5 : 0.85;
+  const width = selected ? 2.5 : isDot || (data?.quiet && !lit) ? 1 : 1.5;
+  return { opacity, width, label: (!isDot && !data?.quiet) || labelInFull(data, selected) };
 }
 
 export function RelationshipEdge({
@@ -64,73 +97,50 @@ export function RelationshipEdge({
   sourceY,
   targetX,
   targetY,
+  sourcePosition,
+  targetPosition,
   data,
   selected,
 }: EdgeProps<RFRelEdge>) {
-  const label = data?.label;
+  const label = edgeText(data);
   const method = data?.method;
   // Neutral chrome — the diff/change-mark palette is carried by the nodes.
   const violations = data?.violations ?? [];
   const red = violations.length > 0;
-  const baseColor = red ? getThemedHex("red", "500") : getThemedHex("slate", "400");
+  const baseColor = red ? getThemedHex("red", "500") : "var(--map-edge)";
   const selColor =
     getComputedStyle(document.documentElement).getPropertyValue("--selection-color").trim() ||
     "#18181b";
   const edgeColor = selected ? selColor : baseColor;
-  const lit = selected || data?.highlighted || data?.open;
-
-  // For dot-tier edges the endpoints are dot centers; pull each end in by its
-  // own dot radius so the line starts/ends at the rim and the arrow lands on it.
-  const dx = targetX - sourceX, dy = targetY - sourceY;
-  const len = Math.hypot(dx, dy) || 1;
-  const ux = dx / len, uy = dy / len;
-  const sInset = data?.dot ? Math.min((data.sourceR ?? 6) + DOT_GAP, len / 2 - 1) : 0;
-  const tInset = data?.dot ? Math.min((data.targetR ?? 6) + DOT_GAP, len / 2 - 1) : 0;
-  // A reverse edge between the same two nodes would land exactly on top of this
-  // one now that the line is straight — shift the whole chord sideways by its
-  // perpendicular. The perpendicular flips with direction, so A→B and B→A push
-  // to opposite sides and read as two parallel lanes.
-  const off = data?.parallel ? PARALLEL_GAP : 0;
-  const ox = -uy * off, oy = ux * off;
-  const sx = sourceX + ux * sInset + ox, sy = sourceY + uy * sInset + oy;
-  const tx = targetX - ux * tInset + ox, ty = targetY - uy * tInset + oy;
+  const full = labelInFull(data, selected);
 
   const isDot = !!data?.dot;
-  // Straight chord rim-to-rim by default. A bowed edge (styled rings) is a
-  // quadratic curve whose control point sits past the chord's midpoint, away
-  // from the drawing's centre.
-  let cxp = (sx + tx) / 2, cyp = (sy + ty) / 2;
-  if (data?.bow) {
-    const mx = cxp, my = cyp;
-    let vx = mx - data.bow.cx, vy = my - data.bow.cy;
-    let vl = Math.hypot(vx, vy);
-    if (vl < 8) {
-      // Antipodal ends: the chord runs through the centre, so bow to the
-      // chord's right-hand side instead.
-      vx = -uy; vy = ux; vl = 1;
-    }
-    // A quadratic's midpoint sits halfway to its control point, so doubling
-    // displaces the curve's middle exactly `offset` px from the chord.
-    cxp = mx + (vx / vl) * data.bow.offset * 2;
-    cyp = my + (vy / vl) * data.bow.offset * 2;
-  }
-  const edgePath = data?.bow ? `M ${sx} ${sy} Q ${cxp} ${cyp} ${tx} ${ty}` : `M ${sx} ${sy} L ${tx} ${ty}`;
-  // Hover handle sits at the lane midpoint (the curve's midpoint when bowed).
-  const labelX = data?.bow ? 0.25 * sx + 0.5 * cxp + 0.25 * tx : (sx + tx) / 2;
-  const labelY = data?.bow ? 0.25 * sy + 0.5 * cyp + 0.25 * ty : (sy + ty) / 2;
+  // A port's shift runs along its side: across a top or bottom, down a left or right.
+  const along = (pos: string, shift = 0) => (pos === "top" || pos === "bottom" ? [shift, 0] : [0, shift]);
+  const [sdx, sdy] = along(sourcePosition, data?.sourceShift);
+  const [tdx, tdy] = along(targetPosition, data?.targetShift);
+  const { sx, sy, tx, ty, ux, uy, path: edgePath, midX: labelX, midY: labelY, arrowAngle } = edgeShape(
+    sourceX + sdx,
+    sourceY + sdy,
+    targetX + tdx,
+    targetY + tdy,
+    data ?? {},
+  );
   // Parallel (reverse-pair) edges share one chord, so a midpoint pill can't be
-  // told apart from its twin. Place each label by (a) sliding it along the chord
-  // toward its own source — the pair lands at ~22%/78% and clears ALONG the line
-  // at any angle — and (b) nudging it to its lane's OUTER side so the pill hugs
-  // its own line. Both flip with direction, so the pair reads as opposite lanes.
+  // told apart from its twin. Unless the level placed it, place each label by
+  // (a) sliding it along the chord toward its own source — the pair lands at
+  // ~22%/78% and clears ALONG the line at any angle — and (b) nudging it to its
+  // lane's OUTER side so the pill hugs its own line.
   let labelDivX = labelX, labelDivY = labelY;
-  if (data?.parallel) {
+  if (data?.labelAt) {
+    labelDivX = data.labelAt.x;
+    labelDivY = data.labelAt.y;
+  } else if (data?.parallel) {
     const t = 0.22;
     const px = sx + (tx - sx) * t, py = sy + (ty - sy) * t;
     labelDivX = px + -uy * PARALLEL_LABEL_GAP;
     labelDivY = py + ux * PARALLEL_LABEL_GAP;
   }
-  const arrowAngle = data?.bow ? Math.atan2(ty - cyp, tx - cxp) : Math.atan2(ty - sy, tx - sx);
 
   // Arrowhead polygon from explicit geometry.
   const arrowSize = 8;
@@ -149,8 +159,7 @@ export function RelationshipEdge({
 
   // Subgraph highlight: edges touching the selection stay lit, the rest fade.
   // Dot-tier edges sit fainter at rest so the constellation reads as nodes, not lines.
-  const edgeOpacity =
-    lit ? 1 : data?.dimmed ? 0.18 : red ? 0.95 : isDot ? 0.5 : 0.7;
+  const look = edgeLook(data, selected);
 
   return (
     <>
@@ -161,24 +170,14 @@ export function RelationshipEdge({
           />
         </clipPath>
       </defs>
-      {/* Wider invisible hit area for easier clicking; a red edge opens its
-          reasons on click. */}
-      <path
-        d={edgePath}
-        fill="none"
-        stroke="transparent"
-        strokeWidth={20}
-        className="react-flow__edge-interaction"
-        style={red ? { cursor: "pointer" } : undefined}
-      />
-      <g opacity={edgeOpacity}>
+      <g opacity={look.opacity}>
         <g clipPath={`url(#${clipId})`}>
           <BaseEdge
             id={id}
             path={edgePath}
             style={{
               stroke: edgeColor,
-              strokeWidth: selected ? 2.5 : isDot ? 1 : 1.5,
+              strokeWidth: look.width,
               // Dot tier: thin, solid, static curves (sigma-style). Arch tier keeps
               // the animated dashed C4 line.
               strokeDasharray: isDot ? undefined : "6 3",
@@ -188,51 +187,31 @@ export function RelationshipEdge({
         </g>
         <polygon points={`${tx},${ty} ${ax1},${ay1} ${ax2},${ay2}`} fill={edgeColor} />
       </g>
-      {/* Midpoint dot — visible on edge hover. */}
-      <circle cx={labelX} cy={labelY} r={4} fill={edgeColor} className="edge-handle-dot" />
-      {showsViolationPanel(data) && (
-        <EdgeLabelRenderer>
-          <div
-            style={{
-              position: "absolute",
-              transform: `translate(-50%, 12px) translate(${labelDivX}px,${labelDivY}px)`,
-              zIndex: 1000,
-              pointerEvents: "all",
-            }}
-            // Clicks and scrolls inside stay here: they must not pan the
-            // canvas or reach the pane (which would close the panel).
-            onClick={(e) => e.stopPropagation()}
-            className="nodrag nopan nowheel max-h-[240px] w-[340px] overflow-y-auto rounded border border-red-500/40 bg-[var(--surface)] px-2.5 py-2 text-[10px] leading-snug text-[var(--text)] shadow-lg"
-          >
-            <div className="mb-1.5 font-semibold text-red-500">
-              {violations.length} structural violation{violations.length === 1 ? "" : "s"}
-            </div>
-            <ul className="space-y-1.5">
-              {violations.map((v) => (
-                <li key={v} className="break-words">
-                  {v}
-                </li>
-              ))}
-            </ul>
-          </div>
-        </EdgeLabelRenderer>
-      )}
-      {(label || method) && (!isDot || selected || data?.highlighted) && (
+      {(label || method) && look.label && (
         <EdgeLabelRenderer>
           <div
             style={{
               position: "absolute",
               transform: `translate(-50%, -50%) translate(${labelDivX}px,${labelDivY}px)`,
-              zIndex: 1,
-              pointerEvents: "all",
-              ...(data?.dimmed ? { opacity: 0.18 } : {}),
+              zIndex: red ? 3 : full ? 2 : 1,
+              pointerEvents: "none",
+              ...(data?.dimmed ? { opacity: 0.18 } : full ? {} : { opacity: 0.45 }),
             }}
             className="flex flex-col items-center"
           >
             {label && (
               // Wrapped to a narrow column: a sentence-long label on one line
-              // runs across its neighbours' pills where edges converge.
-              <div className="w-max max-w-[150px] rounded bg-[var(--surface-active)]/80 px-1.5 py-0.5 text-center text-[10px] leading-tight text-[var(--text)]">
+              // runs across its neighbours' pills where edges converge. At
+              // rest, bare text: no pill to cover what runs behind it.
+              <div
+                className={`w-max max-w-[150px] rounded border px-1.5 py-0.5 text-center text-[10px] leading-tight ${
+                  red
+                    ? "border-red-500/50 bg-[var(--surface-raised)] text-red-600 dark:text-red-300"
+                    : full
+                      ? "border-[var(--map-card-stroke)] bg-[var(--surface-raised)] text-[var(--text-secondary)]"
+                      : "border-transparent text-[var(--text-muted)]"
+                }`}
+              >
                 {label}
               </div>
             )}

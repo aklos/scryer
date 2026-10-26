@@ -51,4 +51,17 @@ describe("context relationships", () => {
     expect(scene.nodes.find((n) => n.id === "db")?.reference).toBe(true);
     expect(scene.nodes.some((n) => n.id === "bank" || n.id === "merchant")).toBe(false);
   });
+
+  it("When an external only calls into the system, places it above the system with the people", async () => {
+    const withCaller = {
+      ...model,
+      nodes: [...model.nodes, { id: "agent", kind: "system", name: "agent", external: true }],
+      links: [...model.links, { id: "l-a", src: "agent", dst: "sys", label: "calls" }],
+    } as unknown as ScryModel;
+    const scene = await buildDiagramScene(withCaller, null, report);
+    const at = (id: string) => scene.nodes.find((n) => n.id === id)!;
+    expect(at("agent").y).toBe(at("merchant").y);
+    expect(at("agent").y).toBeLessThan(at("sys").y);
+    expect(at("bank").x).toBeGreaterThan(at("sys").x);
+  });
 });

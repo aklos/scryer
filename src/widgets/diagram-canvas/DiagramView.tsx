@@ -12,10 +12,11 @@
  *     d3-force sim, `useDotSim`) to trace connectivity; nothing persists
  *
  * `buildDiagramScene` picks the drawing: architecture tiers as the ported C4
- * cards and edges (planar layout + handle routing), a styled level inside its
+ * cards and edges (the C4 arrangement + handle routing), a styled level inside its
  * style's regions, the symbol tier as a force-directed dot graph. Cards carry
  * change marks, completeness and violation counts, and dim under the concern
- * lens. Dragging a card to pin it works only when the host passes `onMoveNode`.
+ * lens. The map is derived, never arranged: cards stay where the layout puts
+ * them (a curated drawing is an export tool's job, not the app's).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -26,7 +27,6 @@ import {
   Background,
   BackgroundVariant,
   ConnectionMode,
-  ControlButton,
   Controls,
   useReactFlow,
   useUpdateNodeInternals,
@@ -36,20 +36,20 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { ChevronRight, CornerLeftUp, LayoutGrid } from "lucide-react";
+import { ChevronRight, CornerLeftUp } from "lucide-react";
 import type { ScryModel } from "../../entities/model/viewmodel";
 import { concernCounts } from "../../entities/model/viewmodel";
-import type { ModelDiff } from "../../entities/model/planDiff";
-import { collectPlanEntries, nodeDrift, resolveMark, rollupMarks } from "../../features/change-marks/changeMarks";
-import { MARK_META, type Mark } from "../../entities/model/changeKinds";
-import { assignAllHandles } from "../../shared/diagram/edgeRouting";
+import { attentionState, CLAIM_TONE } from "../../entities/model/claimState";
+import { assignAllHandles, getHandlePositions } from "../../shared/diagram/edgeRouting";
+import { edgeShape } from "../../shared/diagram/edgeGeometry";
+import { placeLabels } from "../../shared/diagram/labelPlacement";
+import { assignPorts, orthoRoutes, portPoint, type Side } from "./edgePorts";
 import { DiagramCard, type CardData, type RFCard } from "./DiagramCard";
 import { CenterHandle } from "../../shared/diagram/NodeHandles";
-import { RelationshipEdge, type EdgeData } from "../../shared/diagram/RelationshipEdge";
+import { RelationshipEdge, edgeText, type EdgeData } from "../../shared/diagram/RelationshipEdge";
 import { buildDiagramScene, CARD_W, CARD_H, type DiagramScene, type DiagramNode } from "./diagramLayout";
 import { useDotSim } from "./useDotSim";
 import { StyleRegions } from "./StyleRegions";
-import { nextOpenEdge } from "./edgePanel";
 import { structuralBySubtree, type ModelHealthReport } from "../../entities/model/health";
 
 type DotData = CardData;
@@ -63,13 +63,15 @@ const SYMBOL_CLASS_LABEL: Record<DiagramNode["symbolClass"], string> = {
   visual: "Visual",
 };
 
-/** A code-tier dot (symbol): a change-mark-colored disc with its name and class
- *  centered beneath it — the constellation cousin of the arch tiers' C4 cards.
- *  Unchanged symbols read ghost-grey; a plan/drift mark tints the disc via
- *  `bg-current` inheriting the mark's hue. */
+/** A code-tier dot (symbol): a disc with its name and class centered beneath
+ *  it — the constellation cousin of the arch tiers' C4 cards. A symbol at
+ *  rest reads ghost-grey; a failing or planned claim on it tints the disc via
+ *  `bg-current` inheriting the state's hue. */
 function DotNode({ data }: NodeProps<RFDot>) {
-  const { node, selected, mark } = data;
-  const meta = mark ? MARK_META[mark] : null;
+  const { node, selected, attention } = data;
+  const meta = attention
+    ? { color: CLAIM_TONE[attention], label: attention === "failing" ? "A claim here is failing" : "A claim here is a todo test" }
+    : null;
   const ghost = node.reference;
   // Dot size encodes fan-in — the more depended-upon a symbol, the larger it
   // reads. Sized relative to the busiest hub on this level (see diagramLayout).
@@ -131,18 +133,14 @@ const NO_EDGES: RFEdge<EdgeData>[] = [];
 // Drag snap pitch — one background dot (the Background gap below), so manual
 // placements land on the visible grid. Arch tiers only: snapping the code
 // tier's dots would fight the physics.
-const SNAP_GRID: [number, number] = [24, 24];
 
 export function DiagramView({
   model,
-  planDiff,
-  committed,
   report,
   focusId,
   selectedId,
   onFocus,
   onSelectNode,
-  onMoveNode,
   pendingIds,
   concernLens,
   previewable,
@@ -150,11 +148,8 @@ export function DiagramView({
   model: ScryModel;
   /** Symbol ids the preview sidecar can render — derived, drives the `visual` class. */
   previewable: ReadonlySet<string>;
-  /** Live plan diff — colors each node/dot by its change mark. */
-  planDiff: ModelDiff;
-  /** Committed layer — parents/endpoints for deleted elements in roll-ups. */
-  committed: ScryModel | null;
-  /** Health report — its derived edges drive the implied-connection ghosts. */
+  /** Health report — its derived edges drive the implied-connection ghosts,
+   *  its derived status the claim bar on each card. */
   report: ModelHealthReport | null;
   /** The level being shown: children of this node, or top-level when null. */
   focusId: string | null;
@@ -162,10 +157,6 @@ export function DiagramView({
   selectedId: string | null;
   onFocus: (id: string | null) => void;
   onSelectNode: (id: string | null) => void;
-  /** Persist a manual placement (a card was dragged), or release it with null
-   *  (the re-layout control) so auto-layout owns the node again. Unset — e.g.
-   *  while an agent owns the file — leaves the whole surface undraggable. */
-  onMoveNode?: (id: string, position: { x: number; y: number } | null) => void;
   /** Nodes whose semantics aren't generated yet — drawn as pulsing placeholders.
    *  Used by the trailer's build sequence; unset (empty) in the product. */
   pendingIds?: ReadonlySet<string>;
@@ -177,14 +168,11 @@ export function DiagramView({
     <ReactFlowProvider>
       <DiagramInner
         model={model}
-        planDiff={planDiff}
-        committed={committed}
         report={report}
         focusId={focusId}
         selectedId={selectedId}
         onFocus={onFocus}
         onSelectNode={onSelectNode}
-        onMoveNode={onMoveNode}
         pendingIds={pendingIds}
         concernLens={concernLens}
         previewable={previewable}
@@ -195,14 +183,11 @@ export function DiagramView({
 
 function DiagramInner({
   model,
-  planDiff,
-  committed,
   report,
   focusId,
   selectedId,
   onFocus,
   onSelectNode,
-  onMoveNode,
   pendingIds,
   concernLens,
   previewable,
@@ -210,14 +195,11 @@ function DiagramInner({
   model: ScryModel;
   /** Symbol ids the preview sidecar can render — derived, drives the `visual` class. */
   previewable: ReadonlySet<string>;
-  planDiff: ModelDiff;
-  committed: ScryModel | null;
   report: ModelHealthReport | null;
   focusId: string | null;
   selectedId: string | null;
   onFocus: (id: string | null) => void;
   onSelectNode: (id: string | null) => void;
-  onMoveNode?: (id: string, position: { x: number; y: number } | null) => void;
   pendingIds?: ReadonlySet<string>;
   concernLens?: string | null;
 }) {
@@ -234,34 +216,17 @@ function DiagramInner({
   // drag (the "card vanishes and the pane pans" bug).
   const [rfNodes, setRfNodes] = useState<Array<RFCard | RFDot>>([]);
 
-  // Set when the re-layout control releases this level's placements: the next
-  // scene is a fresh auto-layout, likely nowhere near the old viewport (its
-  // coordinates reset to the layout origin) — refit to it when it lands.
-  const refitOnScene = useRef(false);
-
-  // The one red edge whose reasons are open. Only a click on that edge opens
-  // it — never hover, never a node selection — and any other click, or a new
-  // level, closes it.
-  const [openEdgeId, setOpenEdgeId] = useState<string | null>(null);
-  useEffect(() => setOpenEdgeId(null), [focusId]);
-
-  // Build the scene whenever the level or the model changes. The planar layout
-  // is async; guard against a stale build landing after a newer one.
+  // Build the scene whenever the level or the model changes. The build is
+  // async; guard against a stale build landing after a newer one.
   useEffect(() => {
     let live = true;
     void buildDiagramScene(model, focusId, report, previewable).then((s) => {
-      if (live) {
-        setScene(s);
-        if (refitOnScene.current) {
-          refitOnScene.current = false;
-          setTimeout(() => void fitView({ padding: 0.2, duration: 300 }), 0);
-        }
-      }
+      if (live) setScene(s);
     });
     return () => {
       live = false;
     };
-  }, [model, focusId, report, previewable, fitView]);
+  }, [model, focusId, report, previewable]);
 
   // The canonical controlled-flow contract: every change RF emits is applied
   // back onto the node state. Position changes move the dragged card,
@@ -273,8 +238,7 @@ function DiagramInner({
   }, []);
 
   // The live physics for the code tier: dots drag through a resident d3-force
-  // sim (view-only — nothing persists), while arch cards drag through the
-  // onNodesChange + onMoveNode persistence path. Each sim tick streams its
+  // sim (view-only — nothing persists); cards don't drag. Each sim tick streams its
   // positions straight into the node state; `measured` and friends ride along
   // on the spread.
   const applySimPositions = useCallback(
@@ -301,21 +265,9 @@ function DiagramInner({
     return () => window.removeEventListener("diagram-expand", onExpand);
   }, [onFocus]);
 
-  // Per-node change mark (plan ?? drift) from the SHARED plan-entry
-  // computation, with descendant marks rolled up — a diagram card IS its
-  // subtree's face, so a change anywhere beneath it must show on the card.
-  const markFor = useMemo(() => {
-    const entries = collectPlanEntries(planDiff, model, committed);
-    const entryMark = new Map(entries.map((e) => [e.id, e.mark] as const));
-    const rolled = rollupMarks(model, committed, entries);
-    const byId = new Map(model.nodes.map((n) => [n.id, n] as const));
-    return (id: string): Mark | null => {
-      const vm = byId.get(id);
-      if (!vm) return null;
-      const own = resolveMark({ plan: entryMark.get(id) ?? null, drift: nodeDrift(vm) });
-      return own ?? resolveMark(rolled.get(id) ?? { plan: null, drift: null });
-    };
-  }, [model, committed, planDiff]);
+  // Claim states per node, over its subtree — a card IS its subtree's face,
+  // so a failing or planned claim anywhere beneath it shows on the card.
+  const claimsOf = report?.derivedStatus?.nodes;
 
   // Subgraph highlight: when the selected node is on this level, its incident
   // edges and neighbour nodes stay lit and everything else dims. Inactive when
@@ -343,15 +295,9 @@ function DiagramInner({
   // Structural violations per subtree — each card counts what lies inside it.
   const structural = useMemo(() => structuralBySubtree(model, report ?? null), [model, report]);
 
-  // Arch cards drag and persist via onMoveNode — except ghosts, whose stored
-  // placement belongs to the surface where the node really lives. Code-tier
-  // dots drag whenever the live sim is on: pure physics, nothing written, so
-  // ghosts (and agent-run sessions) join in freely.
-  const archDraggable = scene?.mode !== "code" && !!scene && !!onMoveNode;
-
   // (Re)build the node state from the scene and its presentation inputs. Two
   // regimes, told apart by whether the SCENE object changed since last run:
-  //   - new scene → positions reset to its layout (auto + pinned placements);
+  //   - new scene → positions reset to its layout;
   //   - data-only refresh (selection, marks, lens…) → each node keeps its
   //     current position, so a warmed sim or an in-flight drag isn't snapped
   //     back to the static layout by a mere click.
@@ -374,48 +320,74 @@ function DiagramInner({
           id: n.id,
           type,
           position: sceneChanged ? { x: n.x, y: n.y } : old?.position ?? { x: n.x, y: n.y },
-          draggable: scene.mode === "code" ? dotSim.live : archDraggable && !n.reference,
+          // Code-tier dots drag whenever the live sim is on: pure physics,
+          // nothing written. Cards stay where the layout put them.
+          draggable: scene.mode === "code" && dotSim.live,
           measured: old?.measured,
           selected: old?.selected,
           dragging: old?.dragging,
           data: {
             node: n,
             selected: n.id === selectedId,
-            mark: markFor(n.id),
+            claims: claimsOf?.[n.id]?.subtree,
+            attention: attentionState(claimsOf?.[n.id]?.subtree),
             dimmed:
               (highlight.active && !highlight.neighbors.has(n.id)) ||
               (concernLit !== null && !concernLit.has(n.id)),
             pending: pendingIds?.has(n.id),
-            completeness: report?.completeness[n.id],
             structural: structural.get(n.id),
             styled: scene.mode === "styled",
           },
         };
       }) as Array<RFCard | RFDot>;
     });
-  }, [scene, selectedId, markFor, highlight, pendingIds, report, structural, concernLit, archDraggable, dotSim.live]);
+  }, [scene, selectedId, claimsOf, highlight, pendingIds, structural, concernLit, dotSim.live]);
 
   const rfEdges = useMemo<RFEdge<EdgeData>[]>(() => {
     if (!scene) return [];
-    // Arch tier: assign the best handle pair per edge (main's routing) — from
-    // the LIVE node positions (rfNodes), not the scene's, so a dragged card's
-    // edges re-pick their attachment sides mid-drag instead of staying glued
-    // to a face that now points away until the drop rebuilds the scene.
+    // Each card's box, at its measured size once React Flow has measured it.
     const liveNode = new Map(rfNodes.map((n) => [n.id, n] as const));
+    const boxes = scene.nodes.map((n) => {
+      const live = liveNode.get(n.id);
+      return {
+        id: n.id,
+        x: n.x,
+        y: n.y,
+        w: live?.measured?.width ?? CARD_W,
+        h: live?.measured?.height ?? CARD_H,
+      };
+    });
+    const boxOf = new Map(boxes.map((b) => [b.id, b]));
+    // A drawing that runs one way — the C4 stack of rows, a style's bands or
+    // columns — meets its cards at ports along that flow (`assignPorts`).
+    // Rings and the hexagon have no one direction: the nearest handle pair.
+    const drawing = scene.styled?.drawing;
+    const flow =
+      scene.mode === "arch" || drawing === "rows" ? "down" : drawing === "columns" ? "across" : null;
+    const ports = flow
+      ? assignPorts(boxes, scene.edges, flow, new Set(scene.nodes.filter((n) => n.aside).map((n) => n.id)))
+      : null;
+    // Each edge on a port drawing as straight runs and turns between its ports.
+    const turns = ports
+      ? orthoRoutes(
+          scene.edges.flatMap((e) => {
+            const p = ports.get(e.id);
+            const s = boxOf.get(e.source), t = boxOf.get(e.target);
+            if (!p || !s || !t) return [];
+            return [{
+              id: e.id,
+              start: portPoint(s, p.sourceSide, p.sourceShift),
+              end: portPoint(t, p.targetSide, p.targetShift),
+              axis: p.flow,
+              waypoints: e.waypoints,
+            }];
+          }),
+        )
+      : null;
     const handles =
-      scene.mode !== "code"
+      scene.mode !== "code" && !ports
         ? assignAllHandles(
-            scene.nodes.map((n) => {
-              const live = liveNode.get(n.id);
-              return {
-                id: n.id,
-                position: live?.position ?? { x: n.x, y: n.y },
-                measured: {
-                  width: live?.measured?.width ?? CARD_W,
-                  height: live?.measured?.height ?? CARD_H,
-                },
-              };
-            }),
+            boxes.map((b) => ({ id: b.id, position: { x: b.x, y: b.y }, measured: { width: b.w, height: b.h } })),
             scene.edges,
           )
         : null;
@@ -439,14 +411,12 @@ function DiagramInner({
       const k = e.source < e.target ? `${e.source}\0${e.target}` : `${e.target}\0${e.source}`;
       pairCount.set(k, (pairCount.get(k) ?? 0) + 1);
     }
-    // Styled mode: an edge the drawing already implies (a step into the
-    // innermost layer, an adapter onto its port) stays hidden until one of
-    // its ends is selected — what remains is short and worth reading.
-    const visible = scene.edges.filter(
-      (e) => !e.implied || e.source === selectedId || e.target === selectedId,
-    );
-    return visible.map((e) => {
-      const h = handles?.get(e.id);
+    // Every edge is drawn; one the drawing already implies (a legal step
+    // between a style's layers, a tooling link) sits quiet, so the ones that
+    // say something new stand out. A selection lights, it never reveals.
+    const out = scene.edges.map((e) => {
+      const port = ports?.get(e.id);
+      const h = port ? { sourceHandle: port.sourceSide, targetHandle: port.targetSide } : handles?.get(e.id);
       const connected = highlight.active && (e.source === selectedId || e.target === selectedId);
       const ghostEdge = ghostIds.has(e.source) || ghostIds.has(e.target);
       const pairKey = e.source < e.target ? `${e.source}\0${e.target}` : `${e.target}\0${e.source}`;
@@ -464,8 +434,11 @@ function DiagramInner({
         targetHandle: scene.mode === "code" ? "c" : h?.targetHandle,
         data: {
           bow: e.bow,
+          waypoints: turns ? turns.get(e.id) : e.waypoints,
+          sourceShift: port?.sourceShift,
+          targetShift: port?.targetShift,
           violations: e.violations,
-          open: e.id === openEdgeId,
+          quiet: e.implied,
           label: ghostEdge ? undefined : e.label || undefined,
           method: ghostEdge ? undefined : e.method,
           dot: scene.mode === "code",
@@ -475,11 +448,42 @@ function DiagramInner({
           dimmed:
             (highlight.active && !connected) ||
             (concernLit !== null && (!concernLit.has(e.source) || !concernLit.has(e.target))),
-          parallel: (pairCount.get(pairKey) ?? 0) > 1,
+          // Ports already part a reverse pair onto two lines.
+          parallel: !port && (pairCount.get(pairKey) ?? 0) > 1,
         },
       };
     });
-  }, [scene, rfNodes, selectedId, highlight, concernLit, pendingIds, openEdgeId]);
+    // Box tiers: every label placed at once, each clear of the other edges,
+    // pills and cards (`placeLabels`) — read off the same line the edge draws.
+    if (scene.mode !== "code") {
+      const shown = out.filter((e) => !e.hidden && boxOf.has(e.source) && boxOf.has(e.target));
+      const end = (id: string, handle: string | undefined, shift: number | undefined, fallback: "left" | "right") => {
+        const b = boxOf.get(id)!;
+        const side = (handle ?? fallback) as Side;
+        return ["top", "bottom", "left", "right"].includes(side)
+          ? portPoint(b, side, shift ?? 0)
+          : getHandlePositions({ id, position: { x: b.x, y: b.y }, measured: { width: b.w, height: b.h } })[
+              side as unknown as "right"
+            ];
+      };
+      const spots = placeLabels(
+        shown.map((e) => {
+          const s = end(e.source, e.sourceHandle, e.data.sourceShift, "right");
+          const t = end(e.target, e.targetHandle, e.data.targetShift, "left");
+          return {
+            id: e.id,
+            points: edgeShape(s.x, s.y, t.x, t.y, e.data).points,
+            label: edgeText(e.data),
+            method: e.data.method,
+            pair: e.data.parallel ? [e.source, e.target].sort().join("\0") : undefined,
+          };
+        }),
+        boxes,
+      );
+      for (const e of out) (e.data as EdgeData).labelAt = spots.get(e.id);
+    }
+    return out;
+  }, [scene, rfNodes, selectedId, highlight, concernLit, pendingIds]);
 
   // Refit when the level changes (a fresh scene of a different size/shape).
   const fitKey = `${focusId ?? "root"}:${rfNodes.length}`;
@@ -507,28 +511,30 @@ function DiagramInner({
   const cardsKey = scene
     ? `${scene.focusId ?? "root"}:${scene.nodes.map((n) => n.id).sort().join("|")}`
     : "";
-  const lastCardsKey = useRef<string | null>(null);
+  const sceneRef = useRef(scene);
+  sceneRef.current = scene;
+  // Mount the edges a beat after a new card SET lands. Keyed on the set alone:
+  // a rebuild that keeps the cards (the health report arriving a moment after
+  // the tree) must not cancel the pending mount, or the level stays edgeless.
   useEffect(() => {
-    if (!scene || scene.nodes.length === 0) {
-      lastCardsKey.current = null;
+    if (!cardsKey) {
       setEdgesReady(false);
       return;
     }
-    if (lastCardsKey.current === cardsKey) {
-      // Same cards, new positions — refresh the handle anchors in place.
-      scene.nodes.forEach((n) => updateInternalsRef.current(n.id));
-      return;
-    }
-    lastCardsKey.current = cardsKey;
     setEdgesReady(false);
     const t = setTimeout(() => {
-      scene.nodes.forEach((n) => updateInternalsRef.current(n.id));
+      for (const n of sceneRef.current?.nodes ?? []) updateInternalsRef.current(n.id);
       setEdgesReady(true);
     }, 250);
     return () => clearTimeout(t);
-  }, [scene, cardsKey]);
+  }, [cardsKey]);
+  // Same cards, new scene (moved, or re-derived): refresh the handle anchors.
+  useEffect(() => {
+    if (scene) scene.nodes.forEach((n) => updateInternalsRef.current(n.id));
+  }, [scene]);
 
   const crumbs = useMemo(() => breadcrumb(model, focusId), [model, focusId]);
+  const level = c4Level(model, focusId);
 
   return (
     // select-none: the map is a diagram, not copyable prose — without it, a
@@ -572,6 +578,13 @@ function DiagramInner({
             </button>
           </span>
         ))}
+        <span className="flex-1" />
+        {level && (
+          <span className="flex shrink-0 items-baseline gap-1.5" aria-label={level.hint}>
+            <span className="font-medium text-[var(--text-secondary)]">{level.name}</span>
+            <span className="font-mono text-2xs text-[var(--text-muted)]">C4 level {level.n}</span>
+          </span>
+        )}
       </div>
 
       <div className="relative min-h-0 flex-1">
@@ -586,9 +599,7 @@ function DiagramInner({
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
             connectionMode={ConnectionMode.Loose}
-            snapToGrid={mode === "arch"}
-            snapGrid={SNAP_GRID}
-            nodesDraggable={archDraggable || dotSim.live}
+            nodesDraggable={dotSim.live}
             nodesConnectable={false}
             elementsSelectable
             edgesFocusable={false}
@@ -604,28 +615,15 @@ function DiagramInner({
             onNodeDrag={(_, n) => {
               if (mode === "code") dotSim.onDrag(n.id, n.position);
             }}
-            // Arch tiers: dropping a card pins it — the spot persists on the
-            // node and auto-layout stops placing it (until re-layout releases
-            // it). Code tier: release the dot and let the physics cool.
+            // Release the dot and let the physics cool.
             onNodeDragStop={(_, n) => {
               if (mode === "code") dotSim.onDragStop(n.id);
-              else onMoveNode?.(n.id, { x: Math.round(n.position.x), y: Math.round(n.position.y) });
             }}
-            onNodeClick={(_, n) => {
-              setOpenEdgeId(null);
-              onSelectNode(n.id);
-            }}
-            onEdgeClick={(_, e) => {
-              const violations = (e.data as EdgeData | undefined)?.violations;
-              setOpenEdgeId((cur) => nextOpenEdge(cur, { id: e.id, violations }));
-            }}
+            onNodeClick={(_, n) => onSelectNode(n.id)}
             // Clicking the empty canvas selects the parent of this level (the
             // focus node), which practically deselects every node on screen. At
             // the top level there's no parent, so it just clears the selection.
-            onPaneClick={() => {
-              setOpenEdgeId(null);
-              onSelectNode(focusId);
-            }}
+            onPaneClick={() => onSelectNode(focusId)}
             onNodeDoubleClick={(_, n) => {
               const data = n.data as CardData;
               if (data.node.reference) {
@@ -648,29 +646,29 @@ function DiagramInner({
               className="!bg-[var(--surface-canvas)]"
             />
             {scene?.regions && <StyleRegions regions={scene.regions} />}
-            <Controls showInteractive={false} className="!shadow-none">
-              {archDraggable && (
-                <ControlButton
-                  title="Re-run auto-layout (releases this level's manual placements)"
-                  disabled={!scene?.nodes.some((n) => n.pinned)}
-                  className="disabled:!cursor-default disabled:opacity-35"
-                  onClick={() => {
-                    if (!scene) return;
-                    refitOnScene.current = true;
-                    for (const n of scene.nodes) {
-                      if (n.pinned) onMoveNode?.(n.id, null);
-                    }
-                  }}
-                >
-                  <LayoutGrid />
-                </ControlButton>
-              )}
-            </Controls>
+            <Controls showInteractive={false} className="!shadow-none" />
           </ReactFlow>
         )}
       </div>
     </div>
   );
+}
+
+/** Which C4 diagram a level is: what the boxes on it are. */
+function c4Level(
+  model: ScryModel,
+  focusId: string | null,
+): { n: number; name: string; hint: string } | null {
+  if (focusId === null)
+    return { n: 1, name: "System context", hint: "The systems, the people who use them, and what they depend on" };
+  const kind = model.nodes.find((n) => n.id === focusId)?.kind;
+  if (kind === "system")
+    return { n: 2, name: "Containers", hint: "The deployables and libraries inside this system, and what they use" };
+  if (kind === "container")
+    return { n: 3, name: "Components", hint: "The modules inside this container, and how they depend on each other" };
+  if (kind === "component")
+    return { n: 4, name: "Code", hint: "The symbols inside this component, by call depth" };
+  return null;
 }
 
 /** Root→focus chain (excluding root), one entry per ancestor, for the breadcrumb. */

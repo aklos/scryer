@@ -96,6 +96,13 @@
   --scryer-person-fill: var(--surface-active);
   --scryer-select-stroke: var(--accent);
   --scryer-outline-stroke: var(--border-strong);
+  /* Map ink: card outlines, edges and the C4 boundary must read against the
+     canvas in both themes — the page's hairline borders sit a step from the
+     surface and vanish on a zoomed-out map. Mixed from the text ramp so a
+     palette swap carries through. */
+  --map-card-stroke: color-mix(in srgb, var(--text-muted) 75%, var(--surface-raised));
+  --map-edge: var(--text-tertiary);
+  --map-boundary: var(--text-muted);
 }
 
 .dark {
@@ -127,6 +134,9 @@
   --border-overlay: #20262fcc;
   --accent: var(--color-blue-400);
   --accent-strong: var(--color-blue-300);
+  --map-card-stroke: color-mix(in srgb, var(--text-muted) 60%, var(--surface-raised));
+  --map-edge: var(--text-tertiary);
+  --map-boundary: var(--text-muted);
 }
 
 /* Text selection carries the accent — the one hue that means "where you are". */

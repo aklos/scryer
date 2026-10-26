@@ -3,20 +3,20 @@
  * pre-pivot canvas card (`C4Node`), adapted to the read-only diagram.
  *
  * It draws the 180×160 shape-backed card (or the person silhouette), the
- * external dashed frame, a stroke tinted by the node's change mark, the
- * completeness pie, the count of structural violations inside the node, and
- * the drill affordance on select. Ghosts (nodes that live elsewhere) render
+ * external dashed frame, the C4 kind line, the claim states inside the node
+ * in words along its foot (outlined red when any fails, blue when any is a
+ * todo test), its style's glyph in the corner, the count of structural
+ * violations inside it, and the drill affordance on select. Ghosts (nodes that live elsewhere) render
  * dimmed with no drill. Dropped from the canvas: contracts, advisor hints,
  * member chips, and all drag-to-edit.
  */
 
 import type { NodeProps, Node as RFNode } from "@xyflow/react";
 import type { DiagramNode } from "./diagramLayout";
-import type { Mark } from "../../entities/model/changeKinds";
 import type { StyleViolation } from "../../entities/model/health";
-import type { Completeness } from "../../entities/model/completeness";
+import type { DerivedCounts } from "../../entities/model/derived";
+import { CLAIM_LABEL, CLAIM_TONE } from "../../entities/model/claimState";
 import { StructuralCount } from "../../entities/model/StructuralCount";
-import { CompletenessPie } from "../../entities/model/CompletenessPie";
 import { NodeHandles } from "../../shared/diagram/NodeHandles";
 import { ShapeBackground, resolveShape, getContentInsets } from "../../entities/model/shapes";
 import { StyleGlyph } from "../../entities/model/styles/StyleGlyph";
@@ -24,16 +24,16 @@ import { StyleGlyph } from "../../entities/model/styles/StyleGlyph";
 export interface CardData extends Record<string, unknown> {
   node: DiagramNode;
   selected: boolean;
-  /** Change mark (plan ?? drift) for this node, or null when unchanged. */
-  mark?: Mark | null;
+  /** The claim states in this node's subtree. */
+  claims?: DerivedCounts;
+  /** The state a reader should look at here: failing, then planned. */
+  attention?: "failing" | "planned" | null;
   /** A selection exists elsewhere and this node isn't a neighbour — fade it. */
   dimmed?: boolean;
   /** Structure is laid out but the agent hasn't generated the semantics yet —
    *  render the card with the violet "working on this" treatment (matching the
    *  tree's active-node spinner) and cross-fade the content in once it lands. */
   pending?: boolean;
-  /** Build completeness for this node — drives the corner % + anchorage badge. */
-  completeness?: Completeness;
   /** Structural violations charged inside this node's subtree — counted on
    *  the card so the drill path to them is visible from any level. */
   structural?: readonly StyleViolation[];
@@ -52,78 +52,37 @@ function genState(pending?: boolean): "pending" | "live" | undefined {
   return pending === undefined ? undefined : pending ? "pending" : "live";
 }
 
-/** Card outline stroke per change mark — same palette as the tree gutter and
- *  the dots: A green, M/R amber (plan edits), D red, Q/X orange (drift). */
-const MARK_STROKE: Record<Mark, string> = {
-  A: "stroke-emerald-500/70 dark:stroke-emerald-400/50",
-  M: "stroke-amber-500/70 dark:stroke-amber-400/50",
-  D: "stroke-red-500/70 dark:stroke-red-400/50",
-  R: "stroke-amber-500/70 dark:stroke-amber-400/50",
-  Q: "stroke-orange-500/70 dark:stroke-orange-400/50",
-  X: "stroke-orange-500/70 dark:stroke-orange-400/50",
+/** The C4 kind word on a card, under its name. */
+const KIND_WORD: Partial<Record<DiagramNode["kind"], string>> = {
+  system: "Software system",
+  container: "Container",
+  component: "Component",
 };
 
-/** The shared completeness pie, positioned on the card corner. */
-function CompletenessDot({ c }: { c: Completeness }) {
-  const measured = c.pct !== undefined;
+/** The claim states inside a node, in words along the card's foot — the
+ *  states that need a look first: "1 failing · 10 unverified · 2 proven". */
+const FOOT_ORDER = ["failing", "planned", "stale", "proven"] as const;
+function ClaimCounts({ c }: { c: DerivedCounts }) {
+  const shown = FOOT_ORDER.filter((k) => c[k] > 0);
+  if (shown.length === 0) return null;
+  const text = shown.map((k) => `${c[k]} ${CLAIM_LABEL[k]}`).join(" · ");
   return (
     <div
-      className="pointer-events-none absolute bottom-1.5 left-2 z-10"
-      aria-label={
-        measured
-          ? `${c.pct}% of this node's claims read through to code`
-          : "No leaf claims yet — nothing to measure"
-      }
+      className="pointer-events-auto absolute bottom-1.5 left-3 right-8 z-10 truncate text-[9px] tabular-nums"
+      aria-label={`Claims inside: ${text}`}
     >
-      <CompletenessPie c={c} />
+      {shown.map((k, i) => (
+        <span key={k} className={CLAIM_TONE[k]}>
+          {i > 0 && <span className="text-[var(--text-ghost)]"> · </span>}
+          {c[k]} {CLAIM_LABEL[k]}
+        </span>
+      ))}
     </div>
   );
 }
 
 function isExpandable(kind: DiagramNode["kind"]): boolean {
   return kind === "system" || kind === "container" || kind === "component";
-}
-
-/** A styled container's real shape in miniature: its layer regions and its
- *  components as dots where the style puts them. Replaces the generic glyph
- *  once the container has components. */
-function Thumbnail({ t }: { t: NonNullable<DiagramNode["thumbnail"]> }) {
-  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-  const grow = (x: number, y: number) => {
-    x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
-  };
-  for (const r of t.regions) {
-    if (r.shape === "rect") { grow(r.x, r.y); grow(r.x + r.w, r.y + r.h); }
-    else { grow(r.cx - r.r, r.cy - r.r); grow(r.cx + r.r, r.cy + r.r); }
-  }
-  for (const d of t.dots) grow(d.x - 90, d.y - 80), grow(d.x + 90, d.y + 80);
-  if (!Number.isFinite(x0)) return null;
-  const w = x1 - x0 || 1, h = y1 - y0 || 1;
-  const W = 48, H = 30;
-  const s = Math.min(W / w, H / h);
-  const ox = (W - w * s) / 2 - x0 * s, oy = (H - h * s) / 2 - y0 * s;
-  const hex = (cx: number, cy: number, r: number) =>
-    Array.from({ length: 6 }, (_, i) => {
-      const a = (Math.PI / 3) * i;
-      return `${(ox + (cx + r * Math.cos(a)) * s).toFixed(1)},${(oy + (cy + r * Math.sin(a)) * s).toFixed(1)}`;
-    }).join(" ");
-  const stroke = { fill: "var(--surface-tint)", fillOpacity: 0.5, stroke: "var(--text-ghost)", strokeWidth: 0.8 };
-  return (
-    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="overflow-visible" aria-hidden>
-      {t.regions.map((r, i) =>
-        r.shape === "rect" ? (
-          <rect key={i} x={ox + r.x * s} y={oy + r.y * s} width={r.w * s} height={r.h * s} rx={1.5} {...stroke} />
-        ) : r.shape === "ring" ? (
-          <circle key={i} cx={ox + r.cx * s} cy={oy + r.cy * s} r={r.r * s} {...stroke} />
-        ) : (
-          <polygon key={i} points={hex(r.cx, r.cy, r.r)} {...stroke} />
-        ),
-      )}
-      {t.dots.map((d, i) => (
-        <circle key={i} cx={ox + d.x * s} cy={oy + d.y * s} r={1.8} fill="var(--text-tertiary)" />
-      ))}
-    </svg>
-  );
 }
 
 /** Drill request — DiagramView listens and descends a level. */
@@ -204,13 +163,11 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
     );
   }
 
-  // External nodes keep their dashed outline but still show a change stroke —
-  // an edited external dependency is exactly the change worth noticing.
-  const markStroke = data.mark ? MARK_STROKE[data.mark] : null;
-  // Completeness pie — hidden on ghosts (measured at the node's real home) and on
-  // nodes with no anchorable primitives at all.
-  const comp = isGhost ? undefined : data.completeness;
-  const showComp = !!comp && comp.total > 0;
+  // The outline carries the state needing attention: red for a failing
+  // claim inside, blue for a todo test; the foot says the rest.
+  const attention = data.attention;
+  const kindWord = KIND_WORD[node.kind];
+  const typeLine = [isExternal ? "External system" : kindWord, node.technology].filter(Boolean).join(" · ");
 
   return (
     <div data-gen={genState(data.pending)} className={`relative w-[180px] transition-opacity ${dimClass}`}>
@@ -227,22 +184,21 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
           strokeClass={
             selected
               ? "stroke-[var(--text)]"
-              : markStroke
-                ? markStroke
-                : isExternal || isGhost
-                  ? "stroke-[var(--scryer-outline-stroke)]"
-                  : "stroke-[var(--border)]"
+              : attention === "failing"
+                ? "stroke-red-500/80 dark:stroke-red-400/70"
+                : attention === "planned"
+                  ? "stroke-sky-500/80 dark:stroke-sky-400/70"
+                  : "stroke-[var(--map-card-stroke)]"
           }
-          strokeWidth={selected ? 2.5 : markStroke ? 2 : 1}
+          strokeWidth={selected ? 2.5 : attention ? 2 : 1.25}
           strokeDasharray={isExternal ? "6 3" : undefined}
           kind={node.kind}
           external={!!isExternal}
         />
         <NodeHandles />
 
-        {/* Completeness pie, bottom-left. Hidden while the card is still
-            generating so it doesn't flash on empty. */}
-        {showComp && !data.pending && <CompletenessDot c={comp!} />}
+        {/* Claim states, along the foot. Ghosts are counted at home. */}
+        {!isGhost && !data.pending && data.claims && <ClaimCounts c={data.claims} />}
 
         {/* Structural violations inside, top-left. Ghosts are counted at home. */}
         {!isGhost && !data.pending && (
@@ -250,6 +206,14 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
             violations={data.structural}
             className="pointer-events-auto absolute left-2.5 top-1.5 z-10"
           />
+        )}
+
+        {/* The style's glyph, top-right: what shape the inside takes. Gives
+            way to the drill button on select. */}
+        {node.style && !isGhost && !(expandable && selected) && (
+          <div className="absolute right-2.5 top-2 z-10 opacity-80" aria-label={`Drawn as ${node.style}`}>
+            <StyleGlyph style={node.style} />
+          </div>
         )}
 
         {/* Drill-in — shown on select. */}
@@ -291,16 +255,6 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
                 card, so a paragraph-length technology or description can never
                 push the stack out of the shape (unclamped, the centered flex
                 overflowed BOTH ends — beheaded title, text under the icons). */}
-            {/* Style miniature above the name: the real shape of this
-                container's inside once it has components, the style's glyph
-                until then. In the flow, so it never sits on the hat. */}
-            {node.style && !isGhost && (
-              <div
-                className="mb-1 flex items-center justify-center text-[var(--text-tertiary)]"
-              >
-                {node.thumbnail ? <Thumbnail t={node.thumbnail} /> : <StyleGlyph style={node.style} />}
-              </div>
-            )}
             {/* Layer tag: the fixed word that says what role this component
                 plays in its container's style. */}
             {node.layer && node.kind === "component" && (!data.styled || node.reference) && (
@@ -313,11 +267,11 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
             <div className="line-clamp-2 w-full break-words text-center text-sm font-semibold leading-tight">
               {node.name || "Untitled"}
             </div>
-            {node.technology && (
+            {typeLine && (
               <div
                 className="line-clamp-2 mt-0.5 text-center text-[10px] tracking-wider text-[var(--text-tertiary)]"
               >
-                {node.technology}
+                {typeLine}
               </div>
             )}
             {node.description && (

@@ -24,7 +24,7 @@ const NODE_H = 160;
 
 type HandleId = "top" | "bottom" | "left" | "right" | "top-left" | "top-right" | "bottom-left" | "bottom-right";
 
-function getHandlePositions(node: NodeInput): Record<HandleId, { x: number; y: number }> {
+export function getHandlePositions(node: NodeInput): Record<HandleId, { x: number; y: number }> {
   const styleW = node.style?.width;
   const styleH = node.style?.height;
   const w = node.measured?.width ?? (typeof styleW === "number" ? styleW : NODE_W);

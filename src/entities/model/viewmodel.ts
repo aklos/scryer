@@ -163,6 +163,10 @@ export interface Node {
    *  reparent — coordinates don't survive a surface change. Mirrors Rust
    *  `Node.position`. */
   position?: { x: number; y: number };
+  /** A container declared dev tooling in structure.toml (`tooling = true`):
+   *  part of the codebase, not of the product, and held to no style. Mirrors
+   *  Rust `Node.tooling`. */
+  tooling?: boolean;
 }
 
 /** What a link between two styled nodes IS. Mirrors Rust `LinkKind`. */
@@ -614,26 +618,6 @@ export function moveNode(
       g.memberIds.includes(nodeId)
         ? { ...g, memberIds: g.memberIds.filter((m) => m !== nodeId) }
         : g,
-    ),
-  };
-}
-
-/**
- * Pin (or, with null, release) a node's manual placement on its parent's map
- * surface. Pure cosmetics: the plan diff ignores `position`, so a drag never
- * becomes pending work, re-dates nothing, and tags no change.
- */
-export function setNodePosition(
-  model: ScryModel,
-  nodeId: string,
-  position: { x: number; y: number } | null,
-): ScryModel {
-  const node = model.nodes.find((n) => n.id === nodeId);
-  if (!node) return model;
-  return {
-    ...model,
-    nodes: model.nodes.map((n) =>
-      n.id === nodeId ? { ...n, position: position ?? undefined } : n,
     ),
   };
 }

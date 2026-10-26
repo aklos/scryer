@@ -6,8 +6,9 @@
  * One "scene" is one level: the children of a focus node (or the top-level
  * nodes when focus is null), the links lifted to that level, and a position
  * per node. The mode is chosen by the children's altitude:
- *   - architecture tiers (system/container) → planar box layout
- *     (`layoutGraph`), the formal C4 boxes-and-lines.
+ *   - architecture tiers (system/container) → the C4 arrangement
+ *     (`c4Layout`): users above, the level inside its boundary, what it
+ *     uses below.
  *   - the component level of a styled container → the style's own drawing
  *     (`styledLayout`): rows, columns, rings or Cockburn's hexagon, with each
  *     card fixed to its layer's band and only the order within it free; a
@@ -16,8 +17,7 @@
  *     lines would be noise and relationships read better as a constellation.
  */
 
-import { layoutGraph } from "../../shared/layout/planar";
-import type { EdgePair } from "../../shared/layout/planar";
+import { c4Layout } from "./c4Layout";
 import type { ScryModel, Kind } from "../../entities/model/viewmodel";
 import { isDataShape } from "../../entities/model/viewmodel";
 import { styleTable, type ModelHealthReport } from "../../entities/model/health";
@@ -41,6 +41,9 @@ export interface DiagramNode {
   /** Manually placed: the position below is the user's stored placement, not
    *  auto-layout's. Pinned nodes stay put; layout only places the rest. */
   pinned: boolean;
+  /** Drawn in the column beside the level's rows (an external system it
+   *  calls): its links run sideways, not down the rows. */
+  aside?: boolean;
   technology?: string;
   description?: string;
   /** Has its own children — so the renderer can mark it drillable. */
@@ -66,16 +69,8 @@ export interface DiagramNode {
   /** Carries responsibilities or a data shape of its own. A symbol without
    *  any reads hollow on the code tier — a hub nobody has described. */
   hasClaims: boolean;
-  /** A styled container's miniature: its components as dots in their layer
-   *  positions, with the layer regions — the real shape of its inside. */
-  thumbnail?: Thumbnail;
   x: number;
   y: number;
-}
-
-export interface Thumbnail {
-  regions: LayerRegion[];
-  dots: { x: number; y: number }[];
 }
 
 export interface DiagramEdge {
@@ -86,8 +81,6 @@ export interface DiagramEdge {
   method?: string;
   /** What the link is, when declared (styled containers). */
   kind?: string;
-  /** Couldn't be embedded planar — the renderer routes it loosely. */
-  nonPlanar: boolean;
   /** Styled mode: the drawing already says this (a step into the innermost
    *  layer, an adapter onto its port) — hidden until one end is selected. */
   implied: boolean;
@@ -95,10 +88,20 @@ export interface DiagramEdge {
    *  would cut through what lies between — bow it away from `(cx, cy)`, the
    *  curve's middle displaced `offset` px from the chord's midpoint. */
   bow?: { cx: number; cy: number; offset: number };
+  /** Box tiers: a link spanning rows runs through these points, down a lane
+   *  between the cards it passes. */
+  waypoints?: { x: number; y: number }[];
   /** Styled mode: every structural violation charged on this pair — drawn
    *  red, the reasons listed when the user clicks the edge. */
   violations?: string[];
 }
+
+/** The word for each box kind, as the boundary label names the level. */
+const KIND_WORD: Partial<Record<Kind, string>> = {
+  system: "software system",
+  container: "container",
+  component: "component",
+};
 
 /** The drawing behind a styled level: which style, and the region per layer. */
 export interface StyledScene {
@@ -115,18 +118,13 @@ export interface DiagramScene {
   edges: DiagramEdge[];
   /** Present in `styled` mode. */
   styled?: StyledScene;
-  /** Regions drawn behind the nodes: a style's layers, or the code tier's
-   *  depth bands. Absent on the free planar tiers. */
+  /** Regions drawn behind the nodes: a style's layers, the code tier's
+   *  depth bands, or a box tier's boundary and tooling band. */
   regions?: LayerRegion[];
 }
 
-// Grid cell size for the planar box layout (matches the canvas on `main`).
-const CELL_W = 300;
-const CELL_H = 180;
-
 // Card footprint on the arch tiers — used for handle routing before React Flow
-// has measured the cards (DiagramView) and for keeping auto-laid cards off
-// pinned ones (the locked relax pass below).
+// has measured the cards (DiagramView) and by the C4 arrangement.
 export const CARD_W = 180;
 export const CARD_H = 160;
 
@@ -155,9 +153,6 @@ const LABEL_BLOCK_H = NAME_H + SUB_H; // both label lines stack under the disc
 const estLabelWidth = (name: string) =>
   Math.min(130, (name || "·").length * 6.2 + 6);
 
-const pairKey = (a: string, b: string) =>
-  a < b ? `${a}\0${b}` : `${b}\0${a}`;
-
 /** Collision radius (px) of a code-tier dot row — the disc plus its centered
  *  label block, approximated as a circle. Shared with the live simulation's
  *  collide force (`useDotSim`) so physics and pixels agree on how much room a
@@ -169,7 +164,7 @@ export function dotCollideRadius(name: string, dotSize: number): number {
 }
 
 /**
- * Build the scene for a level. Async because the planar layout is.
+ * Build the scene for a level.
  */
 export async function buildDiagramScene(
   model: ScryModel,
@@ -237,27 +232,6 @@ export async function buildDiagramScene(
     return cur ? cur.id : nodeId;
   };
 
-  // A styled container's miniature — its own components laid out in its own
-  // drawing, shrunk. Computed here (cheap: a handful of containers per level)
-  // so the card can draw the real shape instead of a generic glyph.
-  const thumbnailFor = (id: string): Thumbnail | undefined => {
-    const n = byId.get(id);
-    if (!n || n.kind !== "container" || !n.style) return undefined;
-    const def = styles.get(n.style);
-    if (!def) return undefined;
-    const comps = model.nodes.filter((c) => c.kind === "component" && c.parentId === id);
-    if (comps.length === 0) return undefined;
-    const compOf = new Map<string, string>();
-    for (const c of comps) compOf.set(c.id, c.id);
-    for (const s of model.nodes) if (s.kind === "symbol" && s.parentId && compOf.has(s.parentId)) compOf.set(s.id, s.parentId);
-    const inner = model.links
-      .filter((l) => compOf.has(l.src) && compOf.has(l.dst))
-      .map((l) => ({ source: compOf.get(l.src)!, target: compOf.get(l.dst)! }))
-      .filter((e) => e.source !== e.target);
-    const laid = styledLayout(def, comps.map((c) => ({ id: c.id, layer: c.layer })), [], inner);
-    return { regions: laid.regions, dots: comps.map((c) => laid.centers.get(c.id) ?? { x: 0, y: 0 }) };
-  };
-
   const ghostIds = new Set<string>();
   const edgeMap = new Map<string, DiagramEdge>();
   const addEdge = (
@@ -271,7 +245,7 @@ export async function buildDiagramScene(
     if (source === target) return;
     const key = `${source}\0${target}`;
     if (edgeMap.has(key)) return;
-    edgeMap.set(key, { id: linkId, source, target, label, method, kind, nonPlanar: false, implied: false });
+    edgeMap.set(key, { id: linkId, source, target, label, method, kind, implied: false });
   };
   for (const link of model.links) {
     const s = liftToLevel(link.src);
@@ -350,7 +324,6 @@ export async function buildDiagramScene(
       style: n.style,
       layer: layerOf(model, n.id),
       hasClaims: (n.responsibilities?.length ?? 0) > 0 || (n.properties?.length ?? 0) > 0,
-      thumbnail: thumbnailFor(n.id),
     };
   };
 
@@ -386,9 +359,10 @@ export async function buildDiagramScene(
     layoutIds.map((id) => [id, dotSizeFor(degree.get(id) ?? 0, maxIn)] as const),
   );
 
-  // Manual placements pin their nodes: auto-layout only places the rest. Arch
-  // tiers only, and never ghosts — a ghost's stored position belongs to the
-  // surface where the node really lives, not to this one.
+  // A position given on a node fixes it and auto-layout places the rest. The
+  // app never gives one (its maps are derived); a caller drawing a curated
+  // map does — the demo's film placements, an export. Arch tiers only, and
+  // never ghosts: a ghost's position belongs to the surface where it lives.
   const pinnedPos = new Map<string, { x: number; y: number }>(
     mode === "arch"
       ? children
@@ -400,6 +374,7 @@ export async function buildDiagramScene(
   let styled: StyledScene | undefined;
   let regions: LayerRegion[] | undefined;
   let positions: Map<string, { x: number; y: number }>;
+  let aside = new Set<string>();
   if (mode === "code") {
     // Symbols by call depth from the component's surface — importance in
     // position — instead of a free constellation.
@@ -418,17 +393,6 @@ export async function buildDiagramScene(
     );
     regions = laid.regions;
   } else if (mode === "styled" && styleDef) {
-    const members = children.filter((c) => c.kind === "component").map((c) => ({ id: c.id, layer: c.layer }));
-    const rootIds = new Set(children.filter((c) => c.kind === "symbol").map((c) => c.id));
-    const laid = styledLayout(styleDef, members, ghosts, edges);
-    const strip = rootStrip(laid, [...rootIds]);
-    positions = new Map(
-      [...laid.centers, ...strip.centers].map(([id, c]) => [id, { x: c.x - CARD_W / 2, y: c.y - CARD_H / 2 }]),
-    );
-    for (const [id, at] of pinnedPos) positions.set(id, at);
-    const allRegions = strip.region ? [...laid.regions, strip.region] : laid.regions;
-    styled = { name: styleDef.name, drawing: styleDef.drawing, regions: allRegions };
-    regions = allRegions;
     // Structural violations from the health report — imports and declared
     // links the style forbids — are the only source of red. They are drawn even when no link
     // declares the pair: a declared-links-only view would read as compliance
@@ -452,14 +416,27 @@ export async function buildDiagramScene(
         label: "",
         method: undefined,
         kind: undefined,
-        nonPlanar: false,
         implied: false,
         violations: [v.detail],
       };
       edgeMap.set(key, e);
       edges.push(e);
     }
-    // The drawing already says the legal ones — hide them until a selection asks.
+    const members = children.filter((c) => c.kind === "component").map((c) => ({ id: c.id, layer: c.layer }));
+    const rootIds = new Set(children.filter((c) => c.kind === "symbol").map((c) => c.id));
+    const laid = styledLayout(styleDef, members, ghosts, edges);
+    for (const e of edges) e.waypoints = laid.routes?.get(`${e.source}\0${e.target}`);
+    const strip = rootStrip(laid, [...rootIds]);
+    positions = new Map(
+      [...laid.centers, ...strip.centers].map(([id, c]) => [id, { x: c.x - CARD_W / 2, y: c.y - CARD_H / 2 }]),
+    );
+    for (const [id, at] of pinnedPos) positions.set(id, at);
+    const allRegions = strip.region ? [...laid.regions, strip.region] : laid.regions;
+    styled = { name: styleDef.name, drawing: styleDef.drawing, regions: allRegions };
+    regions = allRegions;
+    // The drawing already says the legal ones: drawn quiet. Links that leave
+    // the container say what the drawing cannot — who calls in, what is
+    // used — so they are drawn plain.
     const layerById = new Map(children.map((c) => [c.id, c.layer] as const));
     const ringDrawing = styleDef.drawing === "rings" || styleDef.drawing === "hexagon";
     const innermost = styleDef.layers[styleDef.layers.length - 1]?.name;
@@ -470,22 +447,12 @@ export async function buildDiagramScene(
         e.implied = false;
         continue;
       }
-      const sourceGhost = ghostIds.has(e.source), targetGhost = ghostIds.has(e.target);
+      if (ghostIds.has(e.source) || ghostIds.has(e.target)) {
+        e.implied = false;
+        continue;
+      }
       const sl = layerById.get(e.source), tl = layerById.get(e.target);
-      // A ghost carries its OWN container's style and layer: a library is
-      // imported as a module, so this container's matrix judges the edge.
-      const ghostId = targetGhost ? e.target : sourceGhost ? e.source : undefined;
-      const otherDef = ghostId ? governingStyleDef(model, ghostId, styles) : undefined;
-      const otherLayer = ghostId ? layerOf(model, ghostId) : undefined;
-      e.implied =
-        !e.violations &&
-        classifyStyledEdge(styleDef, sl, tl, {
-          sourceGhost,
-          targetGhost,
-          otherDef,
-          otherLayer,
-        }) === "implied";
-      if (sourceGhost || targetGhost) continue;
+      e.implied = !e.violations && classifyStyledEdge(styleDef, sl, tl) === "implied";
       // A same-layer chord crosses whatever sits between its ends — the
       // centre on a ring, the neighbouring cards on a band. Bow it clear:
       // out to the ring itself, or above the band (left of the column).
@@ -506,7 +473,47 @@ export async function buildDiagramScene(
       }
     }
   } else {
-    positions = await archLayout(layoutIds, edges, pinnedPos);
+    // C4 arrangement: who uses the level above it, the level inside its
+    // boundary (tooling in a band at its foot), external systems it calls
+    // beside it, the rest of what it uses below.
+    const inside: string[] = [], tooling: string[] = [], above: string[] = [];
+    const beside: string[] = [], below: string[] = [];
+    for (const id of layoutIds) {
+      const n = byId.get(id)!;
+      // An outside node that mostly calls into the level uses it: above.
+      const calls = edges.filter((e) => e.source === id).length;
+      const called = edges.filter((e) => e.target === id).length;
+      if (n.kind === "person") above.push(id);
+      else if (n.external) (calls > called ? above : beside).push(id);
+      else if (ghostIds.has(id)) (calls > called ? above : below).push(id);
+      else if (n.tooling) tooling.push(id);
+      else inside.push(id);
+    }
+    const laid = c4Layout({ inside, tooling, above, beside, below, edges, cardW: CARD_W, cardH: CARD_H });
+    aside = new Set(beside);
+    positions = laid.positions;
+    for (const [id, at] of pinnedPos) positions.set(id, at);
+    // A pinned end moved off the rows the lanes were laid between.
+    for (const e of edges) {
+      const route = laid.routes.get(`${e.source}\0${e.target}`);
+      if (route && !pinnedPos.has(e.source) && !pinnedPos.has(e.target)) e.waypoints = route;
+    }
+    // Tooling links say little about the product: drawn quiet.
+    const toolingSet = new Set(tooling);
+    for (const e of edges) if (toolingSet.has(e.source) || toolingSet.has(e.target)) e.implied = true;
+    const focus = focusId ? byId.get(focusId) : undefined;
+    regions = [];
+    if (focus && laid.boundary) {
+      regions.push({ shape: "rect", ...laid.boundary, layer: `${focus.name} · ${KIND_WORD[focus.kind] ?? focus.kind}`, boundary: true });
+    }
+    if (laid.toolingBand) {
+      regions.push({
+        shape: "rect",
+        ...laid.toolingBand,
+        layer: "tooling",
+        caption: "Dev tooling: part of the codebase, not of the product, and held to no style. Its links are drawn faint.",
+      });
+    }
   }
 
   const nodes: DiagramNode[] = layoutIds.map((id) => {
@@ -514,6 +521,7 @@ export async function buildDiagramScene(
     return {
       ...base(id, ghostIds.has(id)),
       pinned: pinnedPos.has(id),
+      aside: aside.has(id) || undefined,
       dotSize: sizeById.get(id) ?? MIN_DOT,
       x: p.x,
       y: p.y,
@@ -521,156 +529,4 @@ export async function buildDiagramScene(
   });
 
   return { mode, focusId, nodes, edges, styled, regions };
-}
-
-// ── Architecture tiers: planar boxes ────────────────────────────────────────
-
-/**
- * Planar layout for the box tiers. Mirrors `autoLayout` on `main`: connected
- * nodes go through the planar embedder; isolated nodes are grid-packed below
- * so a lone container never gets stranded in the planar strip. Mutates the
- * passed `edges` to flag the non-planar ones for loose routing.
- *
- * `pinned` holds the user's manual placements: those nodes land exactly where
- * they were dragged, and only the rest take the computed spots — which are
- * deterministic for a given graph, so dragging one card never moves the
- * others. A locked relax pass then pushes any auto-laid card off a pinned one.
- */
-async function archLayout(
-  nodeIds: string[],
-  edges: DiagramEdge[],
-  pinned: Map<string, { x: number; y: number }>,
-): Promise<Map<string, { x: number; y: number }>> {
-  const idSet = new Set(nodeIds);
-  const pairs: EdgePair[] = edges
-    .filter((e) => idSet.has(e.source) && idSet.has(e.target))
-    .map((e) => [e.source, e.target]);
-
-  const connected = new Set<string>();
-  for (const [u, v] of pairs) {
-    connected.add(u);
-    connected.add(v);
-  }
-  const graphIds = nodeIds.filter((id) => connected.has(id));
-  const isolated = nodeIds.filter((id) => !connected.has(id));
-
-  const grid = new Map<string, { col: number; row: number }>();
-  let nonPlanar: EdgePair[] = [];
-  if (graphIds.length > 0) {
-    const res = await layoutGraph(graphIds, pairs);
-    for (const [id, p] of res.positions) grid.set(id, p);
-    nonPlanar = res.nonPlanarEdges;
-  }
-
-  // Pack isolated nodes into a grid below whatever the planar layout produced.
-  if (isolated.length > 0) {
-    let maxRow = -1;
-    let maxCol = 0;
-    for (const [, p] of grid) {
-      maxRow = Math.max(maxRow, p.row);
-      maxCol = Math.max(maxCol, p.col);
-    }
-    const cols = Math.max(
-      1,
-      Math.min(maxCol + 1 || 3, Math.ceil(Math.sqrt(isolated.length))),
-    );
-    const startRow = maxRow + 2;
-    for (let i = 0; i < isolated.length; i++) {
-      grid.set(isolated[i], {
-        col: i % cols,
-        row: startRow + Math.floor(i / cols) * 2,
-      });
-    }
-  }
-
-  const npKeys = new Set(nonPlanar.map(([a, b]) => pairKey(a, b)));
-  for (const e of edges)
-    e.nonPlanar = npKeys.has(pairKey(e.source, e.target));
-
-  const px = new Map<string, { x: number; y: number }>();
-  for (const id of nodeIds) {
-    const p = grid.get(id) ?? { col: 0, row: 0 };
-    px.set(id, { x: p.col * CELL_W, y: p.row * CELL_H });
-  }
-  if (pinned.size === 0) return px;
-
-  // Pinned nodes sit exactly where the user put them; every other node keeps
-  // its computed spot. NO global adjustment happens here: the planar layout is
-  // deterministic for a given graph, so an unpinned node's position is stable
-  // across drags of OTHER nodes — dragging one card must never shift the rest
-  // (an earlier centroid-translation version did exactly that, and a single
-  // drop read as the whole graph panning while the card "snapped back").
-  for (const [id, at] of pinned) {
-    px.set(id, { x: at.x, y: at.y });
-  }
-
-  // Auto-laid cards must not land under a pinned one: resolve card-footprint
-  // overlaps, moving only the unpinned (the user's placements are law).
-  const boxes = new Map<string, Box>(nodeIds.map((id) => [id, { w: CARD_W, h: CARD_H }]));
-  relaxLabelBoxes(px, boxes, LABEL_PAD, 500, new Set(pinned.keys()));
-  return px;
-}
-
-// ── Card separation (shared by the planar tiers) ────────────────────────────
-
-// Breathing room (px) left between rendered rows by the final separation pass.
-const LABEL_PAD = 24;
-
-/** The rendered row of a dot: the disc plus its label-to-the-right, anchored at
- *  the node's (x, y) top-left. */
-interface Box {
-  w: number;
-  h: number;
-}
-
-/**
- * Push overlapping label boxes apart along their smaller penetration axis, with
- * `pad` px of slack, until none overlap (or `iterations` runs out). This is the
- * asymmetric collision ForceAtlas2/noverlap can't do: they treat a node as a
- * circle, so they keep the *discs* apart but let a label — which extends to the
- * right of its disc — overlap a neighbour. Resolving the real rows is what gives
- * the dots and labels room to breathe.
- *
- * `locked` boxes never move (the arch tiers' pinned cards): an overlap with one
- * pushes the other box the whole way, and two locked boxes are left where the
- * user put them, overlapping or not.
- */
-function relaxLabelBoxes(
-  pos: Map<string, { x: number; y: number }>,
-  boxes: Map<string, Box>,
-  pad: number,
-  iterations: number,
-  locked: ReadonlySet<string> = new Set(),
-): void {
-  const ids = [...pos.keys()];
-  for (let it = 0; it < iterations; it++) {
-    let moved = false;
-    for (let i = 0; i < ids.length; i++) {
-      for (let j = i + 1; j < ids.length; j++) {
-        const la = locked.has(ids[i]), lb = locked.has(ids[j]);
-        if (la && lb) continue;
-        const pa = pos.get(ids[i])!, pb = pos.get(ids[j])!;
-        const ba = boxes.get(ids[i])!, bb = boxes.get(ids[j])!;
-        const dx = pb.x + bb.w / 2 - (pa.x + ba.w / 2);
-        const dy = pb.y + bb.h / 2 - (pa.y + ba.h / 2);
-        const ox = (ba.w + bb.w) / 2 + pad - Math.abs(dx);
-        const oy = (ba.h + bb.h) / 2 + pad - Math.abs(dy);
-        if (ox > 0 && oy > 0) {
-          // Each side takes half the push; a locked side's half goes to the
-          // other, so the pair still separates by the full overlap.
-          const wa = la ? 0 : lb ? 1 : 0.5;
-          const wb = lb ? 0 : la ? 1 : 0.5;
-          if (ox < oy) {
-            const s = (dx < 0 ? -1 : 1) * ox;
-            pa.x -= s * wa; pb.x += s * wb;
-          } else {
-            const s = (dy < 0 ? -1 : 1) * oy;
-            pa.y -= s * wa; pb.y += s * wb;
-          }
-          moved = true;
-        }
-      }
-    }
-    if (!moved) break;
-  }
 }

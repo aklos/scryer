@@ -70,10 +70,13 @@ export function StyleRegions({ regions }: { regions: LayerRegion[] }) {
       >
         <svg width={b.w} height={b.h} viewBox={`${b.x} ${b.y} ${b.w} ${b.h}`} className="overflow-visible">
           {regions.map((r, i) => {
-            const label = r.layer.toUpperCase();
+            const label = r.boundary ? r.layer : r.layer.toUpperCase();
             // A ghost band is open: no fill, a dotted edge — the world beyond
-            // this level, not a layer of it.
-            const common = r.ghost
+            // this level, not a layer of it. A boundary is the C4 frame round
+            // the level's own node: no fill, a long dash in the map's ink.
+            const common = r.boundary
+              ? { fill: "none", stroke: "var(--map-boundary)", strokeWidth: 1.5, strokeDasharray: "10 6" }
+              : r.ghost
               ? { fill: "none", stroke: "var(--border-subtle)", strokeWidth: 1, strokeDasharray: "2 6" }
               : {
                   fill: "var(--surface-tint)",
@@ -112,10 +115,10 @@ export function StyleRegions({ regions }: { regions: LayerRegion[] }) {
                   <rect x={r.x} y={r.y} width={r.w} height={r.h} rx={12} {...common} />
                   <text
                     x={r.x + 14}
-                    y={r.y + 16}
-                    fontSize={10}
-                    letterSpacing={1.5}
-                    fill="var(--text-ghost)"
+                    y={r.y + (r.boundary ? 20 : 16)}
+                    fontSize={r.boundary ? 13 : 10}
+                    letterSpacing={r.boundary ? 0.2 : 1.5}
+                    fill={r.boundary ? "var(--text-tertiary)" : "var(--text-ghost)"}
                     fontWeight={600}
                   >
                     {label}

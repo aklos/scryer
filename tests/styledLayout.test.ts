@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { buildDiagramScene } from "../src/widgets/diagram-canvas/diagramLayout";
+import type { ScryModel } from "../src/entities/model/viewmodel";
+import type { ModelHealthReport } from "../src/entities/model/health";
 import { builtinStyles } from "../src/entities/model/styles";
-import { classifyStyledEdge, styledLayout, CARD_W } from "../src/widgets/diagram-canvas/styled";
+import { classifyStyledEdge, styledLayout, CARD_H, CARD_W } from "../src/widgets/diagram-canvas/styled";
 
 const style = (name: string) => builtinStyles.find((s) => s.name === name)!;
 
@@ -106,6 +109,65 @@ describe("styledLayout", () => {
     expect(x("p1")).toBeLessThan(x("p2"));
     expect(x("f2")).toBeLessThan(x("f1"));
   });
+
+  it("Routes a link that skips a band down a lane clear of the cards in the bands it passes", () => {
+    const laid = styledLayout(
+      style("feature-sliced"),
+      [
+        { id: "a", layer: "app" },
+        { id: "p", layer: "pages" },
+        { id: "w", layer: "widgets" },
+        { id: "e", layer: "entities" },
+      ],
+      [],
+      [
+        { source: "a", target: "p" },
+        { source: "p", target: "w" },
+        { source: "w", target: "e" },
+        { source: "a", target: "w" },
+        { source: "a", target: "e" },
+        { source: "p", target: "e" },
+      ],
+    );
+    const at = (id: string) => laid.centers.get(id)!;
+    for (const [s, t, passes] of [["a", "w", ["p"]], ["a", "e", ["p", "w"]], ["p", "e", ["w"]]] as const) {
+      const route = laid.routes?.get(`${s}\0${t}`);
+      expect(route, `${s}→${t}`).toBeDefined();
+      for (const id of passes) {
+        // Beside the card in that band, never across it.
+        const inBand = route!.filter((q) => Math.abs(q.y - at(id).y) <= CARD_H / 2);
+        expect(inBand.length).toBeGreaterThan(0);
+        for (const q of inBand) expect(Math.abs(q.x - at(id).x)).toBeGreaterThanOrEqual(CARD_W / 2);
+      }
+    }
+    // Two lanes through one band never share a line.
+    const xs = ["a\0e", "p\0e"].map((k) => laid.routes!.get(k)!.find((q) => Math.abs(q.y - at("w").y) <= CARD_H / 2)!.x);
+    expect(xs[0]).not.toBe(xs[1]);
+    // The bands widen to hold their lanes.
+    const band = laid.regions.find((r) => r.layer === "widgets")!;
+    if (band.shape !== "rect") throw new Error("band");
+    for (const x of xs) expect(x > band.x && x < band.x + band.w).toBe(true);
+  });
+
+  it("columns: a link that skips a stage runs beside the cards of the stages it passes", () => {
+    const pipe = style("pipeline");
+    const layers = pipe.layers.map((l) => l.name);
+    const laid = styledLayout(
+      pipe,
+      layers.slice(0, 3).map((layer, i) => ({ id: `s${i}`, layer })),
+      [],
+      [
+        { source: "s0", target: "s1" },
+        { source: "s1", target: "s2" },
+        { source: "s0", target: "s2" },
+      ],
+    );
+    const mid = laid.centers.get("s1")!;
+    const route = laid.routes!.get("s0\0s2")!;
+    const inStage = route.filter((q) => Math.abs(q.x - mid.x) <= CARD_W / 2);
+    expect(inStage.length).toBeGreaterThan(0);
+    for (const q of inStage) expect(Math.abs(q.y - mid.y)).toBeGreaterThanOrEqual(CARD_H / 2);
+  });
 });
 
 describe("classifyStyledEdge", () => {
@@ -207,5 +269,65 @@ describe("composition", () => {
     expect(classifyStyledEdge(hex, "presentation", "composition")).toBe("violation");
     expect(classifyStyledEdge(hex, "domain", "composition")).toBe("violation");
     expect(classifyStyledEdge(style("library"), undefined, "composition", { sourceGhost: true })).toBe("implied");
+  });
+});
+
+describe("styled scene", () => {
+  it("Draws the links the drawing implies quiet, routed clear of the cards like the rest", async () => {
+    const model = {
+      version: 1,
+      nodes: [
+        { id: "sys", kind: "system", name: "Sys" },
+        { id: "ui", kind: "container", name: "UI", parentId: "sys", style: "feature-sliced" },
+        { id: "a", kind: "component", name: "app", parentId: "ui", layer: "app" },
+        { id: "p", kind: "component", name: "pages", parentId: "ui", layer: "pages" },
+        { id: "e", kind: "component", name: "entities", parentId: "ui", layer: "entities" },
+      ],
+      links: [
+        { id: "l1", src: "a", dst: "p", label: "", kind: "depends" },
+        { id: "l2", src: "p", dst: "e", label: "", kind: "depends" },
+        { id: "l3", src: "a", dst: "e", label: "", kind: "depends" },
+      ],
+      groups: [],
+    } as unknown as ScryModel;
+    const scene = await buildDiagramScene(model, "ui", null);
+    expect(scene.mode).toBe("styled");
+    const skip = scene.edges.find((e) => e.source === "a" && e.target === "e")!;
+    // Legal, so quiet — and routed all the same.
+    expect(skip.implied).toBe(true);
+    const pages = scene.nodes.find((n) => n.id === "p")!;
+    const inBand = (skip.waypoints ?? []).filter((q) => q.y >= pages.y && q.y <= pages.y + CARD_H);
+    expect(inBand.length).toBeGreaterThan(0);
+    for (const q of inBand) expect(q.x < pages.x || q.x > pages.x + CARD_W).toBe(true);
+  });
+
+  it("Draws a link that leaves the container plain: it says what the drawing cannot", async () => {
+    const model = {
+      version: 1,
+      nodes: [
+        { id: "sys", kind: "system", name: "Sys" },
+        { id: "ui", kind: "container", name: "UI", parentId: "sys", style: "feature-sliced" },
+        { id: "a", kind: "component", name: "app", parentId: "ui", layer: "app" },
+        { id: "e", kind: "component", name: "entities", parentId: "ui", layer: "entities" },
+        { id: "cli", kind: "container", name: "CLI", parentId: "sys" },
+      ],
+      links: [
+        { id: "l1", src: "a", dst: "e", label: "", kind: "depends" },
+      ],
+      groups: [],
+    } as unknown as ScryModel;
+    // The CLI imports app: a ghost, wired to app.
+    const report = {
+      health: { disconnected: [] },
+      anchors: [],
+      derived: { resolvedEdges: [{ srcNode: "cli", dstNode: "a", count: 2 }] },
+      styles: [],
+      structural: { violations: [] },
+    } as unknown as ModelHealthReport;
+    const scene = await buildDiagramScene(model, "ui", report);
+    const inbound = scene.edges.find((e) => e.target === "a")!;
+    expect(scene.nodes.find((n) => n.id === inbound.source)?.reference).toBe(true);
+    expect(inbound.implied).toBe(false);
+    expect(scene.edges.find((e) => e.source === "a" && e.target === "e")?.implied).toBe(true);
   });
 });

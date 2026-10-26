@@ -9,7 +9,6 @@
 
 import { useState } from "react";
 import type { ScryModel } from "../src/entities/model/viewmodel";
-import { EMPTY_DIFF } from "../src/entities/model/planDiff";
 import { DiagramView } from "../src/widgets/diagram-canvas/DiagramView";
 
 export function ExportApp({ model }: { model: ScryModel }) {
@@ -23,7 +22,6 @@ export function ExportApp({ model }: { model: ScryModel }) {
     <div className="h-full w-full">
       <DiagramView
         model={model}
-        planDiff={EMPTY_DIFF}
         report={null}
         focusId={focusId}
         selectedId={selectedId}

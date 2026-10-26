@@ -13,7 +13,10 @@
  *                                 driven side right, composition above
  *
  * Placement is deterministic: the layer fixes the band / ring / column, and
- * the only freedom is the order within it, chosen to shorten links. Ghosts
+ * the only freedom is the order within it, chosen to shorten links. On the
+ * bands, a link that skips a band runs down a lane between the cards of every
+ * band it passes, and the order is the one with the fewest crossings — as on
+ * the box tiers (`c4Layout`). Ghosts
  * (nodes referenced from this level but living elsewhere) sit outside the
  * drawing on the side their traffic comes from.
  *
@@ -22,6 +25,7 @@
  */
 
 import type { Drawing, StyleDef } from "../../entities/model/styles";
+import { LANE_GAP, isLane, laneRoutes, orderStack, placeStack, withLanes } from "./c4Layout";
 
 export interface StyledMember {
   id: string;
@@ -44,6 +48,9 @@ interface RegionMeta {
   caption?: string;
   /** A band of ghosts (nodes living outside this level) — drawn open. */
   ghost?: boolean;
+  /** The C4 boundary of the level's own node: labelled with its name and
+   *  kind, drawn as a frame rather than a band. */
+  boundary?: boolean;
 }
 export type LayerRegion =
   | (RegionMeta & { shape: "rect"; x: number; y: number; w: number; h: number })
@@ -54,12 +61,17 @@ export interface StyledLayout {
   /** Card CENTERS (the caller converts to React Flow's top-left). */
   centers: Map<string, { x: number; y: number }>;
   regions: LayerRegion[];
+  /** Bands only: per link that skips a band (keyed `source\0target`), the
+   *  points it passes on the way, between the cards. */
+  routes?: Map<string, { x: number; y: number }[]>;
 }
 
 export const CARD_W = 180;
 export const CARD_H = 160;
 /** Horizontal pitch between cards in a band. */
 const PITCH_X = 240;
+/** Steps the band order search may take. */
+const SEARCH_BUDGET = 400_000;
 /** Vertical pitch between bands (card plus the band's own label room). */
 const PITCH_Y = 250;
 /** Padding between a card and its region's edge. */
@@ -161,24 +173,21 @@ function bandsLayout(
     ...layered.map((b) => b.ids),
     ...(outGhosts.length ? [outGhosts] : []),
   ];
-  const ordered = orderBands(raw, edges);
-  const widest = Math.max(1, ...ordered.map((b) => b.length));
-  const span = (widest - 1) * PITCH_X;
+  // Every link gets its lane, the quiet ones the drawing implies too.
+  const stack = withLanes(raw, edges.filter((e) => e.source !== e.target));
+  const ordered = orderStack(stack, new Map(), SEARCH_BUDGET).rows;
+  const cx = placeStack(ordered, stack.adj, CARD_W, PITCH_X - CARD_W);
+  const xs = [...cx.entries()].flatMap(([id, x]) => (isLane(id) ? [x - LANE_GAP, x + LANE_GAP] : [x - CARD_W / 2, x + CARD_W / 2]));
+  const x0 = (xs.length ? Math.min(...xs) : -CARD_W / 2) - PAD;
+  const full = (xs.length ? Math.max(...xs) : CARD_W / 2) + PAD - x0;
+  const flip = (p: { x: number; y: number }) => (transpose ? { x: p.y, y: p.x } : p);
 
   const centers = new Map<string, { x: number; y: number }>();
   const regions: LayerRegion[] = [];
   let bandIndex = 0;
   const place = (ids: string[], layer: string | null, ghost = false) => {
-    const w = (ids.length - 1) * PITCH_X;
-    const start = (span - w) / 2;
-    ids.forEach((id, i) => {
-      const along = start + i * PITCH_X;
-      const across = bandIndex * PITCH_Y;
-      centers.set(id, transpose ? { x: across, y: along } : { x: along, y: across });
-    });
+    for (const id of ids) if (!isLane(id)) centers.set(id, flip({ x: cx.get(id)!, y: bandIndex * PITCH_Y }));
     if (layer !== null) {
-      const x0 = -CARD_W / 2 - PAD;
-      const full = span + CARD_W + 2 * PAD;
       const y0 = bandIndex * PITCH_Y - CARD_H / 2 - PAD - LABEL_ROOM;
       const thick = CARD_H + 2 * PAD + LABEL_ROOM;
       const caption = def.layers.find((l) => l.name === layer)?.description;
@@ -194,7 +203,11 @@ function bandsLayout(
   if (inGhosts.length) place(ordered[k++], "called from", true);
   for (const b of layered) place(ordered[k++], b.layer === "?" ? "unlayered" : b.layer);
   if (outGhosts.length) place(ordered[k++], "depends on", true);
-  return { centers, regions };
+  const tops = ordered.map((_, i) => i * PITCH_Y - CARD_H / 2);
+  const routes = new Map(
+    [...laneRoutes(stack, cx, tops, CARD_H)].map(([key, pts]) => [key, pts.map(flip)] as const),
+  );
+  return { centers, regions, routes };
 }
 
 // ── rings ───────────────────────────────────────────────────────────────────
