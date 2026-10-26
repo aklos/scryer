@@ -8,13 +8,15 @@
 
 import { useEffect, useState } from "react";
 import {
+  Check,
   CheckCheck,
+  Circle,
   CircleDashed,
   CornerDownRight,
   Crosshair,
-  FlaskConical,
-  RotateCw,
+  type LucideIcon,
   Tag,
+  Triangle,
   X,
 } from "lucide-react";
 import type { ConcernDef, ScryModel, Responsibility, SourceLocation } from "../../entities/model/viewmodel";
@@ -22,21 +24,19 @@ import { STANDARD_CONCERNS } from "../../entities/model/viewmodel";
 import { lookupIcon } from "../../features/search/IconPicker";
 import type { Editor } from "../../entities/model/editor";
 import type { AnchorState, ClaimProbeStatus, ClaimTestStatus } from "../../entities/model/health";
-import { probeTitle, testLaneGlyph, testLaneTitle, testLaneTone } from "../../entities/model/health";
+import { claimMark, claimMarkLabel, probeTitle, type ClaimMark } from "../../entities/model/health";
 import { FLAG_COLORS } from "../../shared/ui/statusColors";
 import {
   buildElementDiff,
   CHANGE_OF,
   ChangeGlyph,
-  DIFF_ANCHOR,
-  DIFF_TINT,
   type ElementDiff,
   VerdictBar,
   DRIFT_RULE,
   DRIFT_HINT,
 } from "../../entities/model/diffkit";
 import { ClaimTests, respElementId } from "../source-section/SourceSection";
-import { ANCHOR_CALM, earsTestable, hasMarkup, lintEars, MarkupMirror, serializeEars, StatementText, stripMarkup } from "../../entities/model/markup";
+import { ANCHOR_CALM, hasMarkup, lintEars, MarkupMirror, serializeEars, StatementText, stripMarkup } from "../../entities/model/markup";
 import { usePageMenu, useCopyId, copyIdItem } from "../../features/search/pageMenu";
 import {
   BTN,
@@ -50,6 +50,8 @@ import {
 } from "../../shared/ui/pagekit";
 import { RESP_ROW, STMT_HL_HOVER } from "./kit";
 import { onAddClaimRequest } from "../../features/derived-tree/addClaim";
+import type { DerivedClaimStatus } from "../../entities/model/derived";
+import { CLAIM_TONE } from "../../entities/model/claimState";
 
 // --- responsibilities (the diff view) ---------------------------------------
 
@@ -100,43 +102,59 @@ function buildRespDiff(
   }).map(({ item, ...row }) => ({ ...row, resp: item }));
 }
 
-/** The typed-slot prefix of a responsibility row — the element that tells you
- *  what a line is BEFORE you read it. A tagged claim leads with its concern's
- *  glyph (registry icon → standard vocabulary → Tag); untagged core flow leads
- *  with a muted dot. Replaces the old ordinal, which renumbered on every
- *  regroup and meant nothing. */
-function ConcernGlyph({ slug, concerns }: { slug?: string; concerns: ConcernDef[] }) {
-  const entry = slug ? concerns.find((c) => c.slug === slug) : undefined;
-  const description = slug
-    ? (entry?.description ?? STANDARD_CONCERNS.get(slug)?.description)
-    : undefined;
-  const title = slug
-    ? `concern: ${slug}${description ? ` — ${description}` : ""}`
-    : "core domain flow — no concern tag";
-  if (!slug) {
-    return (
-      <span className="inline-flex select-none justify-end pr-1.5" title={title}>
-        <CoreFlowDot />
-      </span>
-    );
-  }
-  const Icon = lookupIcon(entry?.icon ?? STANDARD_CONCERNS.get(slug)?.icon ?? "Tag") ?? Tag;
+const MARK_ICON: Record<ClaimMark, LucideIcon> = {
+  proven: Check,
+  probed: CheckCheck,
+  hollow: Crosshair,
+  failing: X,
+  changed: Triangle,
+  unrun: Circle,
+  todo: CircleDashed,
+};
+
+const MARK_TONE: Record<ClaimMark, string> = {
+  proven: CLAIM_TONE.proven,
+  probed: CLAIM_TONE.proven,
+  hollow: CLAIM_TONE.failing,
+  failing: CLAIM_TONE.failing,
+  changed: CLAIM_TONE.stale,
+  unrun: CLAIM_TONE.stale,
+  todo: CLAIM_TONE.planned,
+};
+
+/** The mark in front of a claim: what its evidence says, before you read
+ *  it, in the one hue its state has on every surface. The only colour on the
+ *  row. Without a mark (no health report yet) it holds the column in a
+ *  ghost ring. Sits centred on the statement's first line. */
+export function ClaimMarker({ mark, label, detail = "" }: { mark?: ClaimMark; label?: string; detail?: string }) {
+  const Icon = mark ? MARK_ICON[mark] : Circle;
+  const said = label ?? (mark ? mark : "no verdict yet");
   return (
-    <span className="inline-flex select-none justify-end pr-1.5 text-[var(--text)]" title={title}>
-      {/* absoluteStrokeWidth: at 16px lucide would scale its 2px stroke down
-          to a faint 1.33px — absolute keeps a full, pixel-aligned 2px so the
-          glyph reads bold and crisp in the lane. */}
-      <Icon absoluteStrokeWidth className="h-4 w-4 translate-y-[3px]" />
+    // One first-line box (text-sm, leading-relaxed): the marker centres on
+    // the statement's first line whatever wraps below it.
+    <span className="flex h-[22.75px] select-none items-center justify-end self-start pr-1.5" title={said + detail} aria-label={said}>
+      {/* absoluteStrokeWidth: at 14px lucide would thin its 2px stroke;
+          absolute keeps it full and pixel-aligned. */}
+      <Icon absoluteStrokeWidth className={`h-3.5 w-3.5 ${mark ? MARK_TONE[mark] : "text-[var(--text-ghost)]"}`} />
     </span>
   );
 }
 
-/** Untagged core flow's marker: a solid muted dot in the box a concern icon
- *  fills, so the lane reads as one system without looking like an empty slot. */
-function CoreFlowDot({ className = "" }: { className?: string }) {
+/** A tagged claim's concern, in the right-hand lane: its glyph (registry icon
+ *  → standard vocabulary → Tag) and name, muted, in one column down the page
+ *  so a concern reads vertically. An untagged claim leaves the lane empty. */
+export function ConcernTag({ slug, concerns }: { slug?: string; concerns: ConcernDef[] }) {
+  if (!slug) return null;
+  const entry = concerns.find((c) => c.slug === slug);
+  const description = entry?.description ?? STANDARD_CONCERNS.get(slug)?.description;
+  const Icon = lookupIcon(entry?.icon ?? STANDARD_CONCERNS.get(slug)?.icon ?? "Tag") ?? Tag;
   return (
-    <span className={`inline-flex h-4 w-4 translate-y-[3px] items-center justify-center ${className}`} aria-hidden="true">
-      <span className="h-1.5 w-1.5 rounded-full bg-[var(--text-tertiary)]" />
+    <span
+      className="absolute right-1 top-[3px] flex max-w-[170px] select-none items-center gap-1 text-2xs text-[var(--text-tertiary)]"
+      title={description ? `${slug} — ${description}` : slug}
+    >
+      <Icon className="h-3 w-3 shrink-0" />
+      <span className="truncate">{slug}</span>
     </span>
   );
 }
@@ -176,10 +194,10 @@ export function ResponsibilitiesSection({
   testMap,
   notes,
   testStates,
+  claimStatuses,
   testVerdicts,
   probeResults,
   projectPath,
-  codeBackedHost,
   mintId,
   editor,
   editing,
@@ -202,16 +220,15 @@ export function ResponsibilitiesSection({
   notes?: Record<string, string>;
   /** respId → fingerprint state of the attached test, when it regressed. */
   testStates: Record<string, AnchorState>;
+  /** respId → the claim's derived status: its row's marker (proven,
+   *  unverified, failing, todo), and the wording a reworded one passed as. */
+  claimStatuses?: Record<string, DerivedClaimStatus>;
   /** respId → recorded test verdict (with re-verified staleness), from the
    *  `get_test_statuses` feed. Colors the test lane. */
   testVerdicts: Record<string, ClaimTestStatus>;
   /** respId → probe result; absent for a claim nobody has probed. */
   probeResults: Record<string, ClaimProbeStatus>;
   projectPath: string | null;
-  /** Whether this host's claims are backed by code at all (not a person, not
-   *  an external). Structural hosts count — a structural When-claim backs onto
-   *  an integration test (rule 22). Gates "untested". */
-  codeBackedHost: boolean;
   /** Mint a fresh claim id clear of every host in BOTH layers (plus the
    *  editor's own draft rows) — claim ids are globally unique, and a per-host
    *  mint can duplicate one across hosts, silently corrupting the diff. */
@@ -280,10 +297,10 @@ export function ResponsibilitiesSection({
               testLocations={testMap[row.resp.id] ?? []}
               note={notes?.[row.resp.id]}
               testState={testStates[row.resp.id] ?? null}
+              claimStatus={claimStatuses?.[row.resp.id]}
               testVerdict={testVerdicts[row.resp.id] ?? null}
               probeResult={probeResults[row.resp.id] ?? null}
               projectPath={projectPath}
-              codeBackedHost={codeBackedHost}
               onRestore={() => restore(row.resp)}
               editor={editor}
             />
@@ -427,10 +444,10 @@ function RespDiffRow({
   testLocations,
   note,
   testState,
+  claimStatus,
   testVerdict,
   probeResult,
   projectPath,
-  codeBackedHost,
   onRestore,
   editor,
 }: {
@@ -444,13 +461,13 @@ function RespDiffRow({
   note?: string;
   /** Fingerprint state of the attached test, when it regressed since reconcile. */
   testState: AnchorState | null;
+  /** The claim's derived status, when the health report has one. */
+  claimStatus?: DerivedClaimStatus;
   /** The claim's recorded test verdict, or null when no run was ingested. */
   testVerdict: ClaimTestStatus | null;
   /** The claim's recorded probe result, or null when nobody probed it. */
   probeResult: ClaimProbeStatus | null;
   projectPath: string | null;
-  /** See {@link ResponsibilitiesSection}: gates "untested", structural hosts included. */
-  codeBackedHost: boolean;
   onRestore: () => void;
   editor: Editor | undefined;
 }) {
@@ -466,21 +483,10 @@ function RespDiffRow({
   const removedDirs =
     kind === "reworded" || kind === "unchanged" ? prevDirs.filter((d) => !directives.includes(d)) : [];
   const reviewable = kind === "vagrant" && host === "node" && editor;
-  // A committed When/While/If claim with no attached test — demonstrable, but
-  // no test is attached (rule 22). Plan-added and vagrant claims don't
-  // nag: the test comes at the build checkpoint, and code-first claims await
-  // a verdict. Not gated on leafHost — structural claims back onto
-  // integration tests.
-  const untested =
-    codeBackedHost &&
-    testLocations.length === 0 &&
-    (kind === "unchanged" || kind === "reworded") &&
-    earsTestable(resp.statement);
-  // The glyph's tested backing: a live claim with a test attached. Added claims
-  // never render their test dimension (see the bleed-spec comment below), and a
-  // deleted/relocated claim is leaving — backing its glyph would dress the
-  // departure as coverage.
-  const tested = kind !== "added" && !deleted && !relocated && testLocations.length > 0;
+  // What a reworded claim last passed as: its statement reads as a diff
+  // from that wording until it passes again.
+  const provenAs = claimStatus?.provenAs;
+  const mark = claimStatus && claimMark(claimStatus.state, testVerdict ?? undefined, probeResult ?? undefined, !!provenAs);
   const contentColor = deleted || relocated
     ? "text-[var(--text-muted)]"
     : kind === "unchanged"
@@ -494,20 +500,27 @@ function RespDiffRow({
       onContextMenu={(e) => openMenu(e, [copyIdItem(resp.id, copyId)])}
       className={`${RESP_ROW} rounded py-[1.5px] [&:not(:first-child)]:mt-2.5`}
     >
-      {kind === "unchanged" ? <span /> : <ChangeGlyph kind={CHANGE_OF[kind]} />}
-      <ConcernGlyph slug={resp.concern} concerns={concerns} />
+      {/* Colour on a claim row is its state's alone (the marker beside):
+          what changed since the last commit reads in plain marks. */}
+      {/* A todo claim's marker already says it is new. */}
+      {kind === "unchanged" || kind === "added" ? <span /> : <ChangeGlyph kind={CHANGE_OF[kind]} plain />}
+      <ClaimMarker
+        mark={mark}
+        label={mark && claimMarkLabel(mark, testVerdict ?? undefined, !!provenAs)}
+        detail={probeTitle(probeResult ?? undefined)}
+      />
       <div className="min-w-0 pr-[180px] font-mono text-sm leading-relaxed">
         <span className={contentColor}>
           {resp.statement ? (
-            kind === "reworded" && prev ? (
-              <WordDiffText from={stripMarkup(prev.statement)} to={stripMarkup(resp.statement)} />
+            provenAs ? (
+              <WordDiffText from={stripMarkup(provenAs)} to={stripMarkup(resp.statement)} plain />
+            ) : kind === "reworded" && prev ? (
+              <WordDiffText from={stripMarkup(prev.statement)} to={stripMarkup(resp.statement)} plain />
             ) : kind === "added" ? (
-              <span className={DIFF_TINT.add}>
-                <StatementText text={resp.statement} anchor={DIFF_ANCHOR.add} />
-              </span>
+              <StatementText text={resp.statement} />
             ) : deleted ? (
-              <span className={DIFF_TINT.delete}>
-                <StatementText text={resp.statement} anchor={DIFF_ANCHOR.delete} />
+              <span className="line-through decoration-[var(--text-ghost)]">
+                <StatementText text={resp.statement} />
               </span>
             ) : (
               <StatementText
@@ -655,88 +668,9 @@ function RespDiffRow({
         )}
       </div>
 
-      {/* The test lane — the 180px control gutter is empty in read mode, so
-          its right edge is an aligned test column, scannable down the page.
-          Two marks, two facts, never conflated: the flask + count means
-          exactly one thing (tests are attached), and the verdict rides
-          BESIDE it as its own glyph — a green check when the last run passed
-          and still holds, an amber ↻ when the code moved past the verdict
-          (re-run to refresh), a red ✗ when a current verdict is failing or
-          errored, and nothing at all when no run was recorded. Green earns a
-          mark of its own precisely because "passing" and "never run" are
-          different states and must not read alike. The flask keeps reading
-          weight while the verdict is fine and takes the tone only when
-          something is wrong, so a page of green claims stays calm. The
-          rule-22 nudge is deliberately NOT a flask — a dashed circle, the
-          page's "expected but absent" mark — so fill-state never carries
-          meaning again. Edit mode swaps the whole section for the editor, so
-          the lane never collides with the hover controls. */}
-      {tested &&
-        (() => {
-          const tone = testLaneTone(testVerdict ?? undefined);
-          const glyph = testLaneGlyph(testVerdict ?? undefined, probeResult ?? undefined);
-          const toneCls =
-            tone === "failing"
-              ? "text-red-600 dark:text-red-400"
-              : tone === "stale"
-                ? "text-orange-600 dark:text-orange-400"
-                : "text-[var(--text-secondary)]";
-          // At most one glyph after the count, and only for something worth a
-          // look. Passing is assumed — nearly every verdict on screen is
-          // green, so any mark for it would be wallpaper — and the flask
-          // stays neutral; the tooltip is where "passing" vs "never run" is
-          // spelled out. Marks are for what is WRONG: stale, failing, or a
-          // probe survivor (red crosshair — a test the verdict calls green did
-          // NOT catch a deliberate break). The one positive mark is the green
-          // double check: probed, every deliberate break caught — verified,
-          // as far as a sample can verify. Nothing for a claim never probed
-          // or whose probe went stale: absence is "nobody measured this".
-          const Glyph =
-            glyph === "probed"
-              ? CheckCheck
-              : glyph === "hollow"
-                ? Crosshair
-                : glyph === "stale"
-                  ? RotateCw
-                  : glyph === "failing"
-                    ? X
-                    : null;
-          const glyphCls =
-            glyph === "probed"
-              ? "text-emerald-600 dark:text-emerald-400"
-              : glyph === "hollow"
-                ? "text-red-600 dark:text-red-400"
-                : "";
-          const glyphLabel =
-            glyph === "stale"
-              ? "Unverified — re-run"
-              : glyph === "failing"
-                ? "Tests failing"
-                : glyph === "probed"
-                  ? "Probed — every deliberate break was caught"
-                  : "A deliberate break went uncaught — this test does not hold the claim";
-          return (
-            <span
-              className={`absolute right-1 top-[3px] flex items-center gap-px font-mono text-2xs ${toneCls}`}
-              title={
-                testLaneTitle(testLocations.length, testVerdict ?? undefined) +
-                probeTitle(probeResult ?? undefined)
-              }
-            >
-              <FlaskConical className="h-3 w-3" aria-label="Tests attached" />
-              {testLocations.length}
-              {Glyph && <Glyph className={`ml-0.5 h-3 w-3 ${glyphCls}`} aria-label={glyphLabel} />}
-            </span>
-          );
-        })()}
-      {untested && (
-        <span
-          className="absolute right-1 top-[3px] flex items-center text-[var(--text-ghost)]"
-          title="This claim names a trigger, state, or failure a test could exercise — but no test is attached (rule 22)."
-        >
-          <CircleDashed className="h-3 w-3" aria-label="No test attached" />
-        </span>
-      )}
+      {/* The concern lane: the 180px control gutter is empty in read mode,
+          so its right edge is an aligned concern column. */}
+      <ConcernTag slug={resp.concern} concerns={concerns} />
     </li>
 
       {/* Directives — each its own grid row so the +/− marker aligns in the
@@ -745,22 +679,22 @@ function RespDiffRow({
         const added = !!prev && !prevDirs.includes(d) && !deleted;
         return (
           <li key={`d${i}`} className={`${RESP_ROW} py-[0.5px]`}>
-            {added ? <ChangeGlyph kind="add" /> : <span className="select-none" />}
+            {added ? <ChangeGlyph kind="add" plain /> : <span className="select-none" />}
             <span className="select-none" />
             <div className="flex min-w-0 items-baseline gap-1.5 pr-[180px] font-mono text-sm leading-relaxed text-[var(--text-tertiary)]">
               <CornerDownRight className="h-3 w-3 shrink-0 translate-y-px not-italic text-[var(--text-ghost)]" />
-              <span className={`min-w-0 ${added ? DIFF_TINT.add : ""}`}>{d}</span>
+              <span className="min-w-0">{d}</span>
             </div>
           </li>
         );
       })}
       {removedDirs.map((d, i) => (
         <li key={`rd${i}`} className={`${RESP_ROW} py-[0.5px]`}>
-          <ChangeGlyph kind="delete" />
+          <ChangeGlyph kind="delete" plain />
           <span className="select-none" />
           <div className="flex min-w-0 items-baseline gap-1.5 pr-[180px] font-mono text-sm leading-relaxed text-[var(--text-tertiary)]">
             <CornerDownRight className="h-3 w-3 shrink-0 translate-y-px not-italic text-[var(--text-ghost)]" />
-            <span className={`min-w-0 ${DIFF_TINT.delete}`}>{d}</span>
+            <span className="min-w-0 text-[var(--text-muted)] line-through decoration-[var(--text-ghost)]">{d}</span>
           </div>
         </li>
       ))}
@@ -797,9 +731,7 @@ function ResponsibilityEditRow({
       <span className="select-none text-center font-mono text-2xs tabular-nums text-[var(--text-ghost)]">
         {index}
       </span>
-      {/* The concern is the test's trailing [tag]: shown, kept on reword,
-          changed in the code. */}
-      <ConcernGlyph slug={resp.concern} concerns={concerns} />
+      <span />
       <div className="min-w-0 font-mono text-sm leading-relaxed">
         <div className="group/srow relative">
           {/* Markered source with the styling visible in place: the mirror
@@ -816,7 +748,9 @@ function ResponsibilityEditRow({
             className="block !pr-[180px]"
           />
           {/* Only the wording edits here: a claim is a test, so deleting
-              it, tagging it or adding a directive happens in the code. */}
+              it, tagging it or adding a directive happens in the code. The
+              concern is the test's trailing [tag]: shown, kept on reword. */}
+          <ConcernTag slug={resp.concern} concerns={concerns} />
         </div>
 
         {lints.length > 0 && (

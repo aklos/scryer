@@ -9,7 +9,8 @@ use scryer_core::test_results::ReportMatch;
 use serde::Serialize;
 
 pub use scryer_core::verdicts::{
-    ClaimProbeStatus, ClaimRecord, ClaimTestStatus, KeptCase, ProbeRecord, TestStatusCache,
+    predecessor, ClaimProbeStatus, ClaimRecord, ClaimTestStatus, KeptCase, ProbeRecord, ProvenAs,
+    TestStatusCache,
 };
 
 /// What one ingested report amounted to.

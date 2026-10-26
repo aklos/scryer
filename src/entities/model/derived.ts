@@ -25,6 +25,9 @@ export interface DerivedClaimStatus {
   state: ClaimState;
   probe?: ProbeMark;
   recordedAt?: number;
+  /** The wording the claim last passed as, when it now reads otherwise: its
+   *  test was reworded since. */
+  provenAs?: string;
 }
 
 export interface DerivedNodeStatus {

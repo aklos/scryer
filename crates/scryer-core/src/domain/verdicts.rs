@@ -29,6 +29,56 @@ pub struct ClaimRecord {
     /// this verdict — what marks a test slow enough to keep out of the radius.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub millis: BTreeMap<String, u64>,
+    /// What the claim said, and where, when its test last passed: the
+    /// baseline a reworded claim is diffed against. Kept through a later red
+    /// run; a green one moves it to the new wording.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proven_as: Option<ProvenAs>,
+}
+
+/// A claim's wording as of its last passing verdict, and its test file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProvenAs {
+    pub file: String,
+    pub statement: String,
+}
+
+/// The record a reworded claim descends from. Rewording a test renames it,
+/// and a renamed test is a new claim, so its old record is left with no
+/// claim (`live` says which ids still have one). Of those orphans, the one
+/// proven in the same test file with the closest wording, if it shares at
+/// least half its words with the new one.
+pub fn predecessor<'a>(
+    records: &'a [ClaimRecord],
+    live: &dyn Fn(&str) -> bool,
+    file: &str,
+    statement: &str,
+) -> Option<&'a ClaimRecord> {
+    let words = word_set(statement);
+    records
+        .iter()
+        .filter(|r| !live(&r.resp_id))
+        .filter_map(|r| {
+            let p = r.proven_as.as_ref().filter(|p| p.file == file)?;
+            let score = likeness(&words, &word_set(&p.statement));
+            (score >= 0.5).then_some((score, r))
+        })
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, r)| r)
+}
+
+fn word_set(s: &str) -> std::collections::BTreeSet<String> {
+    s.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_lowercase).collect()
+}
+
+/// Dice's coefficient over two word sets: 1 for the same words, 0 for none
+/// in common.
+fn likeness(a: &std::collections::BTreeSet<String>, b: &std::collections::BTreeSet<String>) -> f64 {
+    if a.is_empty() && b.is_empty() {
+        return 1.0;
+    }
+    2.0 * a.intersection(b).count() as f64 / (a.len() + b.len()) as f64
 }
 
 /// One claim's probe history: how many deliberate breaks were tried against

@@ -241,6 +241,9 @@ function NodePageBody(props: PageProps & { node: Node }) {
   const [structuralOpen, setStructuralOpen] = useState(false);
   const dataShape = isDataShape(node);
   const resps = node.responsibilities ?? [];
+  // Each claim's derived status: its row's marker, and what a reworded one
+  // last passed as.
+  const claimStatuses = Object.fromEntries((report?.derivedStatus?.claims ?? []).map((c) => [c.respId, c]));
   // The committed copy of this node's claims — the diff base for the Overview.
   const committedResps =
     committed?.nodes.find((n) => n.id === node.id)?.responsibilities ?? [];
@@ -454,10 +457,10 @@ function NodePageBody(props: PageProps & { node: Node }) {
                   testMap={testMap}
                   notes={model.notes}
                   testStates={testStates}
+                  claimStatuses={claimStatuses}
                   testVerdicts={props.testVerdicts}
                   probeResults={props.probeResults}
                   projectPath={projectPath}
-                  codeBackedHost={!node.external && node.kind !== "person"}
                   mintId={(draft) => nextResponsibilityId(draft, model, committed)}
                   editor={editor}
                   editing={ed.isEditing("responsibilities")}

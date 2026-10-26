@@ -285,7 +285,7 @@ mod tests {
     }
 
     fn status(id: &str, state: ClaimState, at: Option<u64>) -> ClaimStatus {
-        ClaimStatus { resp_id: id.into(), node_id: "comp".into(), state, probe: None, outcome: None, recorded_at: at }
+        ClaimStatus { resp_id: id.into(), node_id: "comp".into(), state, probe: None, outcome: None, recorded_at: at, proven_as: None }
     }
 
     fn touch(at: u64, file: &str) -> SessionEntry {

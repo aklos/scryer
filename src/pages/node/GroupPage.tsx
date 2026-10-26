@@ -132,7 +132,6 @@ export function GroupPageBody(props: PageProps & { group: Group }) {
               testVerdicts={props.testVerdicts}
               probeResults={props.probeResults}
               projectPath={projectPath}
-              codeBackedHost // groups organize code-backed members
               mintId={(draft) => nextResponsibilityId(draft, model, committed)}
               editor={editor}
               editing={ed.isEditing("responsibilities")}

@@ -9,6 +9,7 @@ import type { ScryModel, Link, Node, Responsibility } from "./viewmodel";
 import { effectiveTestMap } from "./viewmodel";
 import { earsTestable } from "./markup";
 import type { Completeness } from "./completeness";
+import type { ClaimState } from "./derived";
 
 /** Health counters over one scope — a node's own content, or a whole subtree. */
 export interface HealthCounts {
@@ -254,26 +255,48 @@ export function probeMark(
   return probe.survived > 0 ? "hollow" : "probed";
 }
 
-/** The ONE glyph the lane may show after the flask and count — and only when
- *  there is something to look at. Passing is the resting state and gets NO
- *  glyph: nearly every verdict on screen is green, and a mark that is
- *  everywhere is a mark nobody reads (the tooltip still says passing vs.
- *  never run). Glyphs are for what is wrong — `stale` and `failing` on the
- *  verdict, `hollow` (red crosshair — a deliberate break went uncaught, the
- *  finding) from a probe — plus the one earned positive, `probed` (green
- *  double check: every deliberate break was caught; verified, as far as a
- *  sample verifies). A stale or failing verdict keeps its
- *  own glyph: the probe is fingerprinted on the same anchors, so it is stale
- *  whenever the verdict is, and a currently-failing test is the louder fact. */
-export function testLaneGlyph(
+/** What the mark in front of a claim says: its state, with the probe's word
+ *  on a proven one — `probed` (every deliberate break was caught: a sample,
+ *  not a proof) or `hollow` (a break went uncaught, so the green test does
+ *  not hold the claim). An unverified claim says why: `changed` since it last
+ *  ran (its code or test, or `reworded` from what it passed as), or
+ *  `unrun`. A failing or changed claim keeps its own mark: the probe
+ *  is fingerprinted on the same anchors, and the red verdict is the louder
+ *  fact. */
+export type ClaimMark = "proven" | "probed" | "hollow" | "failing" | "changed" | "unrun" | "todo";
+
+export function claimMark(
+  state: ClaimState,
   verdict: ClaimTestStatus | undefined,
   probe: ClaimProbeStatus | undefined,
-): "none" | "stale" | "failing" | "probed" | "hollow" {
-  const tone = testLaneTone(verdict);
-  if (tone === "quiet") return "none";
-  if (tone !== "passing") return tone;
+  reworded = false,
+): ClaimMark {
+  if (state === "planned") return "todo";
+  if (state === "failing") return "failing";
+  if (state === "stale") return verdict || reworded ? "changed" : "unrun";
   const mark = probeMark(probe);
-  return mark === "none" ? "none" : mark;
+  return mark === "none" ? "proven" : mark;
+}
+
+/** The mark in words, for its label. */
+export function claimMarkLabel(mark: ClaimMark, verdict: ClaimTestStatus | undefined, reworded = false): string {
+  switch (mark) {
+    case "proven":
+      return "proven";
+    case "probed":
+      return "proven · every deliberate break was caught";
+    case "hollow":
+      return "a deliberate break went uncaught: the test does not hold this claim";
+    case "failing":
+      return "failing";
+    case "changed":
+      if (reworded) return "reworded since it passed: re-run";
+      return verdict?.outcome === "passed" ? "changed since it passed: re-run" : "changed since it last ran: re-run";
+    case "unrun":
+      return "not run yet";
+    case "todo":
+      return "todo";
+  }
 }
 
 /** The probe half of the lane tooltip. Says "sampled, not proved" outright:

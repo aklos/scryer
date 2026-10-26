@@ -152,13 +152,40 @@ fn store_results_on(r: &ModelRef, model: &ScryModel, report: &ReportMatch) -> Re
     let mut project_files: Option<BTreeSet<String>> = None;
     let recorded_at = now_secs();
 
+    // Each claim's wording and test file, for the wording it is proven as.
+    let wording: HashMap<&str, ProvenAs> = model
+        .nodes
+        .iter()
+        .flat_map(|n| n.responsibilities.iter())
+        .chain(model.groups.iter().flat_map(|g| g.responsibilities.iter()))
+        .filter_map(|resp| {
+            let file = model.test_map.get(&resp.id)?.first()?.pattern.clone();
+            Some((resp.id.as_str(), ProvenAs { file, statement: resp.statement.clone() }))
+        })
+        .collect();
+    let is_live = |id: &str| wording.contains_key(id);
+
     let mut claims: Vec<(&String, &scryer_core::test_results::ClaimOutcome)> =
         report.claims.iter().collect();
     claims.sort_by_key(|(id, _)| id.as_str());
     for (resp_id, verdict) in &claims {
         let fingerprints =
             claim_fingerprints(&model, resp_id, project, &mut files, &mut project_files);
+        let now = wording.get(resp_id.as_str());
+        // A green run proves the claim as it now reads; a red one keeps what
+        // it last passed as, its own or, reworded, its old record's.
+        let proven_as = if verdict.outcome == scryer_core::test_results::TestOutcome::Passed {
+            now.cloned()
+        } else {
+            match cache.results.iter().find(|c| &&c.resp_id == resp_id) {
+                Some(existing) => existing.proven_as.clone(),
+                None => now
+                    .and_then(|w| predecessor(&cache.results, &is_live, &w.file, &w.statement))
+                    .and_then(|p| p.proven_as.clone()),
+            }
+        };
         let record = ClaimRecord {
+            proven_as,
             resp_id: (*resp_id).clone(),
             outcome: verdict.outcome,
             cases: verdict.cases,
@@ -551,6 +578,36 @@ mod tests {
     fn fresh_statuses(r: &ModelRef) -> Vec<ClaimTestStatus> {
         ingest_report_file(r, REPORT).unwrap();
         read_test_statuses(r).unwrap()
+    }
+
+    /// When a reworded claim's first run is red, keeps the wording its old
+    /// test passed as; a green run moves it to the new wording.
+    #[test]
+    fn a_reworded_claim_keeps_its_proven_wording_until_it_passes() {
+        let (_dir, r) = project();
+        fresh_statuses(&r);
+        let mut m = TEST_MODEL.with(|c| c.borrow().clone()).unwrap();
+        let resp = &mut m.nodes[0].responsibilities[0];
+        resp.id = "r2".into();
+        resp.statement = "answers exactly one".into();
+        for map in [&mut m.source_map, &mut m.test_map] {
+            let locs = map.remove("r1").unwrap();
+            map.insert("r2".into(), locs);
+        }
+        m.test_map.get_mut("r2").unwrap()[0].symbol = Some("answers exactly one".into());
+        use_model(&m);
+        let report = |body: &str| {
+            format!(
+                r#"<testsuites><testsuite name="s"><testcase classname="src/m.spec.ts" name="alpha &gt; answers exactly one">{body}</testcase></testsuite></testsuites>"#
+            )
+        };
+        let proven = |r: &ModelRef| {
+            read_cache(r).results.iter().find(|c| c.resp_id == "r2").unwrap().proven_as.clone().unwrap().statement
+        };
+        ingest_report_file(&r, &report("<failure/>")).unwrap();
+        assert_eq!(proven(&r), "answers one");
+        ingest_report_file(&r, &report("")).unwrap();
+        assert_eq!(proven(&r), "answers exactly one");
     }
 
     /// While nothing changed, a recorded outcome reads fresh.

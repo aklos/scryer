@@ -18,6 +18,9 @@ export const TECHNOLOGY_MAX = 80;
 export const NAME_MAX = 40;
 
 const DIFF_ADDED = "rounded-xs bg-emerald-500/15 px-px text-emerald-700 dark:text-emerald-300";
+/** `plain`: where colour already means something else (a claim row's hue is
+ *  its state), added words are underlined in the row's own ink instead. */
+const DIFF_ADDED_PLAIN = "underline decoration-[var(--text-tertiary)] underline-offset-2";
 
 /** Inline word-level diff: unchanged text plain, added words highlighted, removed
  *  words struck through. Used for reworded claims, descriptions, and link labels.
@@ -28,7 +31,7 @@ const DIFF_ADDED = "rounded-xs bg-emerald-500/15 px-px text-emerald-700 dark:tex
  *  no global body ink to fall back on — the root sets a canvas background and
  *  nothing else, so a bare wrapper falls through to the browser's black and the
  *  unchanged words vanish in dark mode, as the Changes page rows once did). */
-export function WordDiffText({ from, to }: { from: string; to: string }) {
+export function WordDiffText({ from, to, plain = false }: { from: string; to: string; plain?: boolean }) {
   const segs = wordDiff(from, to);
   return (
     <>
@@ -44,9 +47,9 @@ export function WordDiffText({ from, to }: { from: string; to: string }) {
             {s.kind === "equal" ? (
               <span>{s.text}</span>
             ) : s.kind === "added" ? (
-              <span className={DIFF_ADDED}>{s.text}</span>
+              <span className={plain ? DIFF_ADDED_PLAIN : DIFF_ADDED}>{s.text}</span>
             ) : (
-              <del className="text-red-700 decoration-red-400/60 dark:text-red-400/90">
+              <del className={plain ? "text-[var(--text-muted)]" : "text-red-700 decoration-red-400/60 dark:text-red-400/90"}>
                 {s.text}
               </del>
             )}

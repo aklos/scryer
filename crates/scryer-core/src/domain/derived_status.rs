@@ -9,7 +9,7 @@ use crate::domain::derived_tree::{DerivedClaim, DerivedTree};
 use crate::domain::model::Kind;
 use crate::domain::test_results::TestOutcome;
 use crate::domain::verdicts::{
-    ClaimProbeStatus, ClaimTestStatus, MutantTally, MutationCache, TestStatusCache,
+    predecessor, ClaimProbeStatus, ClaimTestStatus, MutantTally, MutationCache, TestStatusCache,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -46,6 +46,10 @@ pub struct ClaimStatus {
     pub outcome: Option<TestOutcome>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recorded_at: Option<u64>,
+    /// The wording the claim last passed as, when it now says something
+    /// else: its test was reworded since (see [`predecessor`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proven_as: Option<String>,
 }
 
 /// Health counters over one scope — a node's own content, or its subtree.
@@ -179,9 +183,20 @@ pub fn compute_derived_status(
         }
     }
 
+    let live: std::collections::HashSet<&str> = tree.claims.iter().map(|c| c.id.as_str()).collect();
+    let is_live = |id: &str| live.contains(id);
     let mut own: HashMap<&str, DerivedCounts> = HashMap::new();
     for c in &tree.claims {
         let record = cache.results.iter().find(|r| r.resp_id == c.id);
+        // A claim that never ran may be a reworded one: its old record
+        // remembers what it passed as.
+        let proven_as = match record {
+            _ if c.planned => None,
+            Some(r) => r.proven_as.as_ref(),
+            None => predecessor(&cache.results, &is_live, &c.file, &c.description).and_then(|p| p.proven_as.as_ref()),
+        }
+        .filter(|p| p.statement != c.description)
+        .map(|p| p.statement.clone());
         let current = record.filter(|r| !r.fingerprints.is_empty() && fresh(&c.id, &r.fingerprints, r.recorded_at));
         let state = if c.planned {
             ClaimState::Planned
@@ -247,6 +262,7 @@ pub fn compute_derived_status(
             probe,
             outcome: record.map(|r| r.outcome),
             recorded_at: record.map(|r| r.recorded_at),
+            proven_as,
         });
     }
 
@@ -372,6 +388,7 @@ mod tests {
             recorded_at: 100,
             fingerprints: BTreeMap::from([(format!("test:{id}|src/a.rs|{id}"), fp.to_string())]),
             millis: BTreeMap::new(),
+            proven_as: None,
         }
     }
 
@@ -449,6 +466,47 @@ mod tests {
         let app = &s.nodes["app"].subtree;
         assert_eq!((app.claims, app.untested_components, app.dark_files), (5, 1, 1));
         assert_eq!(s.totals, s.nodes["sys"].subtree);
+    }
+
+    fn proven(id: &str, file: &str, statement: &str) -> ClaimRecord {
+        ClaimRecord {
+            proven_as: Some(crate::domain::verdicts::ProvenAs { file: file.into(), statement: statement.into() }),
+            ..record(id, TestOutcome::Passed, "h1")
+        }
+    }
+
+    /// When a claim's test was reworded since it passed, carries the wording
+    /// it passed as; a claim that still reads as it passed carries none.
+    #[test]
+    fn a_reworded_claim_carries_the_wording_it_passed_as() {
+        let mut t = tree();
+        t.claims[3].description = "answers exactly one".into(); // "unrun", renamed
+        let cache = TestStatusCache {
+            results: vec![proven("green", "src/a.rs", "green"), proven("gone", "src/a.rs", "answers one")],
+            ..Default::default()
+        };
+        let mut fresh = |_: &str, _: &BTreeMap<String, String>, _: u64| true;
+        let s = compute_derived_status(&t, &cache, &MutationCache::default(), &mut fresh);
+        let was = |id: &str| s.claims.iter().find(|c| c.resp_id == id).unwrap().proven_as.clone();
+        assert_eq!(was("unrun").as_deref(), Some("answers one"));
+        assert_eq!(s.claims.iter().find(|c| c.resp_id == "unrun").unwrap().state, ClaimState::Stale, "until it runs");
+        assert_eq!(was("green"), None);
+        assert_eq!(was("todo"), None, "a todo stub has nothing to diff");
+    }
+
+    /// If the only orphaned record shares under half its words with the
+    /// claim, or was proven in another test file, pairs the claim with
+    /// nothing.
+    #[test]
+    fn an_unlike_or_elsewhere_record_is_no_predecessor() {
+        let mut t = tree();
+        t.claims[3].description = "answers exactly one".into();
+        let mut fresh = |_: &str, _: &BTreeMap<String, String>, _: u64| true;
+        for gone in [proven("gone", "src/a.rs", "rejects a stale token"), proven("gone", "src/z.rs", "answers one")] {
+            let cache = TestStatusCache { results: vec![gone], ..Default::default() };
+            let s = compute_derived_status(&t, &cache, &MutationCache::default(), &mut fresh);
+            assert_eq!(s.claims.iter().find(|c| c.resp_id == "unrun").unwrap().proven_as, None);
+        }
     }
 
     /// When a probe survived, or a mutation report's surviving mutant was

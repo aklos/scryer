@@ -16,6 +16,7 @@ import { AgentMark } from "../../shared/ui/pagekit";
 import type { AgentSession } from "../../features/agent-launch/useAgentSession";
 import { darkBoundaries, type ModelHealthReport } from "../../entities/model/health";
 import { AGENT_LABEL, type ResolvedLaunch } from "../../features/agent-launch/launchSettings";
+import { CLAIM_LABEL } from "../../entities/model/claimState";
 import type { ScryModel } from "../../entities/model/viewmodel";
 import type { SpecialPage } from "../../entities/model/navigation";
 
@@ -83,7 +84,8 @@ export function Powerline({ model, agent, health, launch, onOpenSpecial, onOpenS
             <span className="pl-strong font-medium">{counts.proven}</span>
             <span className="text-[var(--text-secondary)]">proven</span>
             <span className="text-[var(--text-tertiary)]">
-              · {counts.stale} stale · {counts.failing} failing · {counts.planned} todo
+              · {counts.stale} {CLAIM_LABEL.stale} · {counts.failing} {CLAIM_LABEL.failing} · {counts.planned}{" "}
+              {CLAIM_LABEL.planned}
             </span>
           </>
         ) : (

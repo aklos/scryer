@@ -59,12 +59,16 @@ export function kindOfGlyph(glyph: string): ChangeKind | undefined {
 export function ChangeGlyph({
   kind,
   className = "text-xs",
+  plain = false,
 }: {
   kind: ChangeKind;
   className?: string;
+  /** In a neutral tone, where colour already means something else (a claim
+   *  row's hue is its state). */
+  plain?: boolean;
 }) {
   return (
-    <span className={`select-none text-center font-mono font-bold ${CHANGE_COLOR[kind]} ${className}`}>
+    <span className={`select-none text-center font-mono font-bold ${plain ? "text-[var(--text-tertiary)]" : CHANGE_COLOR[kind]} ${className}`}>
       {KIND_GLYPH[kind]}
     </span>
   );

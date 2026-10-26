@@ -209,6 +209,7 @@ mod tests {
                 recorded_at: now + 2,
                 fingerprints: [("test:resp-1|t.rs|ok".to_string(), "h".to_string())].into(),
                 millis: Default::default(),
+                proven_as: None,
             }],
             ..Default::default()
         };
