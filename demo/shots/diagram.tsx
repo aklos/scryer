@@ -75,7 +75,7 @@ export function Diagram({
   clipLeft,
   film,
   edgeReveal,
-  hideImplied = true,
+  hideConforming = true,
   selected,
   tint,
   place,
@@ -97,9 +97,9 @@ export function Diagram({
   /** Frame-pixel sizes for the text the viewer reads, and the edge width. */
   film?: { title: number; count: number; label: number; flag: number; edge: number };
   /** Per edge (by source→target names' ids), how drawn it is (0–1); an
-   *  edge with no entry is fully drawn. Implied edges show only through it. */
-  edgeReveal?: (e: { id: string; source: string; target: string; implied?: boolean; violation: boolean }) => number | undefined;
-  hideImplied?: boolean;
+   *  edge with no entry is fully drawn. Conforming edges show only through it. */
+  edgeReveal?: (e: { id: string; source: string; target: string; conforming?: boolean; violation: boolean }) => number | undefined;
+  hideConforming?: boolean;
   /** A card the shot is about, drawn selected. */
   selected?: string;
   /** Where to set cards by name, over the scene's own placement: reference
@@ -177,8 +177,8 @@ export function Diagram({
     );
     for (const [i, e] of now.edges.entries()) {
       const violation = !!e.violations?.length;
-      const reveal = edgeReveal?.({ id: e.id, source: e.source, target: e.target, implied: e.implied, violation });
-      if (e.implied && hideImplied && reveal === undefined) continue;
+      const reveal = edgeReveal?.({ id: e.id, source: e.source, target: e.target, conforming: e.conforming, violation });
+      if (e.conforming && hideConforming && reveal === undefined) continue;
       if (reveal !== undefined && reveal <= 0) continue;
       const id = `film-edge-${i}`;
       if (reveal !== undefined) edgeStyles += `.react-flow__edge[data-id="${id}"] { opacity: ${reveal}; }\n`;
@@ -190,7 +190,7 @@ export function Diagram({
         selectable: false,
         sourceHandle: handles.get(e.id)?.sourceHandle,
         targetHandle: handles.get(e.id)?.targetHandle,
-        className: e.implied ? "shot-implied" : undefined,
+        className: e.conforming ? "shot-conforming" : undefined,
         data: { bow: e.bow, violations: e.violations, label: film ? undefined : e.label || undefined },
       });
     }

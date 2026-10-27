@@ -37,15 +37,13 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { ChevronRight, CornerLeftUp, Maximize } from "lucide-react";
+import { ChevronRight, CornerLeftUp, Maximize, Spline } from "lucide-react";
 import type { ScryModel } from "../../entities/model/viewmodel";
 import { concernCounts } from "../../entities/model/viewmodel";
 import { attentionState, childTally, CLAIM_TONE } from "../../entities/model/claimState";
 import { SYMBOL_ICON } from "../../entities/model/kindIcon";
-import { assignAllHandles, getHandlePositions } from "../../shared/diagram/edgeRouting";
-import { edgeShape } from "../../shared/diagram/edgeGeometry";
 import { placeLabels } from "../../shared/diagram/labelPlacement";
-import { assignPorts, orthoRoutes, portPoint, type Side } from "./edgePorts";
+import { edgeLines, linePoints } from "./edgeLines";
 import { DiagramCard, type CardData, type RFCard } from "./DiagramCard";
 import { CenterHandle } from "../../shared/diagram/NodeHandles";
 import { RelationshipEdge, edgeText, type EdgeData } from "../../shared/diagram/RelationshipEdge";
@@ -56,6 +54,13 @@ import { structuralBySubtree, type ModelHealthReport } from "../../entities/mode
 
 type DotData = CardData;
 type RFDot = RFNode<DotData, "dot">;
+
+/** Whether an edge shows: always, unless it conforms to the level's style
+ *  and the map's conforming-links control is off — then only while a
+ *  selection reaches one of its ends. */
+export function edgeShown(conforming: boolean, showConforming: boolean, lit: boolean): boolean {
+  return !conforming || showConforming || lit;
+}
 
 /** The class word for a symbol's label, now that its glyph says it. */
 const SYMBOL_CLASS_LABEL: Record<DiagramNode["symbolClass"], string> = {
@@ -148,7 +153,7 @@ export function DiagramView({
   model: ScryModel;
   /** Symbol ids the preview sidecar can render — derived, drives the `visual` class. */
   previewable: ReadonlySet<string>;
-  /** Health report — its derived edges drive the implied-connection ghosts,
+  /** Health report — its derived edges drive the ghosts (cards outside the level),
    *  its derived status the claim bar on each card. */
   report: ModelHealthReport | null;
   /** The level being shown: children of this node, or top-level when null. */
@@ -215,6 +220,9 @@ function DiagramInner({
   // changes without it is treated as un-measured: RF hides it and aborts the
   // drag (the "card vanishes and the pane pans" bug).
   const [rfNodes, setRfNodes] = useState<Array<RFCard | RFDot>>([]);
+  // The edges that conform to a level's style, shown quiet or (from the map
+  // controls) hidden until a selection reaches one of their ends.
+  const [showConforming, setShowConforming] = useState(true);
 
   // Build the scene whenever the level or the model changes. The build is
   // async; guard against a stale build landing after a newer one.
@@ -345,9 +353,13 @@ function DiagramInner({
     });
   }, [scene, selectedId, claimsOf, highlight, pendingIds, structural, concernLit, dotSim.live]);
 
-  const rfEdges = useMemo<RFEdge<EdgeData>[]>(() => {
-    if (!scene) return [];
-    // Each card's box, at its measured size once React Flow has measured it.
+  // Each card's box, at its measured size once React Flow has measured it, and
+  // each edge's ends and turns over them (as the layout-quality score reads
+  // them too). Routing is the costly part, so it reruns only when the scene
+  // or a card's size changes, never on a selection.
+  const sizeKey = rfNodes.map((n) => `${n.id}:${n.measured?.width ?? ""}x${n.measured?.height ?? ""}`).join("|");
+  const geometry = useMemo(() => {
+    if (!scene) return null;
     const liveNode = new Map(rfNodes.map((n) => [n.id, n] as const));
     const boxes = scene.nodes.map((n) => {
       const live = liveNode.get(n.id);
@@ -359,40 +371,13 @@ function DiagramInner({
         h: live?.measured?.height ?? CARD_H,
       };
     });
-    const boxOf = new Map(boxes.map((b) => [b.id, b]));
-    // A drawing that runs one way — the C4 stack of rows, a style's bands or
-    // columns — meets its cards at ports along that flow (`assignPorts`).
-    // Rings and the hexagon have no one direction: the nearest handle pair.
-    const drawing = scene.styled?.drawing;
-    const flow =
-      scene.mode === "arch" || drawing === "rows" ? "down" : drawing === "columns" ? "across" : null;
-    const ports = flow
-      ? assignPorts(boxes, scene.edges, flow, new Set(scene.nodes.filter((n) => n.aside).map((n) => n.id)))
-      : null;
-    // Each edge on a port drawing as straight runs and turns between its ports.
-    const turns = ports
-      ? orthoRoutes(
-          scene.edges.flatMap((e) => {
-            const p = ports.get(e.id);
-            const s = boxOf.get(e.source), t = boxOf.get(e.target);
-            if (!p || !s || !t) return [];
-            return [{
-              id: e.id,
-              start: portPoint(s, p.sourceSide, p.sourceShift),
-              end: portPoint(t, p.targetSide, p.targetShift),
-              axis: p.flow,
-              waypoints: e.waypoints,
-            }];
-          }),
-        )
-      : null;
-    const handles =
-      scene.mode !== "code" && !ports
-        ? assignAllHandles(
-            boxes.map((b) => ({ id: b.id, position: { x: b.x, y: b.y }, measured: { width: b.w, height: b.h } })),
-            scene.edges,
-          )
-        : null;
+    return { boxes, boxOf: new Map(boxes.map((b) => [b.id, b])), lines: edgeLines(scene, boxes) };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `sizeKey` stands for the sizes read off `rfNodes`
+  }, [scene, sizeKey]);
+
+  const rfEdges = useMemo<RFEdge<EdgeData>[]>(() => {
+    if (!scene || !geometry) return [];
+    const { boxes, boxOf, lines } = geometry;
     // Dot radius per node, so the edge insets to the rim of each (now variable-
     // sized) dot instead of a fixed guess.
     const radius =
@@ -404,24 +389,14 @@ function DiagramInner({
     const ghostIds = new Set(
       scene.nodes.filter((n) => n.reference).map((n) => n.id),
     );
-    // Count edges per unordered node pair, so a reverse edge between the same
-    // two nodes can be split into parallel lanes. Needed on both tiers: code
-    // edges share a center handle and arch reverse pairs are routed onto the
-    // same swapped handles, so either way the two chords land exactly collinear.
-    const pairCount = new Map<string, number>();
-    for (const e of scene.edges) {
-      const k = e.source < e.target ? `${e.source}\0${e.target}` : `${e.target}\0${e.source}`;
-      pairCount.set(k, (pairCount.get(k) ?? 0) + 1);
-    }
     // Every edge is drawn; one the drawing already implies (a legal step
     // between a style's layers, a tooling link) sits quiet, so the ones that
-    // say something new stand out. A selection lights, it never reveals.
+    // say something new stand out — or, with the map control off, hides until
+    // a selection reaches one of its ends.
     const out = scene.edges.map((e) => {
-      const port = ports?.get(e.id);
-      const h = port ? { sourceHandle: port.sourceSide, targetHandle: port.targetSide } : handles?.get(e.id);
+      const line = lines.get(e.id)!;
       const connected = highlight.active && (e.source === selectedId || e.target === selectedId);
       const ghostEdge = ghostIds.has(e.source) || ghostIds.has(e.target);
-      const pairKey = e.source < e.target ? `${e.source}\0${e.target}` : `${e.target}\0${e.source}`;
       return {
         id: e.id,
         source: e.source,
@@ -431,16 +406,18 @@ function DiagramInner({
         // Generation choreography (demo-only, like the card `pending` flag): an
         // edge into a node that hasn't generated yet stays out of the frame
         // entirely — it arrives with the node, not before it.
-        hidden: pendingIds ? pendingIds.has(e.source) || pendingIds.has(e.target) : undefined,
-        sourceHandle: scene.mode === "code" ? "c" : h?.sourceHandle,
-        targetHandle: scene.mode === "code" ? "c" : h?.targetHandle,
+        hidden:
+          (pendingIds ? pendingIds.has(e.source) || pendingIds.has(e.target) : false) ||
+          !edgeShown(e.conforming, showConforming, connected),
+        sourceHandle: scene.mode === "code" ? "c" : line.sourceHandle,
+        targetHandle: scene.mode === "code" ? "c" : line.targetHandle,
         data: {
-          bow: e.bow,
-          waypoints: turns ? turns.get(e.id) : e.waypoints,
-          sourceShift: port?.sourceShift,
-          targetShift: port?.targetShift,
+          bow: line.bow,
+          waypoints: line.waypoints,
+          sourceShift: line.sourceShift,
+          targetShift: line.targetShift,
           violations: e.violations,
-          quiet: e.implied,
+          quiet: e.conforming,
           label: ghostEdge ? undefined : e.label || undefined,
           method: ghostEdge ? undefined : e.method,
           dot: scene.mode === "code",
@@ -450,8 +427,7 @@ function DiagramInner({
           dimmed:
             (highlight.active && !connected) ||
             (concernLit !== null && (!concernLit.has(e.source) || !concernLit.has(e.target))),
-          // Ports already part a reverse pair onto two lines.
-          parallel: !port && (pairCount.get(pairKey) ?? 0) > 1,
+          parallel: line.parallel,
         },
       };
     });
@@ -459,33 +435,20 @@ function DiagramInner({
     // pills and cards (`placeLabels`) — read off the same line the edge draws.
     if (scene.mode !== "code") {
       const shown = out.filter((e) => !e.hidden && boxOf.has(e.source) && boxOf.has(e.target));
-      const end = (id: string, handle: string | undefined, shift: number | undefined, fallback: "left" | "right") => {
-        const b = boxOf.get(id)!;
-        const side = (handle ?? fallback) as Side;
-        return ["top", "bottom", "left", "right"].includes(side)
-          ? portPoint(b, side, shift ?? 0)
-          : getHandlePositions({ id, position: { x: b.x, y: b.y }, measured: { width: b.w, height: b.h } })[
-              side as unknown as "right"
-            ];
-      };
       const spots = placeLabels(
-        shown.map((e) => {
-          const s = end(e.source, e.sourceHandle, e.data.sourceShift, "right");
-          const t = end(e.target, e.targetHandle, e.data.targetShift, "left");
-          return {
-            id: e.id,
-            points: edgeShape(s.x, s.y, t.x, t.y, e.data).points,
-            label: edgeText(e.data),
-            method: e.data.method,
-            pair: e.data.parallel ? [e.source, e.target].sort().join("\0") : undefined,
-          };
-        }),
+        shown.map((e) => ({
+          id: e.id,
+          points: linePoints(e, lines.get(e.id)!, boxOf),
+          label: edgeText(e.data),
+          method: e.data.method,
+          pair: e.data.parallel ? [e.source, e.target].sort().join("\0") : undefined,
+        })),
         boxes,
       );
       for (const e of out) (e.data as EdgeData).labelAt = spots.get(e.id);
     }
     return out;
-  }, [scene, rfNodes, selectedId, highlight, concernLit, pendingIds]);
+  }, [scene, geometry, selectedId, highlight, concernLit, pendingIds, showConforming]);
 
   // Fit the whole drawing — the cards and the regions behind them — so a
   // ring or a band label is never cut off at the edge.
@@ -668,6 +631,15 @@ function DiagramInner({
                 title="Fit view"
               >
                 <Maximize />
+              </ControlButton>
+              <ControlButton
+                onClick={() => setShowConforming((v) => !v)}
+                aria-pressed={showConforming}
+                aria-label={showConforming ? "Hide links that conform to the style" : "Show links that conform to the style"}
+                title="Conforming links"
+                style={showConforming ? undefined : { opacity: 0.45 }}
+              >
+                <Spline />
               </ControlButton>
             </Controls>
           </ReactFlow>

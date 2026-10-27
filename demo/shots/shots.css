@@ -74,9 +74,9 @@
   stroke-width: var(--film-edge) !important;
 }
 
-/* Implied edges (the inward dependencies a style draws) take the accent
+/* Conforming edges (the inward dependencies a style draws) take the accent
    when a beat shows them. */
-.shot-hex .react-flow__edge.shot-implied path {
+.shot-hex .react-flow__edge.shot-conforming path {
   stroke: var(--accent) !important;
 }
 

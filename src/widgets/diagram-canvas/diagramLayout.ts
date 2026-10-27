@@ -85,9 +85,10 @@ export interface DiagramEdge {
   method?: string;
   /** What the link is, when declared (styled containers). */
   kind?: string;
-  /** Styled mode: the drawing already says this (a step into the innermost
-   *  layer, an adapter onto its port) — hidden until one end is selected. */
-  implied: boolean;
+  /** A real dependency that conforms to the level's style (a legal step
+   *  between its layers), or a tooling link, held to no style: the drawing
+   *  already says it, so it draws quiet. */
+  conforming: boolean;
   /** Styled mode: both ends sit on one ring or band, so the straight chord
    *  would cut through what lies between — bow it away from `(cx, cy)`, the
    *  curve's middle displaced `offset` px from the chord's midpoint. */
@@ -252,7 +253,7 @@ export async function buildDiagramScene(
     if (source === target) return;
     const key = `${source}\0${target}`;
     if (edgeMap.has(key)) return;
-    edgeMap.set(key, { id: linkId, source, target, label, method, kind, implied: false });
+    edgeMap.set(key, { id: linkId, source, target, label, method, kind, conforming: false });
   };
   for (const link of model.links) {
     const s = liftToLevel(link.src);
@@ -270,7 +271,7 @@ export async function buildDiagramScene(
   // dropping them here is what left the arch tiers ghost-less. Counts sum per
   // (child, ghost) and show as ×n.
   if (focusId !== null) {
-    const implied = new Map<string, { source: string; target: string; ghost: string; count: number }>();
+    const crossing = new Map<string, { source: string; target: string; ghost: string; count: number }>();
     for (const e of report?.derived.resolvedEdges ?? []) {
       const srcChild = liftToLevel(e.srcNode);
       const dstChild = liftToLevel(e.dstNode);
@@ -283,13 +284,13 @@ export async function buildDiagramScene(
       const source = srcIn ? child : ghost;
       const target = srcIn ? ghost : child;
       const key = source + ">" + target;
-      const cur = implied.get(key);
+      const cur = crossing.get(key);
       if (cur) cur.count += e.count;
-      else implied.set(key, { source, target, ghost, count: e.count });
+      else crossing.set(key, { source, target, ghost, count: e.count });
     }
-    for (const e of implied.values()) {
+    for (const e of crossing.values()) {
       ghostIds.add(e.ghost);
-      addEdge("implied:" + e.source + ">" + e.target, "×" + e.count, undefined, e.source, e.target);
+      addEdge("import:" + e.source + ">" + e.target, "×" + e.count, undefined, e.source, e.target);
     }
     // A declared link to a person or an external (a container's `uses` in
     // structure.toml) has no import behind it, so it ghosts that node here.
@@ -408,7 +409,7 @@ export async function buildDiagramScene(
       if (existing) {
         existing.violations ??= [];
         if (!existing.violations.includes(v.detail)) existing.violations.push(v.detail);
-        existing.implied = false;
+        existing.conforming = false;
         continue;
       }
       const e: DiagramEdge = {
@@ -418,7 +419,7 @@ export async function buildDiagramScene(
         label: "",
         method: undefined,
         kind: undefined,
-        implied: false,
+        conforming: false,
         violations: [v.detail],
       };
       edgeMap.set(key, e);
@@ -440,25 +441,26 @@ export async function buildDiagramScene(
     const allRegions = tools.region ? [...laid.regions, tools.region] : laid.regions;
     styled = { name: styleDef.name, drawing: styleDef.drawing, regions: allRegions };
     regions = allRegions;
-    // The drawing already says the legal ones: drawn quiet. Links that leave
-    // the container say what the drawing cannot — who calls in, what is
-    // used — so they are drawn plain.
+    // The drawing already says the links that conform: drawn quiet. Links
+    // that leave the container say what the drawing cannot — who calls in,
+    // what is used — so they are drawn plain.
     const layerById = new Map(children.map((c) => [c.id, c.layer] as const));
     const ringDrawing = styleDef.drawing === "rings" || styleDef.drawing === "hexagon";
     const innermost = styleDef.layers[styleDef.layers.length - 1]?.name;
     for (const e of edges) {
       if (e.id.startsWith("violation:")) continue;
       if (ghostIds.has(e.source) || ghostIds.has(e.target)) {
-        e.implied = false;
+        e.conforming = false;
         continue;
       }
-      // Tooling links say little about the product: drawn quiet.
+      // Tooling is held to no style, so its links break none, and say little
+      // about the product: drawn quiet.
       if (toolIds.has(e.source) || toolIds.has(e.target)) {
-        e.implied = true;
+        e.conforming = true;
         continue;
       }
       const sl = layerById.get(e.source), tl = layerById.get(e.target);
-      e.implied = !e.violations && classifyStyledEdge(styleDef, sl, tl) === "implied";
+      e.conforming = !e.violations && classifyStyledEdge(styleDef, sl, tl) === "conforming";
       // A same-layer chord crosses whatever sits between its ends — the
       // centre on a ring, the neighbouring cards on a band. Bow it clear:
       // out to the ring itself, or above the band (left of the column).
@@ -504,9 +506,10 @@ export async function buildDiagramScene(
       const route = laid.routes.get(`${e.source}\0${e.target}`);
       if (route && !pinnedPos.has(e.source) && !pinnedPos.has(e.target)) e.waypoints = route;
     }
-    // Tooling links say little about the product: drawn quiet.
+    // Tooling is held to no style, so its links break none, and say little
+    // about the product: drawn quiet.
     const toolingSet = new Set(tooling);
-    for (const e of edges) if (toolingSet.has(e.source) || toolingSet.has(e.target)) e.implied = true;
+    for (const e of edges) if (toolingSet.has(e.source) || toolingSet.has(e.target)) e.conforming = true;
     const focus = focusId ? byId.get(focusId) : undefined;
     regions = [];
     if (focus && laid.boundary) {

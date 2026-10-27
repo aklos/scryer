@@ -347,12 +347,12 @@ export function Style({ f }: { f: number }) {
           extra={10}
           clipLeft={-232}
           film={FILM_TEXT}
-          hideImplied
+          hideConforming
           selected={f >= FIX + s(3.2) ? MEMORY : undefined}
           tint={f >= IMPORT + s(2.0) && f < FIX + s(2.6) ? { layer: "domain", color: "var(--color-red-400)" } : undefined}
           edgeReveal={(e) => {
             if (e.violation) return step.from === 1 ? Math.max(0, 1 - 2 * move) : violationIn;
-            if (!e.implied) return undefined;
+            if (!e.conforming) return undefined;
             const k = arrows.findIndex(([a, b]) => e.source === a && e.target === b);
             if (k < 0 || f >= IMPORT) return k < 0 ? undefined : Math.max(0, 1 - prog(f, IMPORT, s(0.4)));
             return prog(f, s(0.9) + k * s(0.45), s(0.5));

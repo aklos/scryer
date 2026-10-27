@@ -98,8 +98,8 @@ describe("styled map: red comes from the report", () => {
     expect(quiet?.violations).toBeUndefined();
     const red = await edge([forbidden], "l-bad");
     expect(red?.violations).toEqual([forbidden.detail]);
-    expect(red?.implied).toBe(false);
-    expect((await edge([forbidden], "l-ok"))?.implied).toBe(true);
+    expect(red?.conforming).toBe(false);
+    expect((await edge([forbidden], "l-ok"))?.conforming).toBe(true);
   });
 
   it("carries every reason charged on one pair, each once", async () => {

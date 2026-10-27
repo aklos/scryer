@@ -6,8 +6,9 @@
  */
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { toggleOpen } from "../src/widgets/diagram-canvas/edgePanel";
+import { LAYER_NOTE, clickedOff, toggleOpen } from "../src/widgets/diagram-canvas/edgePanel";
 import { edgeLook, edgeText, labelInFull } from "../src/shared/diagram/RelationshipEdge";
+import { edgeShown } from "../src/widgets/diagram-canvas/DiagramView";
 
 describe("red edge reasons", () => {
   it("Writes a red edge's reason on it in full, always, with how many more there are", () => {
@@ -20,13 +21,24 @@ describe("red edge reasons", () => {
 });
 
 describe("quiet edges", () => {
-  it("Draws an edge the drawing already implies faint and thin, with no label until it is lit", () => {
+  it("Draws an edge that conforms to the style fainter, thinner and dotted, still, with no label until it is lit", () => {
     const plain = edgeLook({ label: "uses" });
     const quiet = edgeLook({ label: "uses", quiet: true });
     expect(quiet.opacity).toBeLessThan(plain.opacity);
     expect(quiet.width).toBeLessThan(plain.width);
+    expect(quiet.dash).not.toBe(plain.dash);
+    expect(quiet.flowing).toBe(false);
+    expect(plain.flowing).toBe(true);
     expect(quiet.label).toBe(false);
     expect(plain.label).toBe(true);
+  });
+
+  it("While the conforming-links control is off, hides an edge that conforms to the style until a selection reaches one of its ends", () => {
+    expect(edgeShown(true, true, false)).toBe(true);
+    expect(edgeShown(true, false, false)).toBe(false);
+    expect(edgeShown(true, false, true)).toBe(true);
+    // An edge that says something new always shows.
+    expect(edgeShown(false, false, false)).toBe(true);
   });
 
   it("When an end is selected, lights a quiet edge in full like any other", () => {
@@ -48,6 +60,17 @@ describe("layer descriptions", () => {
     const once = toggleOpen(new Set(), 2);
     expect([...once]).toEqual([2]);
     expect([...toggleOpen(once, 2)]).toEqual([]);
+  });
+
+  it("When another layer's ⓘ is clicked, opens its description and closes the one open", () => {
+    expect([...toggleOpen(new Set([2]), 3)]).toEqual([3]);
+  });
+
+  it("When the user presses anywhere off an open description and its ⓘ, closes it", () => {
+    const at = (inNote: boolean) => ({ closest: (sel: string) => (inNote && sel === `[${LAYER_NOTE}]` ? {} : null) });
+    expect(clickedOff(at(false))).toBe(true);
+    expect(clickedOff(null)).toBe(true);
+    expect(clickedOff(at(true))).toBe(false);
   });
 });
 

@@ -682,9 +682,9 @@ export function styledLayout(
 }
 
 /** How an edge between two members reads against the style:
- *  - `implied`: a legal cross-layer dependency — the drawing already says it
- *    (inner layers sit where legal imports point), so the renderer hides it
- *    until one end is selected;
+ *  - `conforming`: a real dependency the style allows — the drawing already
+ *    says it (inner layers sit where legal imports point), so the renderer
+ *    draws it quiet;
  *  - `violation`: a cross-layer dependency the matrix forbids — drawn, and
  *    drawn red, because it is the one thing the map exists to expose;
  *  - `plain`: a same-layer link (a `uses` between siblings) — drawn as usual.
@@ -695,7 +695,7 @@ export function classifyStyledEdge(
   targetLayer: string | undefined,
   /** Which end lives outside this container (a ghost). Traffic from outside
    *  must enter on an inbound layer; traffic to the outside must leave from
-   *  an outbound (driven) layer. Both are implied when legal. `otherDef` /
+   *  an outbound (driven) layer. Both conform when legal. `otherDef` /
    *  `otherLayer` describe the ghost's own container, for the module rule
    *  below. */
   ends: {
@@ -704,11 +704,11 @@ export function classifyStyledEdge(
     otherDef?: StyleDef;
     otherLayer?: string;
   } = {},
-): "implied" | "violation" | "plain" {
+): "conforming" | "violation" | "plain" {
   if (ends.sourceGhost && ends.targetGhost) return "plain";
   if (ends.sourceGhost) {
     if (!targetLayer) return "plain";
-    return def.inbound.length === 0 || def.inbound.includes(targetLayer) ? "implied" : "violation";
+    return def.inbound.length === 0 || def.inbound.includes(targetLayer) ? "conforming" : "violation";
   }
   if (ends.targetGhost) {
     if (!sourceLayer) return "plain";
@@ -719,28 +719,18 @@ export function classifyStyledEdge(
       // Matrix first; a library's facade is reached from the driven side.
       const byMatrix = (def.matrix[sourceLayer] ?? []).includes(other);
       const byFacade = (def.outbound ?? []).includes(sourceLayer);
-      return byMatrix || byFacade ? "implied" : "violation";
+      return byMatrix || byFacade ? "conforming" : "violation";
     }
     const out = def.outbound ?? [];
-    return out.length === 0 || out.includes(sourceLayer) ? "implied" : "violation";
+    return out.length === 0 || out.includes(sourceLayer) ? "conforming" : "violation";
   }
   if (!sourceLayer || !targetLayer) return "plain";
   if (sourceLayer === targetLayer) {
     // Siblings on a layer: normal traffic where the style allows it (the
     // position says nothing about it, but drawing every one is a mesh), a
     // violation where the style isolates slices.
-    return def.isolation === "strict" ? "violation" : "implied";
+    return def.isolation === "strict" ? "violation" : "conforming";
   }
   const allowed = def.matrix[sourceLayer] ?? [];
-  return allowed.includes(targetLayer) ? "implied" : "violation";
-}
-
-/** @deprecated use {@link classifyStyledEdge} */
-export function isImpliedEdge(
-  def: StyleDef,
-  sourceLayer: string | undefined,
-  targetLayer: string | undefined,
-  _kind: string | undefined,
-): boolean {
-  return classifyStyledEdge(def, sourceLayer, targetLayer) === "implied";
+  return allowed.includes(targetLayer) ? "conforming" : "violation";
 }

@@ -1,6 +1,6 @@
 /**
  * The relationship edge for the diagram — a port of the pre-pivot canvas edge:
- * a dashed chord with a clipped arrowhead and a label/method pill. A reverse
+ * a dashed chord ending at its arrowhead and a label/method pill. A reverse
  * pair splits into parallel lanes, code-tier edges inset to their dots' rims,
  * same-ring edges in a styled level bow outward, a long box-tier link follows
  * its lane, a quiet edge (one the drawing already implies) sits faint, and
@@ -30,9 +30,10 @@ export interface EdgeData extends Record<string, unknown> {
   highlighted?: boolean;
   /** A selection exists elsewhere — this edge isn't part of it, so it fades. */
   dimmed?: boolean;
-  /** Says what the drawing already says (a legal step between a style's
-   *  layers, a tooling link): drawn faint, its label only when lit, so the
-   *  links that say something new stand out. */
+  /** Conforms to the level's style (a legal step between its layers, a
+   *  tooling link): the drawing already says it, so it draws fainter and
+   *  dotted, still, its label only when lit, so the links that say something
+   *  new stand out. */
   quiet?: boolean;
   /** A reverse edge runs between the same two nodes — offset to a parallel lane
    *  so the two straight chords don't overlap. */
@@ -76,19 +77,30 @@ export function edgeText(data: EdgeData | undefined): string | undefined {
   return data?.label;
 }
 
+/** The dots a quiet edge draws in, round-capped. */
+const QUIET_DASH = "2 3";
+
 /** How strongly an edge draws: lit edges (at a selected end) in full; a
- *  quiet one faint and thin with no label; the rest of a selection's level
- *  faded further. */
+ *  quiet one fainter, thinner and dotted, still, with no label; the rest of a
+ *  selection's level faded further. The dot tier draws solid, still curves;
+ *  the box tiers a dashed line flowing towards the target. */
 export function edgeLook(
   data: EdgeData | undefined,
   selected = false,
-): { opacity: number; width: number; label: boolean } {
+): { opacity: number; width: number; label: boolean; dash?: string; flowing: boolean } {
   const lit = !!(selected || data?.highlighted);
   const red = (data?.violations?.length ?? 0) > 0;
   const isDot = !!data?.dot;
-  const opacity = lit ? 1 : data?.dimmed ? (data?.quiet ? 0.1 : 0.18) : red ? 0.95 : isDot || data?.quiet ? 0.5 : 0.85;
-  const width = selected ? 2.5 : isDot || (data?.quiet && !lit) ? 1 : 1.5;
-  return { opacity, width, label: (!isDot && !data?.quiet) || labelInFull(data, selected) };
+  const hushed = !!data?.quiet && !lit;
+  const opacity = lit ? 1 : data?.dimmed ? (data?.quiet ? 0.14 : 0.18) : red ? 0.95 : isDot ? 0.5 : data?.quiet ? 0.8 : 0.85;
+  const width = selected ? 2.5 : isDot ? 1 : hushed ? 1.25 : 1.5;
+  return {
+    opacity,
+    width,
+    label: (!isDot && !data?.quiet) || labelInFull(data, selected),
+    dash: isDot ? undefined : hushed ? QUIET_DASH : "6 3",
+    flowing: !isDot && !hushed,
+  };
 }
 
 export function RelationshipEdge({
@@ -114,17 +126,18 @@ export function RelationshipEdge({
   const edgeColor = selected ? selColor : baseColor;
   const full = labelInFull(data, selected);
 
-  const isDot = !!data?.dot;
   // A port's shift runs along its side: across a top or bottom, down a left or right.
   const along = (pos: string, shift = 0) => (pos === "top" || pos === "bottom" ? [shift, 0] : [0, shift]);
   const [sdx, sdy] = along(sourcePosition, data?.sourceShift);
   const [tdx, tdy] = along(targetPosition, data?.targetShift);
+  // The line stops where the arrowhead begins, so the two don't overlap.
+  const arrowSize = 8;
   const { sx, sy, tx, ty, ux, uy, path: edgePath, midX: labelX, midY: labelY, arrowAngle } = edgeShape(
     sourceX + sdx,
     sourceY + sdy,
     targetX + tdx,
     targetY + tdy,
-    data ?? {},
+    { ...data, trimEnd: arrowSize * Math.cos(Math.PI / 6) },
   );
   // Parallel (reverse-pair) edges share one chord, so a midpoint pill can't be
   // told apart from its twin. Unless the level placed it, place each label by
@@ -143,19 +156,10 @@ export function RelationshipEdge({
   }
 
   // Arrowhead polygon from explicit geometry.
-  const arrowSize = 8;
   const ax1 = tx - arrowSize * Math.cos(arrowAngle - Math.PI / 6);
   const ay1 = ty - arrowSize * Math.sin(arrowAngle - Math.PI / 6);
   const ax2 = tx - arrowSize * Math.cos(arrowAngle + Math.PI / 6);
   const ay2 = ty - arrowSize * Math.sin(arrowAngle + Math.PI / 6);
-
-  // Clip the dashed line where the arrowhead begins so they don't overlap.
-  const clipId = `clip-${id}`;
-  const perpXDir = -Math.sin(arrowAngle);
-  const perpYDir = Math.cos(arrowAngle);
-  const bx = (ax1 + ax2) / 2;
-  const by = (ay1 + ay2) / 2;
-  const far = 10000;
 
   // Subgraph highlight: edges touching the selection stay lit, the rest fade.
   // Dot-tier edges sit fainter at rest so the constellation reads as nodes, not lines.
@@ -163,28 +167,18 @@ export function RelationshipEdge({
 
   return (
     <>
-      <defs>
-        <clipPath id={clipId}>
-          <path
-            d={`M ${bx + perpXDir * far} ${by + perpYDir * far} L ${bx - perpXDir * far} ${by - perpYDir * far} L ${bx - perpXDir * far - Math.cos(arrowAngle) * far} ${by - perpYDir * far - Math.sin(arrowAngle) * far} L ${bx + perpXDir * far - Math.cos(arrowAngle) * far} ${by + perpYDir * far - Math.sin(arrowAngle) * far} Z`}
-          />
-        </clipPath>
-      </defs>
       <g opacity={look.opacity}>
-        <g clipPath={`url(#${clipId})`}>
-          <BaseEdge
-            id={id}
-            path={edgePath}
-            style={{
-              stroke: edgeColor,
-              strokeWidth: look.width,
-              // Dot tier: thin, solid, static curves (sigma-style). Arch tier keeps
-              // the animated dashed C4 line.
-              strokeDasharray: isDot ? undefined : "6 3",
-              animation: isDot ? undefined : "dash-flow 0.5s linear infinite",
-            }}
-          />
-        </g>
+        <BaseEdge
+          id={id}
+          path={edgePath}
+          style={{
+            stroke: edgeColor,
+            strokeWidth: look.width,
+            strokeDasharray: look.dash,
+            strokeLinecap: look.dash === QUIET_DASH ? "round" : undefined,
+            animation: look.flowing ? "dash-flow 0.5s linear infinite" : undefined,
+          }}
+        />
         <polygon points={`${tx},${ty} ${ax1},${ay1} ${ax2},${ay2}`} fill={edgeColor} />
       </g>
       {(label || method) && look.label && (

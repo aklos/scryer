@@ -271,26 +271,26 @@ describe("styledLayout", () => {
 describe("classifyStyledEdge", () => {
   const hex = style("hexagonal");
   const fsd = style("feature-sliced");
-  it("a legal cross-layer dependency is implied by the drawing", () => {
-    expect(classifyStyledEdge(hex, "application", "domain")).toBe("implied");
-    expect(classifyStyledEdge(hex, "infrastructure", "application")).toBe("implied");
-    expect(classifyStyledEdge(hex, "presentation", "application")).toBe("implied");
-    expect(classifyStyledEdge(fsd, "pages", "entities")).toBe("implied");
+  it("a legal cross-layer dependency conforms to the style", () => {
+    expect(classifyStyledEdge(hex, "application", "domain")).toBe("conforming");
+    expect(classifyStyledEdge(hex, "infrastructure", "application")).toBe("conforming");
+    expect(classifyStyledEdge(hex, "presentation", "application")).toBe("conforming");
+    expect(classifyStyledEdge(fsd, "pages", "entities")).toBe("conforming");
   });
-  it("a forbidden pair is a violation; same-layer is implied unless the style isolates", () => {
+  it("a forbidden pair is a violation; same-layer conforms unless the style isolates", () => {
     expect(classifyStyledEdge(hex, "domain", "application")).toBe("violation");
     expect(classifyStyledEdge(hex, "presentation", "infrastructure")).toBe("violation");
     expect(classifyStyledEdge(fsd, "entities", "pages")).toBe("violation");
-    expect(classifyStyledEdge(hex, "application", "application")).toBe("implied");
+    expect(classifyStyledEdge(hex, "application", "application")).toBe("conforming");
     expect(classifyStyledEdge(fsd, "pages", "pages")).toBe("violation");
     expect(classifyStyledEdge(hex, undefined, "domain")).toBe("plain");
   });
   it("traffic across the container edge enters inbound and leaves outbound", () => {
-    expect(classifyStyledEdge(hex, undefined, "presentation", { sourceGhost: true })).toBe("implied");
+    expect(classifyStyledEdge(hex, undefined, "presentation", { sourceGhost: true })).toBe("conforming");
     expect(classifyStyledEdge(hex, undefined, "domain", { sourceGhost: true })).toBe("violation");
-    expect(classifyStyledEdge(hex, "infrastructure", undefined, { targetGhost: true })).toBe("implied");
+    expect(classifyStyledEdge(hex, "infrastructure", undefined, { targetGhost: true })).toBe("conforming");
     expect(classifyStyledEdge(hex, "domain", undefined, { targetGhost: true })).toBe("violation");
-    expect(classifyStyledEdge(fsd, "shared", undefined, { targetGhost: true })).toBe("implied");
+    expect(classifyStyledEdge(fsd, "shared", undefined, { targetGhost: true })).toBe("conforming");
   });
 });
 
@@ -353,7 +353,7 @@ describe("composition", () => {
         otherDef: lib,
         otherLayer: "domain",
       }),
-    ).toBe("implied");
+    ).toBe("conforming");
     // presentation may not depend on domain, in any container.
     expect(
       classifyStyledEdge(hex, "presentation", undefined, {
@@ -369,7 +369,7 @@ describe("composition", () => {
         otherDef: lib,
         otherLayer: "composition",
       }),
-    ).toBe("implied");
+    ).toBe("conforming");
     expect(
       classifyStyledEdge(hex, "application", undefined, {
         targetGhost: true,
@@ -388,16 +388,16 @@ describe("composition", () => {
   });
 
   it("composition may wire every layer, and no layer may import it", () => {
-    expect(classifyStyledEdge(hex, "composition", "infrastructure")).toBe("implied");
-    expect(classifyStyledEdge(hex, "composition", "presentation")).toBe("implied");
+    expect(classifyStyledEdge(hex, "composition", "infrastructure")).toBe("conforming");
+    expect(classifyStyledEdge(hex, "composition", "presentation")).toBe("conforming");
     expect(classifyStyledEdge(hex, "presentation", "composition")).toBe("violation");
     expect(classifyStyledEdge(hex, "domain", "composition")).toBe("violation");
-    expect(classifyStyledEdge(style("library"), undefined, "composition", { sourceGhost: true })).toBe("implied");
+    expect(classifyStyledEdge(style("library"), undefined, "composition", { sourceGhost: true })).toBe("conforming");
   });
 });
 
 describe("styled scene", () => {
-  it("Draws the links the drawing implies quiet, routed clear of the cards like the rest", async () => {
+  it("Draws the links that conform to the style quiet, routed clear of the cards like the rest", async () => {
     const model = {
       version: 1,
       nodes: [
@@ -418,7 +418,7 @@ describe("styled scene", () => {
     expect(scene.mode).toBe("styled");
     const skip = scene.edges.find((e) => e.source === "a" && e.target === "e")!;
     // Legal, so quiet — and routed all the same.
-    expect(skip.implied).toBe(true);
+    expect(skip.conforming).toBe(true);
     const pages = scene.nodes.find((n) => n.id === "p")!;
     const inBand = (skip.waypoints ?? []).filter((q) => q.y >= pages.y && q.y <= pages.y + CARD_H);
     expect(inBand.length).toBeGreaterThan(0);
@@ -451,8 +451,8 @@ describe("styled scene", () => {
     const scene = await buildDiagramScene(model, "ui", report);
     const inbound = scene.edges.find((e) => e.target === "a")!;
     expect(scene.nodes.find((n) => n.id === inbound.source)?.reference).toBe(true);
-    expect(inbound.implied).toBe(false);
-    expect(scene.edges.find((e) => e.source === "a" && e.target === "e")?.implied).toBe(true);
+    expect(inbound.conforming).toBe(false);
+    expect(scene.edges.find((e) => e.source === "a" && e.target === "e")?.conforming).toBe(true);
   });
 
   it("When a component is tooling, draws it in a tooling strip under the drawing, apart from the layers, its links quiet", async () => {
@@ -473,6 +473,6 @@ describe("styled scene", () => {
     expect(at("x").y).toBeGreaterThan(Math.max(at("d").y, at("i").y) + CARD_H);
     expect(scene.styled?.regions.map((r) => r.layer)).toContain("tooling");
     expect(scene.styled?.regions.map((r) => r.layer)).not.toContain("unlayered");
-    expect(scene.edges.find((e) => e.source === "x")?.implied).toBe(true);
+    expect(scene.edges.find((e) => e.source === "x")?.conforming).toBe(true);
   });
 });

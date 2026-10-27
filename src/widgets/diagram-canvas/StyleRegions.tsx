@@ -9,7 +9,7 @@ import { useEffect, useState } from "react";
 import { ViewportPortal } from "@xyflow/react";
 import { Info } from "lucide-react";
 import type { LayerRegion } from "./styled";
-import { toggleOpen } from "./edgePanel";
+import { LAYER_NOTE, clickedOff, toggleOpen } from "./edgePanel";
 
 
 function hexPoints(cx: number, cy: number, r: number): string {
@@ -97,10 +97,19 @@ function labelSpots(regions: LayerRegion[]): LabelSpot[] {
  * over a label or an open description, and a click reaches the button.
  */
 function RegionLabels({ regions }: { regions: LayerRegion[] }) {
-  // Which layers have their description open. Nothing opens on hover: the
-  // button is a button, and a new drawing starts closed.
+  // Which layer has its description open. Nothing opens on hover: the
+  // button is a button, a new drawing starts closed, and a press anywhere off
+  // the description closes it.
   const [open, setOpen] = useState<ReadonlySet<number>>(new Set());
   useEffect(() => setOpen(new Set()), [regions]);
+  useEffect(() => {
+    if (open.size === 0) return;
+    const off = (e: PointerEvent) => {
+      if (clickedOff(e.target instanceof Element ? e.target : null)) setOpen(new Set());
+    };
+    document.addEventListener("pointerdown", off, true);
+    return () => document.removeEventListener("pointerdown", off, true);
+  }, [open]);
   const spots = labelSpots(regions);
   return (
     <ViewportPortal>
@@ -120,7 +129,7 @@ function RegionLabels({ regions }: { regions: LayerRegion[] }) {
           >
             <div
               className={`flex items-center gap-1 whitespace-nowrap font-semibold leading-none ${
-                at.boundary ? "text-[var(--text-tertiary)]" : "uppercase text-[var(--text-ghost)]"
+                at.boundary ? "text-[var(--text-tertiary)]" : "uppercase text-[var(--map-region-label)]"
               }`}
               style={{ fontSize: at.size, letterSpacing: at.boundary ? 0.2 : 1.5 }}
             >
@@ -128,6 +137,7 @@ function RegionLabels({ regions }: { regions: LayerRegion[] }) {
               {r.caption && (
                 <button
                   type="button"
+                  {...{ [LAYER_NOTE]: "" }}
                   aria-label={`${r.layer} layer description`}
                   aria-expanded={isOpen}
                   className={`nodrag nopan pointer-events-auto flex shrink-0 items-center rounded-full p-0.5 transition-colors hover:text-[var(--text-secondary)] ${
@@ -144,6 +154,7 @@ function RegionLabels({ regions }: { regions: LayerRegion[] }) {
             </div>
             {isOpen && r.caption && (
               <div
+                {...{ [LAYER_NOTE]: "" }}
                 onClick={(e) => e.stopPropagation()}
                 className="nodrag nopan pointer-events-auto mt-1.5 w-max max-w-[260px] rounded border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5 text-[11px] leading-snug text-[var(--text-secondary)] shadow-lg"
               >
@@ -176,11 +187,10 @@ export function StyleRegions({ regions }: { regions: LayerRegion[] }) {
               const common = r.boundary
                 ? { fill: "none", stroke: "var(--map-boundary)", strokeWidth: 1 }
                 : r.ghost
-                ? { fill: "none", stroke: "var(--border-subtle)", strokeWidth: 1, strokeDasharray: "2 6" }
+                ? { fill: "none", stroke: "var(--map-region-line)", strokeWidth: 1, strokeDasharray: "2 6" }
                 : {
-                    fill: "var(--surface-tint)",
-                    fillOpacity: 0.35,
-                    stroke: "var(--border)",
+                    fill: "var(--map-region)",
+                    stroke: "var(--map-region-line)",
                     strokeWidth: 1,
                     strokeDasharray: "4 4",
                   };

@@ -1,0 +1,272 @@
+{
+  "(root)": {
+    "crossings": 0,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 12
+  },
+  "scryer": {
+    "crossings": 5,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 58
+  },
+  "scryer / Desktop App UI": {
+    "crossings": 22,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 102
+  },
+  "scryer / Agent Sync": {
+    "crossings": 9,
+    "throughCards": 0,
+    "sharedRuns": 2,
+    "bends": 24
+  },
+  "scryer / Model Core": {
+    "crossings": 158,
+    "throughCards": 0,
+    "sharedRuns": 2,
+    "bends": 169
+  },
+  "scryer / Code Extractor": {
+    "crossings": 70,
+    "throughCards": 0,
+    "sharedRuns": 2,
+    "bends": 104
+  },
+  "scryer / MCP Server": {
+    "crossings": 2,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 40
+  },
+  "scryer / demo": {
+    "crossings": 20,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 126
+  },
+  "scryer / reel": {
+    "crossings": 5,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 78
+  },
+  "scryer / Docs Site": {
+    "crossings": 0,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 0
+  },
+  "scryer / export-viewer": {
+    "crossings": 0,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 4
+  },
+  "scryer / Preview Server": {
+    "crossings": 0,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 0
+  },
+  "scryer / Desktop App Host": {
+    "crossings": 0,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 2
+  },
+  "scryer / Agent Sync / examples": {
+    "crossings": 0,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 2
+  },
+  "scryer / Model Core / agent_integration": {
+    "crossings": 0,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 2
+  },
+  "scryer / Model Core / architecture": {
+    "crossings": 12,
+    "throughCards": 0,
+    "sharedRuns": 1,
+    "bends": 37
+  },
+  "scryer / Model Core / c4_model": {
+    "crossings": 10,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 42
+  },
+  "scryer / Model Core / claim_grammar": {
+    "crossings": 0,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 2
+  },
+  "scryer / Model Core / derived": {
+    "crossings": 8,
+    "throughCards": 0,
+    "sharedRuns": 2,
+    "bends": 46
+  },
+  "scryer / Model Core / evidence": {
+    "crossings": 3,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 11
+  },
+  "scryer / Model Core / project": {
+    "crossings": 55,
+    "throughCards": 0,
+    "sharedRuns": 1,
+    "bends": 58
+  },
+  "scryer / Model Core / stores": {
+    "crossings": 1,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 30
+  },
+  "scryer / Code Extractor / examples": {
+    "crossings": 0,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 2
+  },
+  "scryer / Code Extractor / claim_text": {
+    "crossings": 4,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 12
+  },
+  "scryer / Code Extractor / claim_writing": {
+    "crossings": 0,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 19
+  },
+  "scryer / Code Extractor / code_map": {
+    "crossings": 4,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 28
+  },
+  "scryer / Code Extractor / derivation": {
+    "crossings": 5,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 11
+  },
+  "scryer / Code Extractor / discovery": {
+    "crossings": 0,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 5
+  },
+  "scryer / Code Extractor / standing": {
+    "crossings": 0,
+    "throughCards": 0,
+    "sharedRuns": 1,
+    "bends": 13
+  },
+  "scryer / Code Extractor / test_evidence": {
+    "crossings": 0,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 5
+  },
+  "scryer / MCP Server / tools": {
+    "crossings": 9,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 26
+  },
+  "scryer / demo / film": {
+    "crossings": 0,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 10
+  },
+  "scryer / reel / beats": {
+    "crossings": 53,
+    "throughCards": 0,
+    "sharedRuns": 1,
+    "bends": 96
+  },
+  "scryer / reel / live": {
+    "crossings": 5,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 32
+  },
+  "scryer / reel / v2": {
+    "crossings": 38,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 102
+  },
+  "scryer / demo / shots": {
+    "crossings": 1,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 26
+  },
+  "scryer / Docs Site / components": {
+    "crossings": 0,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 0
+  },
+  "scryer / Desktop App Host / core": {
+    "crossings": 0,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 2
+  },
+  "scryer / Desktop App Host / shell": {
+    "crossings": 36,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 67
+  },
+  "scryer / Desktop App UI / app": {
+    "crossings": 0,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 12
+  },
+  "scryer / Desktop App UI / entities": {
+    "crossings": 171,
+    "throughCards": 0,
+    "sharedRuns": 1,
+    "bends": 96
+  },
+  "scryer / Desktop App UI / features": {
+    "crossings": 29,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 70
+  },
+  "scryer / Desktop App UI / pages": {
+    "crossings": 32,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 42
+  },
+  "scryer / Desktop App UI / shared": {
+    "crossings": 4,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 38
+  },
+  "scryer / Desktop App UI / widgets": {
+    "crossings": 138,
+    "throughCards": 0,
+    "sharedRuns": 0,
+    "bends": 114
+  }
+}

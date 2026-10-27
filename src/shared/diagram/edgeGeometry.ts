@@ -20,6 +20,10 @@ export interface EdgeShapeOptions {
   parallel?: boolean;
   bow?: { cx: number; cy: number; offset: number };
   waypoints?: Pt[];
+  /** Stop the drawn path this far short of the target, back along the way it
+   *  arrives, so it ends where an arrowhead begins instead of under it. The
+   *  shape's ends and points stay the full line. */
+  trimEnd?: number;
 }
 
 export interface EdgeShape {
@@ -64,6 +68,11 @@ function roundedPolyline(pts: Pt[]): string {
   const z = pts[pts.length - 1];
   return `${d} L ${z.x} ${z.y}`;
 }
+/** The point `by` px short of (x, y), back along `angle`. */
+function trimmed(x: number, y: number, angle: number, by = 0): Pt {
+  return { x: x - Math.cos(angle) * by, y: y - Math.sin(angle) * by };
+}
+
 export function edgeShape(sourceX: number, sourceY: number, targetX: number, targetY: number, o: EdgeShapeOptions = {}): EdgeShape {
   // For dot-tier edges the endpoints are dot centers; pull each end in by its
   // own dot radius so the line starts/ends at the rim and the arrow lands on it.
@@ -101,9 +110,10 @@ export function edgeShape(sourceX: number, sourceY: number, targetX: number, tar
       y: (1 - t) * (1 - t) * sy + 2 * (1 - t) * t * cyp + t * t * ty,
     });
     const mid = at(0.5);
+    const end = trimmed(tx, ty, Math.atan2(ty - cyp, tx - cxp), o.trimEnd);
     return {
       sx, sy, tx, ty, ux, uy,
-      path: `M ${sx} ${sy} Q ${cxp} ${cyp} ${tx} ${ty}`,
+      path: `M ${sx} ${sy} Q ${cxp} ${cyp} ${end.x} ${end.y}`,
       points: Array.from({ length: 13 }, (_, i) => at(i / 12)),
       midX: mid.x,
       midY: mid.y,
@@ -118,9 +128,10 @@ export function edgeShape(sourceX: number, sourceY: number, targetX: number, tar
     // The middle of the middle leg.
     const a = points[Math.floor((points.length - 1) / 2)], b = points[Math.floor((points.length - 1) / 2) + 1];
     const last = via[via.length - 1];
+    const end = trimmed(tx, ty, Math.atan2(ty - last.y, tx - last.x), o.trimEnd);
     return {
       sx, sy, tx, ty, ux, uy,
-      path: roundedPolyline(points),
+      path: roundedPolyline([...points.slice(0, -1), end]),
       points,
       midX: (a.x + b.x) / 2,
       midY: (a.y + b.y) / 2,
@@ -128,9 +139,10 @@ export function edgeShape(sourceX: number, sourceY: number, targetX: number, tar
     };
   }
 
+  const end = trimmed(tx, ty, Math.atan2(ty - sy, tx - sx), o.trimEnd);
   return {
     sx, sy, tx, ty, ux, uy,
-    path: `M ${sx} ${sy} L ${tx} ${ty}`,
+    path: `M ${sx} ${sy} L ${end.x} ${end.y}`,
     points: [{ x: sx, y: sy }, { x: tx, y: ty }],
     midX: (sx + tx) / 2,
     midY: (sy + ty) / 2,
