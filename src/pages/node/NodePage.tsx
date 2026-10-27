@@ -66,6 +66,7 @@ import { plannedRespHosts, ResponsibilitiesSection } from "../../widgets/node-pa
 import { PropertiesSection } from "../../widgets/node-page-sections/PropertiesSection";
 import { PreviewSection } from "../../widgets/node-page-sections/PreviewSection";
 import { ExercisedBySection } from "../../widgets/node-page-sections/ExercisedBySection";
+import { DecisionsSection } from "../../widgets/node-page-sections/DecisionsSection";
 import { previewEntryFor } from "../../features/preview-client/usePreviewServer";
 import { allowedImports, governingStyleDef, layerOf } from "../../entities/model/styles";
 import { Term } from "../../entities/model/Term";
@@ -403,9 +404,9 @@ function NodePageBody(props: PageProps & { node: Node }) {
             })()}
           </>
         }
-        // Only a container's display name lives outside the code, in
-        // structure.toml; everything else is named by its code.
-        editor={node.kind === "container" ? editor : undefined}
+        // A readable name for any node above code level lives in
+        // structure.toml; a symbol is named by its code.
+        editor={node.kind !== "symbol" ? editor : undefined}
         editingName={ed.isEditing("title")}
         onToggleName={openTitleEdit}
         onDone={commitTitleEdit}
@@ -419,8 +420,10 @@ function NodePageBody(props: PageProps & { node: Node }) {
         nameSanitize={node.kind === "symbol" ? sanitizeIdentifier : undefined}
       />
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className={`${PAGE_COL} flex gap-8 pb-[50px] pt-[18px]`}>
+      {/* A size container: the comments sit beside the article only when the
+          page itself (not the window) has room for both; else below it. */}
+      <div className="@container min-h-0 flex-1 overflow-y-auto">
+          <div className={`${PAGE_COL} flex flex-col gap-8 pb-[50px] pt-[18px] @3xl:flex-row`}>
             <article
               className="min-w-0 max-w-[900px] flex-1"
               onContextMenu={(e) => openMenu(e, [copyIdItem(node.id, copyId)])}
@@ -431,8 +434,10 @@ function NodePageBody(props: PageProps & { node: Node }) {
               <DescriptionSection
                 value={node.description}
                 prevValue={committed?.nodes.find((n) => n.id === node.id)?.description}
-                // The description is the module's doc comment: edited in the code.
-                editor={undefined}
+                // The description is written back where it is read from (a
+                // module doc, a manifest, ARCHITECTURE.md, structure.toml); a
+                // symbol's doc is edited in the code.
+                editor={node.kind !== "symbol" ? editor : undefined}
                 editing={ed.isEditing("description")}
                 onToggle={() => ed.toggle("description")}
                 onCommit={(v) => editor?.updateNode(node.id, { description: v || undefined })}
@@ -468,6 +473,19 @@ function NodePageBody(props: PageProps & { node: Node }) {
                   editor={editor}
                   editing={ed.isEditing("responsibilities")}
                   onToggle={() => ed.toggle("responsibilities")}
+                />
+              )}
+
+              {node.kind !== "symbol" && (
+                <DecisionsSection
+                  node={node}
+                  model={model}
+                  // Decisions live in a module doc (ARCHITECTURE.md for the
+                  // system); a person or external has none.
+                  editor={node.kind !== "person" && !node.external ? editor : undefined}
+                  editing={ed.isEditing("decisions")}
+                  onToggle={() => ed.toggle("decisions")}
+                  onSelectNode={onSelectNode}
                 />
               )}
 

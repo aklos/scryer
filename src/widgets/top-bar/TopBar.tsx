@@ -12,6 +12,10 @@
  * window. The attribute does not inherit — each element the cursor can land on
  * needs its own. On macOS the OS draws its own traffic lights and the bar leaves
  * room for them; elsewhere the bar draws minimize / maximize / close.
+ *
+ * As the window narrows the bar sheds words, never controls: the path goes
+ * first, then the branch, then the search and view labels down to their
+ * icons. The right side never shrinks below its controls; the left gives way.
  */
 
 import { useEffect, useState } from "react";
@@ -26,6 +30,8 @@ import {
   Minus,
   Moon,
   Network,
+  PanelLeftClose,
+  PanelLeftOpen,
   Search,
   Square,
   Sun,
@@ -58,6 +64,8 @@ export function TopBar({
   sessionLive = false,
   sessionOpen = false,
   onOpenSession,
+  treeOpen = true,
+  onToggleTree,
 }: {
   projectPath: string | null;
   view: WorkspaceView;
@@ -75,6 +83,10 @@ export function TopBar({
   /** The session page is the one showing — the entry reads pressed. */
   sessionOpen?: boolean;
   onOpenSession?: () => void;
+  /** The tree is showing — docked or as a drawer. */
+  treeOpen?: boolean;
+  /** Show or hide the tree; the toggle draws only when a host passes this. */
+  onToggleTree?: () => void;
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [worktreeMenu, setWorktreeMenu] = useState<{ x: number; y: number } | null>(null);
@@ -111,6 +123,19 @@ export function TopBar({
         {IS_MAC && (
           <div data-tauri-drag-region className="shrink-0" style={{ width: MAC_TRAFFIC_LIGHTS_WIDTH }} />
         )}
+        {onToggleTree && (
+          <button
+            type="button"
+            data-tree-toggle
+            onClick={onToggleTree}
+            title={`${treeOpen ? "Hide" : "Show"} the tree (${IS_MAC ? "⌘B" : "Ctrl+B"})`}
+            aria-label={treeOpen ? "Hide the tree" : "Show the tree"}
+            aria-pressed={treeOpen}
+            className="mr-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
+          >
+            {treeOpen ? <PanelLeftClose className="h-3.5 w-3.5" /> : <PanelLeftOpen className="h-3.5 w-3.5" />}
+          </button>
+        )}
         <button
           type="button"
           onClick={(e) => {
@@ -135,7 +160,7 @@ export function TopBar({
               setWorktreeMenu({ x: r.left, y: r.bottom + 2 });
             }}
             title="Switch to another worktree of this project"
-            className="ml-1 flex min-w-0 items-center gap-1 rounded-md px-1.5 py-1 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+            className="ml-1 hidden min-w-0 items-center gap-1 rounded-md px-1.5 py-1 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] sm:flex"
           >
             <GitBranch className="h-3 w-3 shrink-0 text-[var(--text-ghost)]" />
             <span className="truncate font-mono">{here?.branch ?? "detached"}</span>
@@ -149,7 +174,7 @@ export function TopBar({
             title={projectPath}
             // translate-y-px: 11px mono centered next to 12px sans sits ~1px
             // high by box math; the nudge lands the two baselines together.
-            className="ml-2 hidden min-w-0 max-w-[340px] translate-y-px truncate font-mono text-2xs text-[var(--text-ghost)] sm:block"
+            className="ml-2 hidden min-w-0 max-w-[340px] translate-y-px truncate font-mono text-2xs text-[var(--text-ghost)] lg:block"
           >
             {projectPath}
           </span>
@@ -159,19 +184,20 @@ export function TopBar({
       <button
         type="button"
         onClick={onOpenSearch}
-        title="Search the model (Ctrl+K)"
-        className="flex h-7 w-[280px] max-w-[38vw] shrink-0 items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--surface-canvas)] px-3 text-xs text-[var(--text-tertiary)] transition-colors hover:border-[var(--border-strong)] hover:text-[var(--text-secondary)] cursor-text"
+        title={`Search the model (${SEARCH_KEY})`}
+        aria-label="Search the model"
+        className="mx-1 flex h-7 w-7 shrink-0 items-center justify-center gap-2 rounded-md border border-[var(--border)] bg-[var(--surface-canvas)] text-xs text-[var(--text-tertiary)] transition-colors hover:border-[var(--border-strong)] hover:text-[var(--text-secondary)] cursor-text md:mx-0 md:w-[280px] md:max-w-[38vw] md:justify-start md:px-3"
       >
         <Search className="h-3.5 w-3.5 shrink-0" />
-        <span className="truncate">Search the model</span>
-        <span className="ml-auto shrink-0 rounded border border-[var(--border-strong)] px-1 font-mono text-2xs text-[var(--text-tertiary)]">
+        <span className="hidden truncate md:block">Search the model</span>
+        <span className="ml-auto hidden shrink-0 rounded border border-[var(--border-strong)] px-1 font-mono text-2xs text-[var(--text-tertiary)] md:block">
           {SEARCH_KEY}
         </span>
       </button>
 
-      <div data-tauri-drag-region className="flex min-w-0 flex-1 items-center justify-end">
+      <div data-tauri-drag-region className="flex min-w-max flex-1 items-center justify-end">
         {/* Wiki / Map / Recent — three destinations, one joined control,
-            exactly one lit. "Since you last looked" is a wiki page underneath,
+            exactly one lit. Sessions is a wiki page underneath,
             but to the user it is its own place: lighting Wiki too read as two
             selections. Its cell carries a badge when a caller passes one. */}
         <div className="ml-2 flex items-stretch overflow-hidden rounded-md border border-[var(--border)] divide-x divide-[var(--border)]">
@@ -181,9 +207,9 @@ export function TopBar({
             ...(onOpenSession
               ? [{
                   id: "session",
-                  label: "Recent",
+                  label: "Sessions",
                   Icon: History,
-                  title: `Since you last looked — what each agent session changed${sessionLive ? " (a session is live)" : ""}`,
+                  title: `Sessions — what each agent session is doing and did${sessionLive ? " (a session is live)" : ""}`,
                 }]
               : []),
           ] as const).map(({ id, label, Icon, title }) => {
@@ -194,16 +220,17 @@ export function TopBar({
                 type="button"
                 data-cam={id === "session" ? "session" : `view-${id}`}
                 title={title}
+                aria-label={label}
                 aria-pressed={lit}
                 onClick={() => (id === "session" ? onOpenSession?.() : onSetView(id as WorkspaceView))}
-                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium transition-colors ${
+                className={`flex items-center gap-1.5 px-2 py-1 text-xs font-medium transition-colors md:px-3 ${
                   lit
                     ? "bg-[var(--surface-active)] text-[var(--text)]"
                     : "text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
                 }`}
               >
                 <Icon className="h-3.5 w-3.5" />
-                {label}
+                <span className="hidden md:inline">{label}</span>
                 {id === "session" && sessionBadge > 0 && (
                   <span
                     className={`inline-flex min-w-[18px] items-center justify-center rounded-full px-1 font-mono text-2xs font-semibold tabular-nums ${

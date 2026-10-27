@@ -144,12 +144,14 @@ function ConnRow({
       ) : (
         <span className="select-none" />
       )}
-      <div className="flex min-w-0 items-baseline font-mono text-sm leading-relaxed">
+      {/* Running text, not a flex row: a long label wraps under the name
+          (hanging indent) instead of being cut off. */}
+      <div className="min-w-0 pl-[2ch] -indent-[2ch] font-mono text-sm leading-relaxed">
         <button
           type="button"
           onClick={() => onSelectNode(peer.id)}
           title={struck ? `${peer.name || "Untitled"} — slated for deletion in the plan` : peer.name}
-          className={`shrink truncate text-left hover:underline ${peerColor}`}
+          className={`whitespace-nowrap text-left hover:underline ${peerColor}`}
         >
           {peer.name || "Untitled"}
         </button>
@@ -168,7 +170,7 @@ function ConnRow({
         ) : (
           <>
             {(link.label || (kind === "reworded" && prev?.label)) && (
-              <span className="shrink-0 text-[var(--text-tertiary)]">
+              <span className="text-[var(--text-tertiary)]">
                 &nbsp;—{" "}
                 {kind === "reworded" && prev && prev.label !== link.label ? (
                   <WordDiffText from={prev.label ?? ""} to={link.label ?? ""} />
@@ -178,7 +180,7 @@ function ConnRow({
               </span>
             )}
             {link.method && (
-              <span className="shrink-0 text-[var(--text-ghost)]">&nbsp;· {link.method}</span>
+              <span className="whitespace-nowrap text-[var(--text-ghost)]">&nbsp;· {link.method}</span>
             )}
           </>
         )}

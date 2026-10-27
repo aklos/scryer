@@ -15,8 +15,8 @@ pub(crate) async fn get_derived_status(cwd: String) -> Result<scryer_core::deriv
     .map_err(|e| format!("derived-status task failed: {e}"))?
 }
 
-/// What each agent session changed since `since` (unix seconds), across the
-/// project's live git worktrees.
+/// What each agent session active since `since` (unix seconds) is doing and
+/// did, across the project's live git worktrees.
 #[tauri::command]
 pub(crate) async fn get_landing(cwd: String, since: u64) -> Result<scryer_core::derived_tree::Landing, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -64,10 +64,25 @@ pub(crate) fn add_claim_stub(cwd: String, node_id: String, text: String) -> Resu
     scryer_extract::claim_files::write_claim_stub(std::path::Path::new(&cwd), &node_id, &text)
 }
 
-/// Rename a container: sets its display name in `.scryer/structure.toml`.
+/// Rename a node above code level: sets its readable name in
+/// `.scryer/structure.toml`.
 #[tauri::command]
-pub(crate) fn rename_container(cwd: String, node_id: String, name: String) -> Result<(), String> {
-    scryer_extract::claim_files::rename_container(std::path::Path::new(&cwd), &node_id, &name)
+pub(crate) fn rename_node(cwd: String, node_id: String, name: String) -> Result<(), String> {
+    scryer_extract::claim_files::rename_node(std::path::Path::new(&cwd), &node_id, &name)
+}
+
+/// Describe a container or component: rewrites its module doc's first
+/// paragraph. Returns the file.
+#[tauri::command]
+pub(crate) fn edit_node_description(cwd: String, node_id: String, text: String) -> Result<String, String> {
+    scryer_extract::claim_files::edit_node_description(std::path::Path::new(&cwd), &node_id, &text)
+}
+
+/// Set a node's decisions: its module doc after the first paragraph, or
+/// `ARCHITECTURE.md` after its first for the system.
+#[tauri::command]
+pub(crate) fn edit_node_decisions(cwd: String, node_id: String, text: String) -> Result<String, String> {
+    scryer_extract::claim_files::edit_node_decisions(std::path::Path::new(&cwd), &node_id, &text)
 }
 
 /// Every comment thread in the project, open ones first, across its live

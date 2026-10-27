@@ -73,7 +73,21 @@ pub fn landing_at(
     since: u64,
 ) -> crate::derived::Landing {
     let sessions = sessions_since(r, since);
-    crate::derived::landing(&sessions, tree, status, since)
+    let mut out = crate::derived::landing(&sessions, tree, status, since);
+    mark_live(&live_session_ids(r), &mut out);
+    out
+}
+
+/// The sessions working in checkout `r` now.
+pub fn live_session_ids(r: &ModelRef) -> std::collections::BTreeSet<String> {
+    crate::session_hooks::live_sessions(r, None).into_iter().map(|s| s.id).collect()
+}
+
+/// Mark the sessions of `landing` that are in `live`.
+pub fn mark_live(live: &std::collections::BTreeSet<String>, landing: &mut crate::derived::Landing) {
+    for s in &mut landing.sessions {
+        s.live = live.contains(&s.session);
+    }
 }
 
 /// This checkout's session logs written to since `since`, with their entries.
@@ -141,12 +155,14 @@ mod tests {
             layer: None,
             exercised_by: Vec::new(),
             tooling: None,
+            decisions: None,
         });
         let tree = DerivedTree {
             fingerprint: 7,
             committed: ScryModel::new(),
             planned,
             claims: Vec::new(),
+            doc_files: Default::default(),
             file_nodes: Default::default(),
             dark_files: Vec::new(),
             style_violations: Vec::new(),
@@ -193,6 +209,7 @@ mod tests {
                 junit_name: "ok".into(),
                 planned: false,
             }],
+            doc_files: Default::default(),
             file_nodes: Default::default(),
             dark_files: Vec::new(),
             style_violations: Vec::new(),

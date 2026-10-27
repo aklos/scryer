@@ -6,8 +6,9 @@ import { wordDiff } from "../lib/wordDiff";
  *  gap (32) + rail (300) + horizontal padding (56), centered at wide widths so
  *  pages compose instead of hugging the tree and stranding a dead right region.
  *  Headers span their pane (border/surface are chrome) but wrap their content
- *  in this; special pages cap their inner prose narrower inside it. */
-export const PAGE_COL = "mx-auto w-full max-w-[1288px] px-7";
+ *  in this; special pages cap their inner prose narrower inside it. A small
+ *  window takes back half the gutter. */
+export const PAGE_COL = "mx-auto w-full max-w-[1288px] px-4 sm:px-7";
 
 // Field length caps, in characters. The description and technology caps mirror
 // the backend validator (scryer-core `DESCRIPTION_MAX_CHARS` /

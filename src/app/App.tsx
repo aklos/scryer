@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ErrorBoundary } from "./ErrorBoundary";
+import { useSidebar } from "./sidebar";
 import { ToastProvider, useToast } from "../shared/feedback/Toast";
 import { AgentFailureProvider } from "../features/agent-launch/AgentFailure";
 import { ModelTree } from "../widgets/model-tree/ModelTree";
@@ -32,7 +33,10 @@ import { useAgentSession } from "../features/agent-launch/useAgentSession";
 import { previewableNodeIds, usePreviewServer } from "../features/preview-client/usePreviewServer";
 import { useModelHealth } from "../features/health-feed/useModelHealth";
 import { useTestStatuses } from "../features/health-feed/useTestStatuses";
-import { rollupTestFindings, structuralBySubtree, testFindings } from "../entities/model/health";
+import { useFollow } from "../features/sessions/useFollow";
+import { sessionTitle } from "../features/sessions/useSessions";
+import { FollowBar } from "../widgets/follow-bar/FollowBar";
+import { structuralBySubtree } from "../entities/model/health";
 import { effectiveSourceMap, type ScryModel } from "../entities/model/viewmodel";
 import type { Editor } from "../entities/model/editor";
 
@@ -42,7 +46,7 @@ import type { Editor } from "../entities/model/editor";
 interface Navigate {
   project?: string;
   view?: WorkspaceView;
-  /** A node id, or `"landing"` for the since-you-last-looked page. */
+  /** A node id, or `"landing"` for the Sessions page. */
   page?: string;
   diagramFocus?: string | null;
   lens?: string | null;
@@ -95,7 +99,7 @@ function AppBody() {
 }
 
 function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage }) {
-  const { committed, planDiff, projectPath, reloadFromDisk, externalGeneration, openProject, closeProject } = storage;
+  const { committed, projectPath, reloadFromDisk, externalGeneration, openProject, closeProject } = storage;
   const agent = useAgentSession();
   const { toast } = useToast();
   // One preview sidecar per open project; node pages derive their Preview
@@ -191,14 +195,22 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
       ? concernLensRaw
       : null;
 
-  // Global shortcuts: Ctrl/Cmd+K jumps to any node by name; Ctrl+Space flips
-  // wiki↔diagram (skipped while typing in a field, so it can't yank you out of
-  // an in-place edit).
+  // The tree docked beside the page, hidden, or (in a narrow window) a drawer
+  // over it.
+  const sidebar = useSidebar();
+  const { toggle: toggleTree, dismiss: dismissTree } = sidebar;
+
+  // Global shortcuts: Ctrl/Cmd+K jumps to any node by name; Ctrl/Cmd+B shows
+  // or hides the tree; Ctrl+Space flips wiki↔diagram (skipped while typing in
+  // a field, so it can't yank you out of an in-place edit).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         setSearchOpen((o) => !o);
+      } else if (e.key === "b" && (e.metaKey || e.ctrlKey) && !e.altKey && !isEditableTarget(e.target)) {
+        e.preventDefault();
+        toggleTree();
       } else if (
         e.code === "Space" &&
         e.ctrlKey &&
@@ -212,7 +224,7 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [toggleView]);
+  }, [toggleView, toggleTree]);
 
   const modelRef = useRef(model);
   modelRef.current = model;
@@ -303,7 +315,7 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
     });
   }, []);
 
-  // The project opens on what changed since you last looked.
+  // The project opens on its agent sessions.
   const openedFor = useRef<string | null>(null);
   useEffect(() => {
     const key = projectPath ?? "";
@@ -311,6 +323,23 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
     openedFor.current = key;
     setSelected({ kind: "special", id: "session" });
   }, [projectPath]);
+
+  // Following a live agent session: its edits take the wiki and map along.
+  const hasNode = useCallback((id: string) => modelRef.current.nodes.some((n) => n.id === id), []);
+  const follow = useFollow({
+    projectPath,
+    model,
+    selected,
+    hasNode,
+    onGo: selectNode,
+    onView: setWorkspaceView,
+    onEnded: (s) => toast(`${sessionTitle(s, "this branch")} ended — stopped following`),
+  });
+  const followedIds = useMemo<ReadonlySet<string>>(
+    () => (follow.target ? new Set([follow.target]) : EMPTY_IDS),
+    [follow.target],
+  );
+  const nodeNames = useMemo(() => new Map(model.nodes.map((n) => [n.id, n.name])), [model]);
 
   useEffect(() => {
     const un = listen<Navigate>("navigate", ({ payload: nav }) => {
@@ -364,9 +393,23 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
     [setWorkspaceView],
   );
 
-  // The tree's Tests lens: findings rolled up per subtree so a branch reads as
-  // "N below" and a clean one as nothing.
-  const testTally = rollupTestFindings(model, testFindings(model, committed, testVerdicts, probeResults));
+  // A pick in the tree drawer is where the user wanted to go: the drawer
+  // closes on it, uncovering the page. A docked tree stays put.
+  const selectNodeFromTree = useCallback(
+    (id: string) => {
+      selectNode(id);
+      dismissTree();
+    },
+    [selectNode, dismissTree],
+  );
+  const selectGroupFromTree = useCallback(
+    (id: string) => {
+      selectGroup(id);
+      dismissTree();
+    },
+    [selectGroup, dismissTree],
+  );
+
   // Structural violations per subtree — the tree marks every row that leads
   // down to one.
   const structural = structuralBySubtree(model, healthReport);
@@ -384,29 +427,45 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
         onOpenSettings={() => setSettingsOpen(true)}
         sessionOpen={sessionOpen}
         onOpenSession={() => openSpecial("session")}
+        treeOpen={sidebar.open}
+        onToggleTree={toggleTree}
       />
-      <div className="flex min-h-0 flex-1">
-        <ModelTree
-          model={model}
-          previewable={previewable}
-          planDiff={planDiff}
-          committed={committed}
-          selected={selected}
-          expanded={expanded}
-          onSelectNode={selectNode}
-          onSelectGroup={selectGroup}
-          onToggle={toggle}
-          editor={pageEditor}
-          activeNodeIds={EMPTY_IDS}
-          // The map's current level — tinted in the tree so it mirrors what
-          // the diagram is showing. Only while in map view.
-          activeLevel={view === "diagram" ? diagramFocus : undefined}
-          concernLens={concernLens}
-          onSetConcernLens={setConcernLens}
-          testTally={testTally}
-          structural={structural}
-          claimStatus={healthReport?.derivedStatus?.nodes}
-        />
+      <div className="relative flex min-h-0 flex-1">
+        {sidebar.mode === "drawer" && (
+          <div className="absolute inset-0 z-30 bg-black/30" onClick={dismissTree} />
+        )}
+        {/* One tree in one place whatever the mode, so hiding it keeps its
+            filter and scroll. Docked, it never takes more than half the
+            window; as a drawer, it leaves a strip of the page to tap away. */}
+        <div
+          className={
+            sidebar.mode === "docked"
+              ? "flex max-w-[50vw] shrink-0"
+              : sidebar.mode === "drawer"
+                ? "absolute inset-y-0 left-0 z-40 flex max-w-[calc(100vw-48px)] shadow-xl"
+                : "hidden"
+          }
+        >
+          <ModelTree
+            model={model}
+            previewable={previewable}
+            selected={selected}
+            expanded={expanded}
+            onSelectNode={selectNodeFromTree}
+            onSelectGroup={selectGroupFromTree}
+            onToggle={toggle}
+            editor={pageEditor}
+            // Where the followed session is editing now.
+            activeNodeIds={followedIds}
+            // The map's current level — tinted in the tree so it mirrors what
+            // the diagram is showing. Only while in map view.
+            activeLevel={view === "diagram" ? diagramFocus : undefined}
+            concernLens={concernLens}
+            onSetConcernLens={setConcernLens}
+            structural={structural}
+            claimStatus={healthReport?.derivedStatus?.nodes}
+          />
+        </div>
         {view === "diagram" ? (
           <DiagramView
             model={model}
@@ -425,6 +484,8 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
             <LandingPage
               projectPath={projectPath}
               model={model}
+              following={follow.following}
+              onFollow={follow.follow}
               onSelectNode={selectNode}
               onOpenWorktree={(p) => void openProject(p, { remember: false })}
             />
@@ -450,6 +511,14 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
           </div>
         )}
       </div>
+      {follow.following && !sessionOpen && (
+        <FollowBar
+          session={follow.session}
+          title={follow.session ? sessionTitle(follow.session, follow.sessions?.branch ?? "detached") : "session"}
+          names={nodeNames}
+          onStop={follow.stop}
+        />
+      )}
       <Powerline
         model={model}
         agent={agent}

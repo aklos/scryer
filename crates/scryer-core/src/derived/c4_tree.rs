@@ -60,6 +60,10 @@ pub struct DerivedTree {
     /// Product file → the innermost component that holds it.
     #[serde(default)]
     pub file_nodes: BTreeMap<String, String>,
+    /// A container or component id → the file whose module doc is its
+    /// description (or would be, when it has none yet).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub doc_files: BTreeMap<String, String>,
     /// Product files no test reaches by import, directly or transitively.
     #[serde(default)]
     pub dark_files: Vec<String>,

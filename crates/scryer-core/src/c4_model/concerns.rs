@@ -165,6 +165,7 @@ mod tests {
             layer: None,
             exercised_by: Vec::new(),
             tooling: None,
+            decisions: None,
             id: "n1".into(),
             kind: Kind::Component,
             name: "N".into(),

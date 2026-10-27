@@ -231,6 +231,77 @@ mod tests {
         assert_eq!(tooling, BTreeSet::from(["examples"]));
     }
 
+    /// Reads each node's description from one source: the entry or root module doc, else the container's manifest, else structure.toml for what no code documents; the system's from ARCHITECTURE.md, its decisions after the first paragraph.
+    #[test]
+    fn reads_each_description_from_one_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "ARCHITECTURE.md", "# Drafts\n\nKeeps writers' drafts safe.\n\nOne store, no sync.\n");
+        write(d, "core/Cargo.toml", "[package]\nname = \"core\"\nversion = \"0.1.0\"\ndescription = \"The draft core.\"\n");
+        write(d, "core/src/lib.rs", "pub mod store;\n");
+        write(d, "core/src/store.rs", "//! Stores drafts.\n//!\n//! Append-only.\npub fn put() {}\n");
+        write(d, "web/package.json", "{\"name\": \"web\", \"description\": \"The editor.\"}\n");
+        write(d, "web/src/panels/a.ts", "export const a = 1;\n");
+        write(
+            d,
+            ".scryer/structure.toml",
+            "[system]\npersons = [\"dev\"]\n\n[persons.dev]\ndescription = \"Writes drafts.\"\n\n[components.\"web/src/panels\"]\ndescription = \"The editor's panels.\"\n",
+        );
+        let tree = derived_tree_uncached(d).unwrap();
+        let by = |name: &str| tree.planned.nodes.iter().find(|n| n.name == name).unwrap();
+        let system = tree.planned.nodes.iter().find(|n| n.kind == Kind::System).unwrap();
+        assert_eq!(system.description.as_deref(), Some("Keeps writers' drafts safe."));
+        assert_eq!(system.decisions.as_deref(), Some("One store, no sync."));
+        assert_eq!(by("core").description.as_deref(), Some("The draft core."));
+        assert_eq!(tree.doc_files[&by("core").id], "core/Cargo.toml");
+        assert_eq!(by("store").description.as_deref(), Some("Stores drafts."));
+        assert_eq!(by("store").decisions.as_deref(), Some("Append-only."));
+        assert_eq!(by("web").description.as_deref(), Some("The editor."));
+        assert_eq!(by("panels").description.as_deref(), Some("The editor's panels."));
+        assert_eq!(by("dev").description.as_deref(), Some("Writes drafts."));
+    }
+
+    /// If structure.toml describes a component its module doc already describes, then reports the doubled description and keeps the code's.
+    #[test]
+    fn reports_a_description_kept_in_two_places() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "Cargo.toml", "[package]\nname = \"core\"\nversion = \"0.1.0\"\n");
+        write(d, "src/lib.rs", "pub mod store;\n");
+        write(d, "src/store.rs", "//! Stores drafts.\npub fn put() {}\n");
+        write(d, ".scryer/structure.toml", "[components.\"src/store.rs\"]\ndescription = \"Keeps drafts.\"\n");
+        let tree = derived_tree_uncached(d).unwrap();
+        let store = tree.planned.nodes.iter().find(|n| n.name == "store").unwrap();
+        assert_eq!(store.description.as_deref(), Some("Stores drafts."));
+        let found: Vec<&str> = tree.style_violations.iter().filter(|v| v.node_id == store.id).map(|v| v.detail.as_str()).collect();
+        assert!(found.iter().any(|d| d.starts_with("[components.\"src/store.rs\"] describes store")), "{found:?}");
+    }
+
+    /// If a `[containers]` or `[components]` entry keys nothing the code has, then reports it as a finding on the system, while the entries that do key something name it.
+    #[test]
+    fn reports_entries_that_key_no_code() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "Cargo.toml", "[package]\nname = \"core\"\nversion = \"0.1.0\"\n");
+        write(d, "src/lib.rs", "pub mod drafts;\n");
+        write(d, "src/drafts/mod.rs", "pub fn save() {}\n");
+        write(
+            d,
+            ".scryer/structure.toml",
+            "[containers.core]\nname = \"Core\"\n\n[containers.gone]\nname = \"Gone\"\n\n[components.\"src/drafts\"]\nname = \"Drafts\"\n\n[components.\"src/moved\"]\nname = \"Moved\"\n",
+        );
+        let tree = derived_tree_uncached(d).unwrap();
+        let names: BTreeSet<&str> = tree.planned.nodes.iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains("Core") && names.contains("Drafts"), "{names:?}");
+        let unmatched: Vec<&str> =
+            tree.style_violations.iter().filter(|v| v.kind == "unmatched").map(|v| v.detail.as_str()).collect();
+        assert_eq!(unmatched.len(), 2, "{unmatched:?}");
+        assert!(unmatched[0].starts_with("[containers.\"gone\"]"), "{unmatched:?}");
+        assert!(unmatched[1].starts_with("[components.\"src/moved\"]"), "{unmatched:?}");
+        let system = tree.planned.nodes.iter().find(|n| n.kind == Kind::System).unwrap();
+        assert!(tree.style_violations.iter().filter(|v| v.kind == "unmatched").all(|v| v.node_id == system.id));
+    }
+
     /// When a module doc ends with a tag naming one of its style's layers, puts the module on that layer and drops the tag from its description; a module with neither the tag nor a layer-named folder stays layerless.
     #[test]
     fn a_module_doc_declares_its_layer() {

@@ -38,6 +38,9 @@ pub struct LiftedTest {
 pub struct FileLift {
     pub tests: Vec<LiftedTest>,
     pub module_description: Option<String>,
+    /// The module doc after its first paragraph: the decisions a later
+    /// reader needs, as markdown.
+    pub module_body: Option<String>,
     /// Line spans that are test code inside a product file (Rust
     /// `#[cfg(test)] mod`), so their helpers never become symbols.
     pub test_spans: Vec<(u32, u32)>,
@@ -63,15 +66,15 @@ pub fn lift_file(rel_path: &str, source: &str, parser: &mut Parser) -> FileLift 
     match ext {
         "rs" => {
             rust_tests(root, bytes, &mut lift);
-            lift.module_description = rust_module_doc(root, bytes);
+            (lift.module_description, lift.module_body) = rust_module_doc(root, bytes);
         }
         "ts" | "mts" | "cts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" => {
             js_tests(root, bytes, &mut Vec::new(), false, &mut lift.tests);
-            lift.module_description = js_module_doc(root, bytes);
+            (lift.module_description, lift.module_body) = js_module_doc(root, bytes);
         }
         "py" => {
             py_tests(root, bytes, false, &mut lift.tests);
-            lift.module_description = py_module_doc(root, bytes);
+            (lift.module_description, lift.module_body) = py_module_doc(root, bytes);
         }
         "cs" => cs_tests(root, bytes, &mut lift.tests),
         _ => {}
@@ -168,6 +171,19 @@ fn line_of(node: Node) -> (u32, u32) {
 }
 
 /// The first paragraph of a doc, its lines joined and whitespace collapsed.
+/// A module doc's first paragraph and the rest after it, the rest dedented
+/// as one block so its markdown keeps its shape.
+fn doc_parts(lines: &[String]) -> (Option<String>, Option<String>) {
+    let start = lines.iter().position(|l| !l.trim().is_empty()).unwrap_or(lines.len());
+    let end = lines[start..].iter().position(|l| l.trim().is_empty()).map_or(lines.len(), |n| start + n);
+    let rest: Vec<&str> = lines[end..].iter().map(|l| l.trim_end()).collect();
+    let a = rest.iter().position(|l| !l.is_empty()).unwrap_or(rest.len());
+    let b = rest.iter().rposition(|l| !l.is_empty()).map_or(a, |i| i + 1);
+    let indent = rest[a..b].iter().filter(|l| !l.is_empty()).map(|l| l.len() - l.trim_start().len()).min().unwrap_or(0);
+    let body = rest[a..b].iter().map(|l| l.get(indent..).unwrap_or("")).collect::<Vec<_>>().join("\n");
+    (first_paragraph(lines), (!body.is_empty()).then_some(body))
+}
+
 fn first_paragraph(lines: &[String]) -> Option<String> {
     let para: Vec<&str> = lines
         .iter()
@@ -333,7 +349,7 @@ fn rust_body_is_todo(func: Node, bytes: &[u8]) -> bool {
 }
 
 /// The leading `//!` lines (or a `/*! */` block) of a Rust file.
-fn rust_module_doc(root: Node, bytes: &[u8]) -> Option<String> {
+fn rust_module_doc(root: Node, bytes: &[u8]) -> (Option<String>, Option<String>) {
     let mut lines = Vec::new();
     let mut cursor = root.walk();
     for child in root.children(&mut cursor) {
@@ -354,7 +370,7 @@ fn rust_module_doc(root: Node, bytes: &[u8]) -> Option<String> {
             _ => break,
         }
     }
-    first_paragraph(&lines)
+    doc_parts(&lines)
 }
 
 // --- Vitest / Jest ---
@@ -489,8 +505,8 @@ pub(crate) fn js_head_doc_span(root: Node, source: &str) -> Option<(usize, usize
 
 /// A JSDoc at the head of the file that documents the file, not the first
 /// declaration under it.
-fn js_module_doc(root: Node, bytes: &[u8]) -> Option<String> {
-    js_head_doc(root, bytes).and_then(|n| first_paragraph(&jsdoc_lines(text(n, bytes))))
+fn js_module_doc(root: Node, bytes: &[u8]) -> (Option<String>, Option<String>) {
+    js_head_doc(root, bytes).map_or((None, None), |n| doc_parts(&jsdoc_lines(text(n, bytes))))
 }
 
 fn js_head_doc<'t>(root: Node<'t>, bytes: &[u8]) -> Option<Node<'t>> {
@@ -615,9 +631,9 @@ fn py_body_is_stub(block: Node, bytes: &[u8]) -> bool {
     }
 }
 
-fn py_module_doc(root: Node, bytes: &[u8]) -> Option<String> {
-    let doc = py_docstring(root, bytes)?;
-    first_paragraph(&doc.lines().map(str::to_string).collect::<Vec<_>>())
+fn py_module_doc(root: Node, bytes: &[u8]) -> (Option<String>, Option<String>) {
+    let Some(doc) = py_docstring(root, bytes) else { return (None, None) };
+    doc_parts(&doc.lines().map(str::to_string).collect::<Vec<_>>())
 }
 
 // --- .NET ---
@@ -751,6 +767,20 @@ mod tests {
         assert_eq!(rs.tests[0].junit_name, "retries_after_timeout");
         assert_eq!(sentence_case("don't drop it"), "Don't drop it");
         assert_eq!(sentence_case("a.b works"), "a.b works");
+    }
+
+    /// Lifts a module doc's first paragraph as its description and the rest
+    /// after it as its decisions, dedented, markdown kept.
+    #[test]
+    fn lifts_the_module_docs_decisions_after_its_description() {
+        let rs = lift("src/route.rs", "//! Routes edges.\n//!\n//! Why a grid:\n//!\n//!   - cards stay put\nfn a() {}\n");
+        assert_eq!(rs.module_description.as_deref(), Some("Routes edges."));
+        assert_eq!(rs.module_body.as_deref(), Some("Why a grid:\n\n  - cards stay put"));
+        let ts = lift("route.ts", "/**\n * Routes edges.\n *\n * Why a grid.\n */\n\nexport const a = 1;\n");
+        assert_eq!(ts.module_body.as_deref(), Some("Why a grid."));
+        let py = lift("route.py", "\"\"\"Routes edges.\n\nWhy a grid.\n\"\"\"\n");
+        assert_eq!(py.module_body.as_deref(), Some("Why a grid."));
+        assert_eq!(lift("one.rs", "//! Only a summary.\nfn a() {}\n").module_body, None);
     }
 
     /// When a Rust test fn carries a `///` doc, the doc's first paragraph is

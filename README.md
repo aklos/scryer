@@ -41,7 +41,7 @@ Spec-driven development answers that with a document written up front: a spec, a
 
 In scryer the spec is the test suite. An agent plans a change by writing each behaviour it will add as a todo test, one sentence per test, and builds until those tests pass. Its imports are checked against the architecture style each container declares. A green test it doubts gets probed: the code under it is broken on purpose, to see whether the test notices. Every one of those checks is deterministic: a test run, the import graph, a probe's red or green. No model grades another model's work.
 
-What comes out is the documentation. Scryer derives a [C4](https://c4model.com/) map of the repository: containers from packaging, components from modules, links from imports, claims from test descriptions, and each claim's status from real test runs. You read a column of sentences instead of an essay, see which hold right now, and see what changed since you last looked. Nobody writes the map, so it cannot drift.
+What comes out is the documentation. Scryer derives a [C4](https://c4model.com/) map of the repository: containers from packaging, components from modules, links from imports, claims from test descriptions, and each claim's status from real test runs. You read a column of sentences instead of an essay, see which hold right now, and follow what your agents change as they work. Nobody writes the map, so it cannot drift.
 
 Inside a session scryer drives and never blocks: MCP tools, session hooks and a skill steer Claude Code, Codex or Copilot CLI through the loop. At the gate it enforces: `scryer-mcp check` in CI fails on failing claims, architecture violations and malformed claim text.
 
@@ -79,7 +79,7 @@ Inside a session scryer drives and never blocks: MCP tools, session hooks and a 
 
 ### Reading the result
 
-**The map.** The desktop app shows the derived C4 map level by level, a page per node with its claims and their status, and what changed since you last looked: newly proven, still todo, newly stale or failing, and which components more than one session touched. Health counts what needs attention: todo, stale and failing claims, components with no claims, files no test reaches, surviving mutants, architecture violations.
+**The map.** The desktop app shows the derived C4 map level by level, a page per node with its claims and their status, and its agent sessions, live ones first: follow one and the wiki and map go where it edits, with a feed of the files it edits, the todo tests it writes and the verdicts its claims get. An ended session shows what it newly proved, left todo, or made stale or failing, and which components more than one session touched. Health counts what needs attention: todo, stale and failing claims, components with no claims, files no test reaches, surviving mutants, architecture violations.
 
 **Concerns cut across.** A trailing `[persistence]` or `[auth]` on a claim tags it with a concern. The concern lens dims everything else, so you can read down a component or across a concern.
 
@@ -111,7 +111,7 @@ Download the latest release for your platform from the [releases page](https://g
    uses = ["payments-db"]
    ```
 
-4. Give your agent a task. It orients, writes the claims it will satisfy as todo tests, builds, runs the radius, and ingests the report. Open scryer's landing page to see what changed since you last looked: newly proven, still todo, newly stale, and which components more than one session touched.
+4. Give your agent a task. It orients, writes the claims it will satisfy as todo tests, builds, runs the radius, and ingests the report. Open scryer's Sessions page and follow it as it works: the map goes where it edits while claims turn todo, then proven.
 5. Run `scryer-mcp check` in CI to fail on failing claims, architecture violations, or lint errors in claim text.
 
 ## Writing claims

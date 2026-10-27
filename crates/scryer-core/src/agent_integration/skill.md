@@ -77,7 +77,12 @@ Make the todos pass and turn each into a real test: drop `#[ignore]` / `.todo` /
 - **Go through the front door.** Import a sibling component from its entry file, never from a file inside it, and keep what others don't use private to the component.
 - **New code joins the component whose job it serves.** Start a new component only for a new job, and give it its doc and layer when you create it.
 
-**Decisions live in the module's doc comment.** A node's description is its module doc comment (`//!` in Rust, the file's leading `/** */` in TypeScript, a module docstring in Python). When you make a design decision a later reader needs (why this shape, what was rejected, what must stay true), record it there in a sentence or two: the decision and its reason. No separate ADR files; the doc comment travels with the code it explains.
+**Decisions live in the module's doc comment.** A node's module doc comment (`//!` in Rust, the file's leading `/** */` in TypeScript, a module docstring in Python) has two parts:
+
+- **The first paragraph is its description:** what the module is, in one card line of at most 200 characters.
+- **Everything after it is its decisions,** as markdown: when you make a design decision a later reader needs (why this shape, what was rejected, what must stay true), add it there with its reason.
+
+No separate ADR files; the doc comment travels with the code it explains. A decision spanning several modules goes on the lowest node containing them all; the ones below inherit it. The system's description and decisions are the root `ARCHITECTURE.md`, first paragraph and the rest.
 
 ## 4. Verify
 

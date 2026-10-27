@@ -6,19 +6,39 @@ name = "scryer"
 persons = ["developer", "agent"]
 externals = ["claude code", "codex", "copilot cli"]
 
+# Readable names. Everything else refers to a person or external by its key
+# under [system], so renaming one changes only its name here.
+[persons.developer]
+name = "Developer"
+
+[persons.agent]
+name = "Coding Agent"
+
+[externals."claude code"]
+name = "Claude Code"
+
+[externals.codex]
+name = "Codex"
+
+[externals."copilot cli"]
+name = "Copilot CLI"
+
 # Who uses scryer and how. A relationship that names a container sits on it
-# and is lifted to the system for the context map.
+# and is lifted to the system for the context map. Containers are named by
+# their key under [containers], never their display name, so a rename breaks
+# nothing; the UI's key is "scryer", the system's name too, so it alone goes
+# by its display name here.
 [relationships]
 developer = [
   { to = "Desktop App UI", label = "reads claims, their status and health in" },
-  { to = "MCP Server", label = "turns on agent integration and runs check with" },
+  { to = "crates/scryer-mcp", label = "turns on agent integration and runs check with" },
 ]
-agent = [{ to = "MCP Server", label = "orients, reads the tree and reports test runs and probes over MCP" }]
-"claude code" = [{ to = "MCP Server", label = "launches as its MCP server and session hook" }]
-codex = [{ to = "MCP Server", label = "launches as its MCP server and session hook" }]
-"copilot cli" = [{ to = "MCP Server", label = "launches as its MCP server and session hook" }]
-"Desktop App Host" = [{ to = "Preview Server", label = "runs with node as its preview sidecar" }]
-"Desktop App UI" = [{ to = "Preview Server", label = "frames component previews from" }]
+agent = [{ to = "crates/scryer-mcp", label = "orients, reads the tree and reports test runs and probes over MCP" }]
+"claude code" = [{ to = "crates/scryer-mcp", label = "launches as its MCP server and session hook" }]
+codex = [{ to = "crates/scryer-mcp", label = "launches as its MCP server and session hook" }]
+"copilot cli" = [{ to = "crates/scryer-mcp", label = "launches as its MCP server and session hook" }]
+"src-tauri" = [{ to = "preview", label = "runs with node as its preview sidecar" }]
+"Desktop App UI" = [{ to = "preview", label = "frames component previews from" }]
 
 [levels]
 e2e = ["e2e/**", "tests/e2e/**"]
@@ -81,18 +101,18 @@ name = "Docs Site"
 style = "astro"
 
 # Dev tooling built on the app's own modules: the Remotion demo film (and its
-# reel), the component harness and the static export viewer. They stay on the
+# reel) and the static export viewer. They stay on the
 # map, need no style, and may import any layer of the app.
 [containers.demo]
+name = "Demo Film"
 tooling = true
 
 [containers."demo/reel"]
-tooling = true
-
-[containers.harness]
+name = "Demo Reel"
 tooling = true
 
 [containers.export-viewer]
+name = "Export Viewer"
 tooling = true
 
 # The node sidecar the Rust host runs to render component previews. It has no

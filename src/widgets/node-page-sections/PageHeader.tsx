@@ -182,10 +182,12 @@ export function Ambox({
           ? "border-[var(--border-strong)] bg-[var(--surface-tint)]"
           : "border-orange-500/30 bg-orange-500/10";
   return (
-    <div className={`flex items-center gap-2.5 rounded-md border ${wash} px-3 py-2 text-xs text-[var(--text-secondary)]`}>
-      <span className={`shrink-0 ${iconTone}`}>{icon}</span>
+    // Icon and actions sit on the first line (a line-height tall box), so a
+    // notice that wraps doesn't float them between its lines.
+    <div className={`flex items-start gap-2.5 rounded-md border ${wash} px-3 py-2 text-sm leading-[1.5] text-[var(--text-secondary)]`}>
+      <span className={`flex h-[1.5em] shrink-0 items-center [&>svg]:h-4 [&>svg]:w-4 ${iconTone}`}>{icon}</span>
       <span className="min-w-0 flex-1">{children}</span>
-      {actions && <span className="flex shrink-0 items-center gap-3">{actions}</span>}
+      {actions && <span className="flex h-[1.5em] shrink-0 items-center gap-3">{actions}</span>}
     </div>
   );
 }

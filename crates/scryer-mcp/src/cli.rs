@@ -340,6 +340,9 @@ pub(crate) struct CheckReport {
     pub notes: Vec<String>,
 }
 
+/// The longest description a card shows whole, as the app caps an edit.
+const DESCRIPTION_MAX: usize = 200;
+
 pub(crate) fn check_report(tree: &DerivedTree, status: &DerivedStatus, gates: &Gates) -> CheckReport {
     use scryer_core::derived_tree::ProbeMark;
     let mut failures = Vec::new();
@@ -396,6 +399,23 @@ pub(crate) fn check_report(tree: &DerivedTree, status: &DerivedStatus, gates: &G
         ));
     }
     failures.extend(lint_tree(tree).iter().map(|f| format!("lint: {}", lint_line(f))));
+    // A description is the line a card shows; what runs longer belongs in the
+    // decisions after it.
+    let long: Vec<String> = tree
+        .planned
+        .nodes
+        .iter()
+        .filter(|n| n.kind != scryer_core::Kind::Symbol)
+        .filter(|n| n.description.as_deref().is_some_and(|d| d.chars().count() > DESCRIPTION_MAX))
+        .map(|n| crate::helpers::breadcrumb(&tree.planned, &n.id))
+        .collect();
+    if !long.is_empty() {
+        notes.push(format!(
+            "{} description(s) over {DESCRIPTION_MAX} characters (not gating — keep the first paragraph to one card line and move the rest below it, as decisions): {}",
+            long.len(),
+            long.iter().take(5).cloned().collect::<Vec<_>>().join(", ")
+        ));
+    }
     let planned = in_state(ClaimState::Planned).count();
     if planned > 0 {
         notes.push(format!("{planned} todo test(s) — work to do or a test body to write, not a failure"));

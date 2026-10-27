@@ -40,8 +40,8 @@ export function ProjectPicker({ storage }: { storage: ModelStorage }) {
           </div>
           <p className="text-sm leading-relaxed text-[var(--text-secondary)]">
             What your software is accountable for, read from its tests: every
-            claim, whether it holds right now, and what changed since you last
-            looked.
+            claim, whether it holds right now, and what your agents are
+            changing as they work.
           </p>
         </div>
         <button

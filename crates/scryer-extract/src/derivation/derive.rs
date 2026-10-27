@@ -36,7 +36,32 @@ pub struct DeriveInput<'a> {
     /// The style table: the built-ins plus the project's own styles, which
     /// name the layers a styled container's components can take.
     pub styles: &'a Styles,
+    /// Each container's manifest description by directory, with the
+    /// manifest it came from, for a container no entry module doc describes.
+    pub manifest_descriptions: &'a BTreeMap<String, (String, String)>,
+    /// The project's root `ARCHITECTURE.md`: the system's description and
+    /// decisions.
+    pub architecture: Option<&'a str>,
     pub fingerprint: u64,
+}
+
+/// Where a description in `structure.toml` is written and read.
+pub const STRUCTURE_FILE: &str = ".scryer/structure.toml";
+/// Where the system's description and decisions are written and read.
+pub const ARCHITECTURE_FILE: &str = "ARCHITECTURE.md";
+
+/// A markdown file's first paragraph and the rest after it, a title
+/// heading above the first paragraph skipped.
+pub fn markdown_parts(text: &str) -> (Option<String>, Option<String>) {
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines
+        .iter()
+        .position(|l| !l.trim().is_empty() && !l.trim_start().starts_with("# "))
+        .unwrap_or(lines.len());
+    let end = lines[start..].iter().position(|l| l.trim().is_empty()).map_or(lines.len(), |n| start + n);
+    let summary = lines[start..end].join(" ").split_whitespace().collect::<Vec<_>>().join(" ");
+    let body = lines[end..].join("\n").trim().to_string();
+    ((!summary.is_empty()).then_some(summary), (!body.is_empty()).then_some(body))
 }
 
 /// The technology a React function component's symbol carries: its
@@ -188,6 +213,7 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
     let styles = input.styles;
     let mut taken = HashSet::new();
     let mut model = ScryModel::new();
+    let mut doc_files: BTreeMap<String, String> = BTreeMap::new();
 
     // Containers, deepest first so a nested package owns its files.
     let mut by_depth: Vec<&ContainerFacts> = input.containers.iter().collect();
@@ -223,19 +249,27 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
 
     let system_name = s.system.name.clone().unwrap_or_else(|| input.project_name.to_string());
     let system_id = stable_id("node", "system", &mut taken);
-    model.nodes.push(node(&system_id, Kind::System, &system_name, None));
+    let mut system = node(&system_id, Kind::System, &system_name, None);
+    (system.description, system.decisions) = input.architecture.map(markdown_parts).unwrap_or_default();
+    doc_files.insert(system_id.clone(), ARCHITECTURE_FILE.to_string());
+    model.nodes.push(system);
     // The context level's nodes by their structure.toml name, for the
     // declared relationships between them.
     let mut context_ids: HashMap<&str, String> = HashMap::new();
     for person in &s.system.persons {
         let id = stable_id("node", &format!("person:{person}"), &mut taken);
-        model.nodes.push(node(&id, Kind::Person, person, None));
+        let mut n = node(&id, Kind::Person, s.context_name(person).unwrap_or(person), None);
+        n.description = s.context_description(person).map(str::to_string);
+        doc_files.insert(id.clone(), STRUCTURE_FILE.to_string());
+        model.nodes.push(n);
         context_ids.insert(person, id);
     }
     for external in &s.system.externals {
         let id = stable_id("node", &format!("external:{external}"), &mut taken);
-        let mut n = node(&id, Kind::System, external, None);
+        let mut n = node(&id, Kind::System, s.context_name(external).unwrap_or(external), None);
         n.external = Some(true);
+        n.description = s.context_description(external).map(str::to_string);
+        doc_files.insert(id.clone(), STRUCTURE_FILE.to_string());
         model.nodes.push(n);
         context_ids.insert(external, id);
     }
@@ -258,15 +292,34 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         n.technology = c.technology.clone();
         n.style = config.and_then(|k| k.style.clone());
         n.tooling = config.is_some_and(|k| k.tooling).then_some(true);
-        n.description = input
+        let entries: Vec<&String> = input
             .lifts
-            .iter()
-            .filter(|(rel, _)| owner(rel).is_some_and(|o| o.dir == c.dir))
-            .filter(|(rel, _)| {
+            .keys()
+            .filter(|rel| owner(rel).is_some_and(|o| o.dir == c.dir))
+            .filter(|rel| {
                 let (_, inner) = inner_path(&c.dir, rel);
                 ENTRY_FILES.contains(&inner)
             })
-            .find_map(|(_, lift)| lift.module_description.clone());
+            .collect();
+        // One source for the description: the entry module doc, else the
+        // manifest's, else structure.toml's. An entry file with no doc is
+        // where a new description goes; with no entry file, structure.toml.
+        let documented = entries.iter().find(|rel| input.lifts[**rel].module_description.is_some());
+        let manifest = input.manifest_descriptions.get(&c.dir);
+        let (description, source) = match (documented, manifest) {
+            (Some(f), _) => {
+                n.decisions = input.lifts[*f].module_body.clone();
+                (input.lifts[*f].module_description.clone(), f.to_string())
+            }
+            (None, Some((file, d))) => (Some(d.clone()), file.clone()),
+            (None, None) => match (config.and_then(|k| k.description.clone()), entries.first()) {
+                (Some(d), _) => (Some(d), STRUCTURE_FILE.to_string()),
+                (None, Some(f)) => (None, f.to_string()),
+                (None, None) => (None, STRUCTURE_FILE.to_string()),
+            },
+        };
+        n.description = description;
+        doc_files.insert(id.clone(), source);
         let glob = if c.dir.is_empty() { "**".to_string() } else { format!("{}/**", c.dir) };
         model.boundaries.insert(id.clone(), vec![Source { pattern: glob, comment: None }]);
         model.nodes.push(n);
@@ -441,11 +494,18 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
     for (path, comp) in components.iter_mut() {
         comp.id = stable_id("node", &format!("component:{path}"), &mut taken);
         let container = &container_ids[comp.container_dir.as_str()];
-        let mut n = node(&comp.id, Kind::Component, &comp.name, Some(container));
+        // `[components]` keys a component by its path as its boundary shows
+        // it: the directory, or the file of a one-file module.
+        let name = comp
+            .patterns
+            .iter()
+            .find_map(|p| s.component_name(p.strip_suffix("/**").unwrap_or(p)))
+            .unwrap_or(&comp.name);
+        let mut n = node(&comp.id, Kind::Component, name, Some(container));
         let layers = layers_of(&comp.container_dir);
         // The module doc of the component's root: `domain/mod.rs`,
         // `domain.rs`, `index.ts`, `__init__.py`, or a one-file module.
-        let doc = comp
+        let roots: Vec<&String> = comp
             .files
             .iter()
             .filter(|rel| {
@@ -455,7 +515,18 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
                 (depth == 1 && ENTRY_FILES.contains(&name))
                     || (depth == 0 && !ENTRY_FILES.contains(&name))
             })
-            .find_map(|rel| input.lifts[rel].module_description.clone());
+            .collect();
+        let doc_file = roots.iter().find(|rel| input.lifts[**rel].module_description.is_some()).or(roots.first());
+        let key = comp.patterns.iter().map(|p| p.strip_suffix("/**").unwrap_or(p)).find(|k| s.components.contains_key(*k));
+        let doc = doc_file.and_then(|rel| input.lifts[*rel].module_description.clone());
+        n.decisions = doc_file.and_then(|rel| input.lifts[*rel].module_body.clone());
+        // A component with no root file has no module doc to hold its
+        // description; structure.toml holds it.
+        let doc = match (&doc, doc_file) {
+            (None, None) => key.and_then(|k| s.component_description(k)).map(str::to_string),
+            _ => doc,
+        };
+        doc_files.insert(comp.id.clone(), doc_file.map_or(STRUCTURE_FILE.to_string(), |f| f.to_string()));
         // A layer the doc declares wins; otherwise a directory named after
         // one of the style's layers is that layer.
         let (description, declared) = declared_layer(doc, &layers);
@@ -471,10 +542,12 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
     for f in &sub_files {
         let id = stable_id("node", &format!("subcomponent:{f}"), &mut taken);
         let comp = &components[&file_component[f]];
-        let mut n = node(&id, Kind::Component, file_stem(f), Some(&comp.id));
+        let mut n = node(&id, Kind::Component, s.component_name(f).unwrap_or(file_stem(f)), Some(&comp.id));
         let (description, declared) =
             declared_layer(input.lifts[*f].module_description.clone(), &layers_of(&comp.container_dir));
         n.description = description;
+        n.decisions = input.lifts[*f].module_body.clone();
+        doc_files.insert(id.clone(), f.to_string());
         // A file split out of its directory's component sits on that
         // directory's layer, so the style checks its imports like the rest,
         // unless its own doc declares another.
@@ -857,6 +930,7 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         planned: model,
         claims,
         file_nodes,
+        doc_files,
         dark_files,
         style_violations: Vec::new(),
         layer_exempt,
@@ -1043,6 +1117,7 @@ fn node(id: &str, kind: Kind, name: &str, parent: Option<&str>) -> Node {
         layer: None,
         exercised_by: Vec::new(),
         tooling: None,
+        decisions: None,
     }
 }
 

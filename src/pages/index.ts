@@ -1,8 +1,9 @@
 /**
  * Wiki special pages — the cross-cutting surfaces that aren't one node:
  *
- *  - Since you last looked (the landing page): per agent session since the
- *    project was last opened, what its edits proved, planned, or made stale.
+ *  - Sessions (the landing page): each agent session, live ones first —
+ *    what it is doing as it works, and what its edits proved, planned, or
+ *    made stale.
  *  - Dark code: product files no test reaches by import, grouped by the
  *    node that holds them.
  *

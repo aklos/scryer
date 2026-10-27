@@ -61,17 +61,17 @@ export function Powerline({ model, agent, health, launch, onOpenSpecial, onOpenS
             <span className="font-medium text-[var(--text-secondary)]">
               {AGENT_LABEL[launch.agent]}
             </span>
-            <span className="text-[var(--text-tertiary)]">{launch.model || "default"}</span>
-            <span className="text-[var(--text-ghost)]">·</span>
-            <span className="text-[var(--text-tertiary)]">{launch.effort}</span>
+            <span className="pl-md text-[var(--text-tertiary)]">{launch.model || "default"}</span>
+            <span className="pl-md text-[var(--text-ghost)]">·</span>
+            <span className="pl-md text-[var(--text-tertiary)]">{launch.effort}</span>
           </>
         ) : (
           <span className="text-[var(--text-tertiary)]">no agent</span>
         )}
       </button>
 
-      {/* Claims by derived status. Click for what changed since you last
-          looked. */}
+      {/* Claims by derived status. Click for the agent sessions moving
+          them. */}
       <button
         type="button"
         onClick={() => onOpenSpecial("session")}
@@ -97,7 +97,7 @@ export function Powerline({ model, agent, health, launch, onOpenSpecial, onOpenS
       <button
         type="button"
         onClick={() => onOpenSpecial("dark")}
-        className="seg"
+        className="seg pl-sm"
         style={sb("color-mix(in srgb, var(--text) 4%, var(--surface-canvas))")}
       >
         {health == null ? (
@@ -115,7 +115,7 @@ export function Powerline({ model, agent, health, launch, onOpenSpecial, onOpenS
       </button>
 
       {/* Model size. */}
-      <div className="seg" style={sb("color-mix(in srgb, var(--text) 2.5%, var(--surface-canvas))")}>
+      <div className="seg pl-lg" style={sb("color-mix(in srgb, var(--text) 2.5%, var(--surface-canvas))")}>
         <span className="text-[var(--text-tertiary)]">
           {model.nodes.length} node{model.nodes.length === 1 ? "" : "s"}
         </span>

@@ -1,8 +1,9 @@
 //! `.scryer/structure.toml`: the little the code cannot say about its own
 //! shape — the system's name, its persons and externals and how they relate,
-//! which test globs are e2e or integration, and each container's display
-//! name, style, layers and the externals it talks to. Everything in it is
-//! optional; an absent file means sensible defaults.
+//! which test globs are e2e or integration, each container's display
+//! name, style, layers and the externals it talks to, and a readable name for
+//! any person, external or component. Everything in it is optional; an
+//! absent file means sensible defaults.
 
 use glob::{MatchOptions, Pattern};
 use serde::Deserialize;
@@ -24,6 +25,16 @@ pub struct Structure {
     /// Keyed by container directory or name (crate/package name).
     #[serde(default)]
     pub containers: BTreeMap<String, ContainerConfig>,
+    /// Keyed by the component's path: its directory, or its file when it is
+    /// one file.
+    #[serde(default)]
+    pub components: BTreeMap<String, NameConfig>,
+    /// Keyed by the person's name under `[system]`.
+    #[serde(default)]
+    pub persons: BTreeMap<String, NameConfig>,
+    /// Keyed by the external's name under `[system]`.
+    #[serde(default)]
+    pub externals: BTreeMap<String, NameConfig>,
     /// Relationships, keyed by the source's name: the system, a person, an
     /// external, or a container `[containers]` declares (by key or display
     /// name), which places the relationship on that container and lifts it to
@@ -73,6 +84,17 @@ pub struct SystemConfig {
     pub externals: Vec<String>,
 }
 
+/// A readable name for a node the code or `[system]` names by its key. The
+/// key is what everything else refers to it by; the name is only shown.
+/// The description is for a node no code documents: a person, an external,
+/// a component with no root file to hold a module doc.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NameConfig {
+    pub name: Option<String>,
+    pub description: Option<String>,
+}
+
 /// Test-path globs per level; a key left out keeps its default, and a test
 /// matching neither is a unit test.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -87,6 +109,9 @@ pub struct LevelsConfig {
 pub struct ContainerConfig {
     /// Display name in place of the package name.
     pub name: Option<String>,
+    /// For a container neither an entry module doc nor its manifest
+    /// describes.
+    pub description: Option<String>,
     pub style: Option<String>,
     #[serde(default)]
     pub layers: Vec<String>,
@@ -142,6 +167,17 @@ impl Structure {
                 if t.to() == src {
                     return Err(format!("structure.toml: [relationships] relates \"{src}\" to itself"));
                 }
+            }
+        }
+        for (table, keys, declared) in [
+            ("persons", &self.persons, &self.system.persons),
+            ("externals", &self.externals, &self.system.externals),
+        ] {
+            if let Some(key) = keys.keys().find(|k| !declared.contains(k)) {
+                return Err(format!(
+                    "structure.toml: [{table}.\"{key}\"] names a {} [system] does not declare",
+                    &table[..table.len() - 1]
+                ));
             }
         }
         for (key, c) in &self.containers {
@@ -229,6 +265,26 @@ impl Structure {
     pub fn container(&self, name: &str, dir: &str) -> Option<&ContainerConfig> {
         self.containers.get(dir).or_else(|| self.containers.get(name))
     }
+
+    /// The readable name `[components]` gives the component at `path`.
+    pub fn component_name(&self, path: &str) -> Option<&str> {
+        self.components.get(path).and_then(|c| c.name.as_deref())
+    }
+
+    /// The readable name of a person or external, by its key under `[system]`.
+    pub fn context_name(&self, key: &str) -> Option<&str> {
+        self.persons.get(key).or_else(|| self.externals.get(key)).and_then(|c| c.name.as_deref())
+    }
+
+    /// The description of a person or external, by its key under `[system]`.
+    pub fn context_description(&self, key: &str) -> Option<&str> {
+        self.persons.get(key).or_else(|| self.externals.get(key)).and_then(|c| c.description.as_deref())
+    }
+
+    /// The description `[components]` gives the component at `path`.
+    pub fn component_description(&self, path: &str) -> Option<&str> {
+        self.components.get(path).and_then(|c| c.description.as_deref())
+    }
 }
 
 /// `structure.toml` text with one container's display name set, comments and
@@ -241,12 +297,25 @@ pub fn set_container_name(text: &str, dir: &str, name: &str) -> String {
 /// `structure.toml` text with one string field of one container set, the
 /// way [`set_container_name`] sets the name.
 pub fn set_container_field(text: &str, dir: &str, key: &str, value: &str) -> String {
+    set_table_field(text, "containers", dir, key, value)
+}
+
+/// `structure.toml` text with one string field of the `[table."entry"]`
+/// section set in place, the section added when missing.
+pub fn set_table_field(text: &str, table: &str, entry: &str, key: &str, value: &str) -> String {
+    let headers = [format!("[{table}.\"{entry}\"]"), format!("[{table}.{entry}]")];
+    set_section_field(text, &headers, key, value)
+}
+
+/// `structure.toml` text with one string field of the section a header in
+/// `headers` opens set in place, comments and everything else left as
+/// written. A missing section is added under the first header.
+pub fn set_section_field(text: &str, headers: &[String], key: &str, value: &str) -> String {
     let quoted_name = format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""));
-    let headers = [format!("[containers.\"{dir}\"]"), format!("[containers.{dir}]")];
     let lines: Vec<&str> = text.lines().collect();
     let Some(start) = lines.iter().position(|l| headers.iter().any(|h| l.trim() == h)) else {
         let sep = if text.is_empty() || text.ends_with("\n\n") { "" } else if text.ends_with('\n') { "\n" } else { "\n\n" };
-        return format!("{text}{sep}[containers.\"{dir}\"]\n{key} = {quoted_name}\n");
+        return format!("{text}{sep}{}\n{key} = {quoted_name}\n", headers[0]);
     };
     let end = lines[start + 1..]
         .iter()
@@ -307,6 +376,28 @@ layers = ["domain", "application", "composition", "infrastructure"]
         assert_eq!(s.configured_level("crates/scryer-core/src/model.rs"), None);
         assert!(s.integration_configured());
         assert!(s.radius_includes_e2e());
+    }
+
+    /// Reads a readable name for each person, external and component, keyed
+    /// by what `[system]` or the code calls it.
+    #[test]
+    fn reads_readable_names_by_key() {
+        let s = Structure::parse(
+            "[system]\npersons = [\"dev\"]\nexternals = [\"gh\"]\n\n[persons.dev]\nname = \"Developer\"\n\n[externals.gh]\nname = \"GitHub\"\n\n[components.\"src/drafts\"]\nname = \"Drafts\"\n",
+        )
+        .unwrap();
+        assert_eq!(s.context_name("dev"), Some("Developer"));
+        assert_eq!(s.context_name("gh"), Some("GitHub"));
+        assert_eq!(s.component_name("src/drafts"), Some("Drafts"));
+        assert_eq!(s.component_name("src/store"), None);
+    }
+
+    /// If `[persons]` or `[externals]` keys one `[system]` does not declare,
+    /// then refuses the file, the way a misspelt relationship end is refused.
+    #[test]
+    fn refuses_a_name_for_an_undeclared_person() {
+        let err = Structure::parse("[system]\npersons = [\"dev\"]\n\n[persons.devs]\nname = \"Developers\"\n").unwrap_err();
+        assert!(err.contains("[persons.\"devs\"]"), "{err}");
     }
 
     /// When the file is absent, e2e and integration directories still sort

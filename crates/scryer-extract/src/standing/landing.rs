@@ -1,13 +1,15 @@
-//! What changed since you last looked, across the project's live git
+//! What each agent session is doing and did, across the project's live git
 //! worktrees: each worktree's sessions read against that checkout's own
 //! derived tree and status (claims and tests live in the tree, so status is
 //! per checkout), merged newest first with each session labelled by its
-//! worktree. A session logged in this checkout whose every touch falls
-//! inside a nested worktree is that worktree's.
+//! worktree and marked live by the checkout that logged it. A session
+//! logged in this checkout whose every touch falls inside a nested worktree
+//! is that worktree's.
 
 use crate::test_status::derived_status;
 use scryer_core::derived_tree::{
-    landing, landing_at, merge_worktrees, sessions_since, take_prefixed, Landing, LandingWorktree,
+    landing, landing_at, live_session_ids, mark_live, merge_worktrees, sessions_since, take_prefixed, Landing,
+    LandingWorktree,
 };
 use scryer_core::ModelRef;
 use std::path::{Path, PathBuf};
@@ -24,6 +26,12 @@ pub fn landing_across_worktrees(project: &Path, since: u64) -> Result<Landing, S
     }
     let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
     let here = canon(project);
+    // Read before sessions move between worktrees: a session is live by the
+    // checkout that logged it.
+    let live: std::collections::BTreeSet<String> = worktrees
+        .iter()
+        .flat_map(|w| live_session_ids(&ModelRef::ProjectLocal(canon(&w.path))))
+        .collect();
     let mut buckets: Vec<(LandingWorktree, PathBuf, Vec<_>)> = worktrees
         .iter()
         .map(|w| {
@@ -68,6 +76,7 @@ pub fn landing_across_worktrees(project: &Path, since: u64) -> Result<Landing, S
         })
         .collect();
     let mut out = merge_worktrees(since, parts);
+    mark_live(&live, &mut out);
     out.branch = out.worktrees.iter().find(|w| w.current).and_then(|w| w.branch.clone());
     Ok(out)
 }
@@ -93,8 +102,9 @@ mod tests {
     /// When the project has several worktrees, each session is labelled with
     /// the worktree it worked in (a session logged in the main checkout that
     /// touched only a nested worktree's files is the nested one's), a worktree
-    /// with no sessions is listed by its branch, and a component touched in
-    /// two worktrees counts as shared.
+    /// with no sessions is listed by its branch, a component touched in two
+    /// worktrees counts as shared, and a session editing now is live
+    /// whichever worktree it moved to.
     #[test]
     fn sessions_group_by_worktree_and_share_across_them() {
         let dir = tempfile::tempdir().unwrap();
@@ -122,6 +132,7 @@ mod tests {
         assert_eq!(worktree_of("s-main"), Some(canon(&main)));
         assert_eq!(worktree_of("s-side"), Some(canon(&side)));
         assert_eq!(worktree_of("s-nested"), Some(canon(&main.join("wt/nested"))));
+        assert!(landing.sessions.iter().all(|s| s.live), "each touched a file just now");
 
         let listed: Vec<(Option<&str>, usize, bool)> =
             landing.worktrees.iter().map(|w| (w.branch.as_deref(), w.sessions, w.current)).collect();

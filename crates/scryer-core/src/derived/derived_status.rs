@@ -362,6 +362,7 @@ mod tests {
             layer: None,
             exercised_by: Vec::new(),
             tooling: None,
+            decisions: None,
         }
     }
 
@@ -415,6 +416,7 @@ mod tests {
                 c
             })
             .collect(),
+            doc_files: Default::default(),
             file_nodes: BTreeMap::from([
                 ("src/a.rs".to_string(), "core".to_string()),
                 ("src/b.rs".to_string(), "bare".to_string()),

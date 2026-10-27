@@ -95,7 +95,7 @@ export function PageSection({
 
 export function Empty({ children }: { children: ReactNode }) {
   return (
-    <div className="font-mono text-xs leading-relaxed text-[var(--text-muted)]">
+    <div className="font-mono text-sm leading-relaxed text-[var(--text-muted)]">
       {children}
     </div>
   );

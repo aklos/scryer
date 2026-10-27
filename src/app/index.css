@@ -106,6 +106,31 @@
   /* A card's name and description: the page's own ink in light mode. */
   --map-title: var(--text);
   --map-desc: var(--text-muted);
+  /* A style's layer regions behind the cards: a tint and an outline that
+     read against the canvas (the page's surface tint is the canvas itself in
+     light mode), and the layer's name in the muted ink. The tint is
+     translucent, so a layer nested in another (domain in application) reads
+     a step darker. */
+  --map-region: color-mix(in srgb, var(--text-muted) 11%, transparent);
+  --map-region-line: color-mix(in srgb, var(--text-muted) 55%, var(--surface-canvas));
+  --map-region-label: var(--text-muted);
+  /* The tree's nesting: every open node frames its subtree, an outline and
+     a translucent tint that add up as frames nest. Mixed from the text ramp
+     over the sidebar, since the page's hairline border sits within a shade
+     of it. The node the map is inside draws its frame in the map's boundary
+     ink, so the tree carries the frame the map draws. */
+  --tree-rail: color-mix(in srgb, var(--text-muted) 45%, var(--surface));
+  --tree-frame: color-mix(in srgb, var(--text-muted) 6%, transparent);
+  --tree-boundary: var(--map-boundary);
+  /* A subtree's claims as one bar: proven a muted green and todo a mid
+     blue, the resting states, set apart in lightness as well as hue;
+     unverified and failing in full, the ones that need someone. The bare
+     track: code with no claims. */
+  --claim-mix-proven: rgb(16 185 129 / 0.4);
+  --claim-mix-planned: rgb(2 132 199 / 0.75);
+  --claim-mix-stale: #d97706;
+  --claim-mix-failing: #ef4444;
+  --claim-mix-empty: color-mix(in srgb, var(--text-muted) 30%, transparent);
 }
 
 .dark {
@@ -146,6 +171,17 @@
   --map-boundary: var(--text-muted);
   --map-title: color-mix(in srgb, var(--text) 50%, #ffffff);
   --map-desc: var(--text-tertiary);
+  --map-region: color-mix(in srgb, var(--surface-tint) 35%, transparent);
+  --map-region-line: var(--border);
+  --map-region-label: var(--text-ghost);
+  --tree-rail: color-mix(in srgb, var(--text-muted) 40%, var(--surface));
+  --tree-frame: color-mix(in srgb, var(--text-muted) 8%, transparent);
+  --tree-boundary: var(--map-boundary);
+  --claim-mix-proven: rgb(110 231 183 / 0.4);
+  --claim-mix-planned: rgb(125 211 252 / 0.75);
+  --claim-mix-stale: #fcd34d;
+  --claim-mix-failing: #fca5a5;
+  --claim-mix-empty: color-mix(in srgb, var(--text-muted) 35%, transparent);
 }
 
 /* Text selection carries the accent — the one hue that means "where you are". */
@@ -273,6 +309,24 @@
 }
 .pl .grow {
   flex: 1;
+}
+/* A narrowing window drops the readouts it can live without, least needed
+   first: the tree's size, then the agent's model and effort, then dark files.
+   The claims stay. Plain CSS, since `.pl .seg` would outrank a utility. */
+@media (max-width: 1023.98px) {
+  .pl .pl-lg {
+    display: none;
+  }
+}
+@media (max-width: 767.98px) {
+  .pl .pl-md {
+    display: none;
+  }
+}
+@media (max-width: 639.98px) {
+  .pl .pl-sm {
+    display: none;
+  }
 }
 /* Center stream — the agent's live transient line, plainly styled (no chevron,
    no barber-pole) and centered in the gap. Also acts as the flex spacer. */

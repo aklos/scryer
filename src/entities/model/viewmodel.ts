@@ -168,6 +168,10 @@ export interface Node {
    *  part of the codebase, not of the product, and held to no style. Mirrors
    *  Rust `Node.tooling`. */
   tooling?: boolean;
+  /** The decisions a later reader needs, as markdown: the module doc after
+   *  its first paragraph, or `ARCHITECTURE.md` after its first for the
+   *  system. Derived. Mirrors Rust `Node.decisions`. */
+  decisions?: string;
 }
 
 /** What a link between two styled nodes IS. Mirrors Rust `LinkKind`. */

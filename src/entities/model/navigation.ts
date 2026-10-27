@@ -8,6 +8,6 @@ export type SpecialPage = "dark" | "session";
 export type Selected =
   | { kind: "node"; id: string }
   | { kind: "group"; id: string }
-  // Wiki special pages — Since you last looked (`session`) and Dark code
+  // Wiki special pages — Sessions (`session`) and Dark code
   // (App routes these).
   | { kind: "special"; id: SpecialPage };

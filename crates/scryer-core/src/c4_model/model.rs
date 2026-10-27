@@ -270,6 +270,13 @@ pub struct Node {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub tooling: Option<bool>,
+    /// The decisions a later reader needs (why this shape, what was
+    /// rejected, what must stay true), as markdown: a module doc after its
+    /// first paragraph, or `ARCHITECTURE.md` after its first for the system.
+    /// Derived, like the description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub decisions: Option<String>,
 }
 
 /// The `empty` flag — a SYMBOL that carries no semantic content of its own: no
@@ -540,6 +547,7 @@ mod tests {
             layer: None,
             exercised_by: Vec::new(),
             tooling: None,
+            decisions: None,
         }
     }
 

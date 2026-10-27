@@ -402,6 +402,7 @@ mod tests {
             committed: ScryModel::new(),
             planned: ScryModel::new(),
             claims,
+            doc_files: Default::default(),
             file_nodes: Default::default(),
             dark_files: Vec::new(),
             style_violations: Vec::new(),

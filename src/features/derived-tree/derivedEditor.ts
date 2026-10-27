@@ -2,9 +2,12 @@
  * The editor for the derived tree. The tree is read from the code, so the
  * only edits are the ones that land in the code or in `structure.toml`:
  * rewording a claim edits its test's description, a new claim becomes a
- * todo stub in the node's test file, and renaming a container sets its
- * display name. Everything structural (create, move, delete) is the code's
- * job, so those intents do nothing here.
+ * todo stub in the node's test file, a description lands where it is read
+ * from (a module doc's first paragraph, a manifest, `ARCHITECTURE.md`,
+ * `structure.toml`), decisions are the module doc after it, and renaming
+ * any node above code level sets its readable name in `structure.toml`.
+ * Everything structural (create, move, delete) is the code's job, so those
+ * intents do nothing here.
  */
 
 import { invoke } from "@tauri-apps/api/core";
@@ -41,11 +44,18 @@ export function makeDerivedEditor({
       if (!node) return;
       const writes: Promise<unknown>[] = [];
       if (patch.name !== undefined && patch.name !== node.name) {
-        if (node.kind === "container") writes.push(run("rename_container", { nodeId, name: patch.name }));
-        else onError("A component is named by its module; rename it in the code.");
+        if (node.kind !== "symbol") writes.push(run("rename_node", { nodeId, name: patch.name }));
+        else onError("A symbol is named by its code; rename it there.");
       }
-      if (patch.description !== undefined && patch.description !== node.description)
-        onError("A description is the module's doc comment; edit it in the code.");
+      if (patch.description !== undefined && patch.description !== node.description) {
+        if (node.kind !== "symbol") writes.push(run("edit_node_description", { nodeId, text: patch.description }));
+        else onError("A symbol's description is its doc comment; edit it in the code.");
+      }
+      if (patch.decisions !== undefined && patch.decisions !== (node.decisions ?? "")) {
+        if (node.kind !== "symbol" && node.kind !== "person" && !node.external)
+          writes.push(run("edit_node_decisions", { nodeId, text: patch.decisions }));
+        else onError("Decisions live in a module doc; this node has none.");
+      }
       if (patch.responsibilities) {
         const before = new Map((node.responsibilities ?? []).map((r) => [r.id, r]));
         for (const r of patch.responsibilities) {

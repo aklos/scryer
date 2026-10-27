@@ -349,6 +349,176 @@ pub fn add_module_doc(rel_path: &str, source: &str, statements: &[String]) -> Re
     Ok(Some(out))
 }
 
+/// The first non-blank run of `lines`, as a range; empty at the end when
+/// every line is blank.
+fn first_run(lines: &[String]) -> std::ops::Range<usize> {
+    let a = lines.iter().position(|l| !l.trim().is_empty()).unwrap_or(lines.len());
+    let b = lines[a..].iter().position(|l| l.trim().is_empty()).map_or(lines.len(), |n| a + n);
+    a..b
+}
+
+/// Replace the first paragraph of a file's module doc — the paragraph the
+/// lifter reads as its description — with `summary`, leaving the rest of
+/// the doc as it was, and start a doc when the file has none.
+pub fn set_module_summary(rel_path: &str, source: &str, summary: &str) -> Result<String, String> {
+    let summary = summary.split_whitespace().collect::<Vec<_>>().join(" ");
+    if summary.is_empty() {
+        return Err("a description can't be empty".into());
+    }
+    edit_module_doc(rel_path, source, DocPart::Summary(&summary))
+}
+
+/// Replace everything in a file's module doc after its first paragraph —
+/// the decisions a later reader needs — with `body`, a markdown text,
+/// leaving the summary as it was. An empty body clears it. A file with no
+/// doc has no summary for decisions to follow, so it is refused.
+pub fn set_module_body(rel_path: &str, source: &str, body: &str) -> Result<String, String> {
+    edit_module_doc(rel_path, source, DocPart::Body(body.trim()))
+}
+
+enum DocPart<'a> {
+    Summary(&'a str),
+    Body(&'a str),
+}
+
+/// `docs`, the module doc's lines, with the part replaced: the first run of
+/// non-blank lines by `summary`, or every line after it by a blank and the
+/// body's lines.
+fn splice_doc(docs: &mut Vec<String>, part: &DocPart, summary_line: impl FnOnce(&str) -> String) {
+    let run = first_run(docs);
+    match part {
+        DocPart::Summary(summary) => {
+            docs.splice(run, [summary_line(summary)]);
+        }
+        DocPart::Body(body) => {
+            docs.truncate(run.end);
+            if !body.is_empty() {
+                docs.push(String::new());
+                docs.extend(body.lines().map(|l| l.trim_end().to_string()));
+            }
+        }
+    }
+}
+
+fn edit_module_doc(rel_path: &str, source: &str, part: DocPart) -> Result<String, String> {
+    let fresh = || match part {
+        DocPart::Summary(summary) => {
+            add_module_doc(rel_path, source, &[summary.to_string()]).map(|o| o.unwrap_or_else(|| source.to_string()))
+        }
+        DocPart::Body(_) => Err("this file has no module doc yet: write its description first".into()),
+    };
+    let ext = lang::ext_of(Path::new(rel_path)).unwrap_or_default();
+    match ext {
+        "rs" => {
+            let lines: Vec<&str> = source.split_inclusive('\n').collect();
+            let head = lines.iter().take_while(|l| l.starts_with("//!")).count();
+            if head == 0 {
+                return fresh();
+            }
+            let mut docs: Vec<String> = lines[..head]
+                .iter()
+                .map(|l| {
+                    let l = l.trim_start_matches("//!").trim_end_matches(['\n', '\r']);
+                    l.strip_prefix(' ').unwrap_or(l).to_string()
+                })
+                .collect();
+            let original = docs.clone();
+            splice_doc(&mut docs, &part, |s| s.to_string());
+            // Lines left as they were keep their own spacing.
+            let rebuilt: Vec<String> = docs
+                .iter()
+                .enumerate()
+                .map(|(i, l)| match original.get(i) {
+                    Some(o) if o == l => lines[i].to_string(),
+                    _ if l.is_empty() => "//!\n".to_string(),
+                    _ => format!("//! {l}\n"),
+                })
+                .collect();
+            Ok(rebuilt.concat() + &lines[head..].concat())
+        }
+        "ts" | "tsx" | "js" | "jsx" | "mts" | "cts" | "mjs" | "cjs" => {
+            let tree = parse(rel_path, source)?;
+            let Some((start, end)) = crate::claims::js_head_doc_span(tree.root_node(), source) else {
+                return fresh();
+            };
+            let raw = &source[start..end];
+            let last = raw.lines().count().saturating_sub(1);
+            let mut docs: Vec<String> = raw
+                .lines()
+                .enumerate()
+                .map(|(i, l)| {
+                    let l = if i == 0 { l.trim_start().trim_start_matches("/**") } else { l };
+                    let l = if i == last { l.trim_end().trim_end_matches("*/") } else { l };
+                    let l = l.trim_start();
+                    let l = if i == 0 { l } else { l.strip_prefix('*').unwrap_or(l) };
+                    l.strip_prefix(' ').unwrap_or(l).trim_end().to_string()
+                })
+                .collect();
+            while docs.first().is_some_and(|l| l.is_empty()) {
+                docs.remove(0);
+            }
+            while docs.last().is_some_and(|l| l.is_empty()) {
+                docs.pop();
+            }
+            // `@file`/`@module` introduce the description: keep the tag.
+            let tag = docs
+                .get(first_run(&docs).start)
+                .and_then(|l| ["@fileoverview", "@file", "@module", "@overview"].into_iter().find(|t| l.starts_with(t)));
+            splice_doc(&mut docs, &part, |summary| match tag {
+                Some(t) => format!("{t} {summary}"),
+                None => summary.to_string(),
+            });
+            let body: String = docs
+                .iter()
+                .map(|l| if l.is_empty() { " *\n".to_string() } else { format!(" * {}\n", l.replace("*/", "* /")) })
+                .collect();
+            Ok(splice(source, start, end, &format!("/**\n{body} */")))
+        }
+        "py" => {
+            let tree = parse(rel_path, source)?;
+            let docstring = tree
+                .root_node()
+                .named_child(0)
+                .filter(|f| f.kind() == "expression_statement")
+                .and_then(|f| f.named_child(0))
+                .filter(|s| s.kind() == "string");
+            let Some(s) = docstring else { return fresh() };
+            let raw = text(s, source);
+            let open = raw.find(['"', '\'']).ok_or("malformed module docstring")?;
+            let quote = &raw[open..(open + 3).min(raw.len())];
+            if quote != "\"\"\"" && quote != "'''" {
+                return Err("module docstring is not triple-quoted".into());
+            }
+            let inner = &raw[open + 3..raw.len() - 3];
+            let mut docs: Vec<String> = inner.split('\n').map(str::to_string).collect();
+            let run = first_run(&docs);
+            let indent = docs.get(run.start).map(|l| l[..l.len() - l.trim_start().len()].to_string()).unwrap_or_default();
+            // A closing quote on its own line stays on its own line.
+            let closing = docs.last().filter(|l| l.trim().is_empty()).cloned();
+            splice_doc(&mut docs, &part, |s| s.to_string());
+            let escape = |l: &str| l.replace(quote, &format!("\\{quote}"));
+            let edited = run.end..docs.len();
+            docs = docs
+                .iter()
+                .enumerate()
+                .map(|(i, l)| match part {
+                    DocPart::Summary(_) if i == run.start => format!("{indent}{}", escape(l)),
+                    DocPart::Body(_) if edited.contains(&i) && !l.is_empty() => format!("{indent}{}", escape(l)),
+                    _ => l.clone(),
+                })
+                .collect();
+            if let (DocPart::Body(_), Some(c)) = (&part, closing) {
+                if docs.last() != Some(&c) {
+                    docs.push(c);
+                }
+            }
+            let rebuilt = format!("{}{}{}", &raw[..open + 3], docs.join("\n"), quote);
+            Ok(splice(source, s.start_byte(), s.end_byte(), &rebuilt))
+        }
+        _ => Err(format!("no module doc comments in .{ext} files")),
+    }
+}
+
 /// An identifier for a stub from its claim: the first words, snake_cased.
 pub fn snake_name(claim: &str) -> String {
     let words: Vec<String> = claim
@@ -625,6 +795,49 @@ mod tests {
         let py = add_module_doc("a.py", "\"\"\"Prices.\"\"\"\nx = 1\n", &st(&["Rounds."])).unwrap().unwrap();
         assert_eq!(py, "\"\"\"Prices.\n\nRounds.\n\"\"\"\nx = 1\n");
         assert!(add_module_doc("A.cs", "class A {}", &st(&["x"])).is_err());
+    }
+
+    /// When decisions are edited, the module doc after its first paragraph is
+    /// replaced and the description kept as written, in each language's doc
+    /// form; an empty text clears them, and a file with no doc is refused.
+    #[test]
+    fn rewrites_the_decisions_after_the_first_paragraph() {
+        let parts = |path: &str, src: &str| {
+            let l = lift_file(path, src, &mut Parser::new());
+            (l.module_description, l.module_body)
+        };
+        let body = "Grid, not force: cards stay put.\n\n- Rejected: splines.";
+        let want = (Some("Routes edges. [application]".to_string()), Some(body.to_string()));
+        let rs = set_module_body("src/a.rs", "//! Routes edges. [application]\n//!\n//! Old reason.\nfn a() {}\n", body).unwrap();
+        assert_eq!(parts("src/a.rs", &rs), want, "{rs}");
+        assert!(rs.ends_with("//! - Rejected: splines.\nfn a() {}\n"), "{rs}");
+        let ts = set_module_body("a.ts", "/**\n * Routes edges. [application]\n */\n\nexport const x = 1;\n", body).unwrap();
+        assert_eq!(parts("a.ts", &ts), want, "{ts}");
+        let py = set_module_body("a.py", "\"\"\"Routes edges. [application]\n\nOld.\n\"\"\"\nx = 1\n", body).unwrap();
+        assert_eq!(parts("a.py", &py), want, "{py}");
+        let cleared = set_module_body("src/a.rs", &rs, "").unwrap();
+        assert_eq!(parts("src/a.rs", &cleared), (want.0.clone(), None), "{cleared}");
+        assert!(set_module_body("src/b.rs", "fn b() {}\n", body).is_err());
+    }
+
+    /// When a description is edited, the module doc's first paragraph is
+    /// replaced and the rest of the doc kept, in each language's doc form,
+    /// and a file without a doc gains one.
+    #[test]
+    fn rewrites_the_module_docs_first_paragraph() {
+        let docs = |path: &str, src: &str| lift_file(path, src, &mut Parser::new()).module_description;
+        let rs = set_module_summary("src/a.rs", "//! Holds\n//! drafts. [domain]\n//!\n//! Keeps edits.\nfn a() {}\n", "Stores drafts. [domain]").unwrap();
+        assert_eq!(rs, "//! Stores drafts. [domain]\n//!\n//! Keeps edits.\nfn a() {}\n");
+        let bare = set_module_summary("src/b.rs", "fn b() {}\n", "Saves notes.").unwrap();
+        assert_eq!(docs("src/b.rs", &bare).as_deref(), Some("Saves notes."));
+        let ts = set_module_summary("a.ts", "/**\n * Renders the\n * tree.\n *\n * Lazily.\n */\n\nexport const x = 1;\n", "Draws the map.").unwrap();
+        assert_eq!(ts, "/**\n * Draws the map.\n *\n * Lazily.\n */\n\nexport const x = 1;\n");
+        let one_line = set_module_summary("b.ts", "/** @file Counts. */\nimport x from \"x\";\n", "Tallies.").unwrap();
+        assert_eq!(docs("b.ts", &one_line).as_deref(), Some("Tallies."));
+        assert!(one_line.contains("@file Tallies."), "{one_line}");
+        let py = set_module_summary("a.py", "\"\"\"Prices.\n\nRounds.\n\"\"\"\nx = 1\n", "Quotes prices.").unwrap();
+        assert_eq!(py, "\"\"\"Quotes prices.\n\nRounds.\n\"\"\"\nx = 1\n");
+        assert!(set_module_summary("a.rs", "fn a() {}\n", "  ").is_err());
     }
 
     /// When a claim is added to a Rust file, it lands as an ignored todo test

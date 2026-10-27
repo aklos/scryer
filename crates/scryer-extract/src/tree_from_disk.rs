@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 /// Bumped whenever derivation changes, so a cache from an older binary is
 /// never mistaken for current.
-const DERIVE_VERSION: u32 = 20;
+const DERIVE_VERSION: u32 = 22;
 
 thread_local! {
     static PARSER: RefCell<tree_sitter::Parser> = RefCell::new(tree_sitter::Parser::new());
@@ -47,6 +47,7 @@ fn fingerprint(project: &Path, files: &[PathBuf]) -> u64 {
     let mut stamps: Vec<(String, u128, u64)> = files
         .iter()
         .chain(std::iter::once(&structure_path(project)))
+        .chain(std::iter::once(&project.join(crate::derivation::ARCHITECTURE_FILE)))
         .chain(&style_files)
         .filter_map(|path| {
             let meta = std::fs::metadata(path).ok()?;
@@ -118,6 +119,12 @@ fn derive_uncached(project: &Path, files: &[PathBuf], print: u64) -> Result<Deri
         })
         .collect();
     let styles = scryer_core::load_styles(project);
+    let manifest_descriptions: BTreeMap<String, (String, String)> = ctx
+        .containers
+        .iter()
+        .filter_map(|c| discovery::manifest_description(project, &c.dir).map(|d| (c.dir.clone(), d)))
+        .collect();
+    let architecture = std::fs::read_to_string(project.join(crate::derivation::ARCHITECTURE_FILE)).ok();
     let mut tree = derive_tree(&DeriveInput {
         project_name: &ctx.project_name,
         containers: &ctx.containers,
@@ -128,6 +135,8 @@ fn derive_uncached(project: &Path, files: &[PathBuf], print: u64) -> Result<Deri
         all_files: &all_files,
         structure: &structure,
         styles: &styles,
+        manifest_descriptions: &manifest_descriptions,
+        architecture: architecture.as_deref(),
         fingerprint: print,
     });
     // The styles structure.toml declares, checked against the real imports.
@@ -168,6 +177,83 @@ fn derive_uncached(project: &Path, files: &[PathBuf], print: u64) -> Result<Deri
             DerivedViolation { node_id: v.node, file, kind: v.kind.as_str().to_string(), detail: v.detail }
         })
         .collect();
+    let unmatched = unmatched_entries(&structure, &containers, &tree.planned);
+    tree.style_violations.extend(unmatched);
+    let doubled = doubled_descriptions(&structure, &tree);
+    tree.style_violations.extend(doubled);
     Ok(tree)
+}
+
+/// The descriptions structure.toml gives a container or component the code
+/// already describes: two sources would drift apart, and the code's wins.
+fn doubled_descriptions(structure: &Structure, tree: &DerivedTree) -> Vec<DerivedViolation> {
+    let model = &tree.planned;
+    let in_code = |id: &str| tree.doc_files.get(id).is_some_and(|f| f != crate::derivation::STRUCTURE_FILE);
+    let key_of = |id: &str| -> Vec<&str> {
+        model.boundaries.get(id).into_iter().flatten().map(|b| b.pattern.strip_suffix("/**").unwrap_or(&b.pattern)).collect()
+    };
+    let mut out = Vec::new();
+    for n in &model.nodes {
+        let entry = match n.kind {
+            scryer_core::Kind::Component => key_of(&n.id)
+                .into_iter()
+                .find(|k| structure.component_description(k).is_some())
+                .map(|k| format!("[components.\"{k}\"]")),
+            scryer_core::Kind::Container => structure
+                .containers
+                .iter()
+                .find(|(k, c)| c.description.is_some() && (key_of(&n.id).contains(&k.as_str()) || c.name.as_deref() == Some(&n.name)))
+                .map(|(k, _)| format!("[containers.\"{k}\"]")),
+            _ => None,
+        };
+        let (Some(entry), Some(file)) = (entry, tree.doc_files.get(&n.id)) else { continue };
+        if in_code(&n.id) && n.description.is_some() {
+            out.push(DerivedViolation {
+                node_id: n.id.clone(),
+                file: crate::derivation::STRUCTURE_FILE.to_string(),
+                kind: "unmatched".to_string(),
+                detail: format!("{entry} describes {}, which {file} already describes: remove the description from structure.toml", n.name),
+            });
+        }
+    }
+    out
+}
+
+/// The `[containers]` and `[components]` entries of structure.toml that key
+/// nothing the code has: a package or module renamed or moved since. Each
+/// is a finding charged to the system, fixed by re-keying or removing it.
+fn unmatched_entries(
+    structure: &Structure,
+    containers: &[crate::code_map::Container],
+    model: &scryer_core::ScryModel,
+) -> Vec<DerivedViolation> {
+    let Some(system) = model.nodes.iter().find(|n| n.kind == scryer_core::Kind::System && n.external.is_none()) else {
+        return Vec::new();
+    };
+    let component_paths: BTreeSet<&str> = model
+        .nodes
+        .iter()
+        .filter(|n| n.kind == scryer_core::Kind::Component)
+        .filter_map(|n| model.boundaries.get(&n.id))
+        .flatten()
+        .map(|src| src.pattern.strip_suffix("/**").unwrap_or(&src.pattern))
+        .collect();
+    let finding = |table: &str, key: &str, what: &str| DerivedViolation {
+        node_id: system.id.clone(),
+        file: ".scryer/structure.toml".to_string(),
+        kind: "unmatched".to_string(),
+        detail: format!("[{table}.\"{key}\"] keys no {what} in the code: re-key it to where the code is now, or remove it"),
+    };
+    let containers = structure
+        .containers
+        .keys()
+        .filter(|key| !containers.iter().any(|c| &c.dir == *key || &c.name == *key))
+        .map(|key| finding("containers", key, "container"));
+    let components = structure
+        .components
+        .keys()
+        .filter(|key| !component_paths.contains(key.as_str()))
+        .map(|key| finding("components", key, "component"));
+    containers.chain(components).collect()
 }
 

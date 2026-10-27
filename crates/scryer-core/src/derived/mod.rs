@@ -1,6 +1,6 @@
 //! The tree the code derives, read: each claim's status from its evidence, what
-//! changed since you last looked, and where each worktree stands against its
-//! base branch. [domain]
+//! each agent session is doing and did, and where each worktree stands
+//! against its base branch. [domain]
 
 pub mod c4_tree;
 pub mod derived_status;

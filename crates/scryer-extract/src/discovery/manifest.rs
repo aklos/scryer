@@ -788,6 +788,32 @@ fn basename(path: &Path) -> Option<String> {
     path.file_name().map(|n| n.to_string_lossy().to_string())
 }
 
+/// The description a container's manifest declares, with that manifest's
+/// project-relative path: Cargo `[package] description`, package.json
+/// `description`, pyproject `[project] description`. The first that has one.
+pub fn manifest_description(project: &Path, dir: &str) -> Option<(String, String)> {
+    let rel = |file: &str| if dir.is_empty() { file.to_string() } else { format!("{dir}/{file}") };
+    let read = |file: &str| std::fs::read_to_string(project.join(rel(file))).ok();
+    let toml_at = |text: &str, table: &str| {
+        let v: toml::Value = toml::from_str(text).ok()?;
+        v.get(table)?.get("description")?.as_str().map(str::to_string)
+    };
+    let found = [
+        ("Cargo.toml", read("Cargo.toml").and_then(|t| toml_at(&t, "package"))),
+        (
+            "package.json",
+            read("package.json").and_then(|t| {
+                let v: serde_json::Value = serde_json::from_str(&t).ok()?;
+                v.get("description")?.as_str().map(str::to_string)
+            }),
+        ),
+        ("pyproject.toml", read("pyproject.toml").and_then(|t| toml_at(&t, "project"))),
+    ];
+    found
+        .into_iter()
+        .find_map(|(file, d)| d.map(|d| d.trim().to_string()).filter(|d| !d.is_empty()).map(|d| (rel(file), d)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

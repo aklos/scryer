@@ -581,9 +581,16 @@ function InlinePeek({
               // chained horizontal overscroll is a back-navigation swipe.
               className="max-h-[420px] overflow-auto overscroll-contain py-2 font-mono text-xs leading-[1.6]"
             >
+              {/* As wide as the longest line, so a line's tint runs under
+                  the code that scrolls past the box's edge. */}
+              <div className="w-max min-w-full">
               {span.lines.map((segs, i) => {
                 const lineNo = span.startLine + i;
-                const focus = loc.line != null && lineNo >= span.focusStart && lineNo <= span.focusEnd;
+                // Ink the range only when it is part of what the peek shows:
+                // a test's peek is the test itself, and tinting all of it
+                // marks nothing.
+                const partial = span.focusStart > span.startLine || span.focusEnd < span.startLine + span.lines.length - 1;
+                const focus = partial && loc.line != null && lineNo >= span.focusStart && lineNo <= span.focusEnd;
                 return (
                   <div
                     key={i}
@@ -613,6 +620,7 @@ function InlinePeek({
                   </div>
                 );
               })}
+              </div>
             </div>
           )}
           </div>

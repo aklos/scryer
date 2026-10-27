@@ -1,5 +1,6 @@
 //! Writing claims back into the code: reword a test's description, add a
-//! claim as a todo stub, rename a container in `structure.toml`. [composition]
+//! claim as a todo stub, rename a container in `structure.toml`, describe a
+//! node in its module doc. [composition]
 
 use crate::{claim_file_io as files, migrate as migration};
 use std::path::Path;
@@ -17,9 +18,20 @@ pub fn write_claim_stub(project: &Path, node_id: &str, text: &str) -> Result<Str
     files::write_claim_stub(project, node_id, text)
 }
 
-/// Set a container's display name in `.scryer/structure.toml`.
-pub fn rename_container(project: &Path, node_id: &str, name: &str) -> Result<(), String> {
-    files::rename_container(project, node_id, name)
+/// Set a node's readable name in `.scryer/structure.toml`.
+pub fn rename_node(project: &Path, node_id: &str, name: &str) -> Result<(), String> {
+    files::rename_node(project, node_id, name)
+}
+
+/// Set a node's description where it is read from.
+pub fn edit_node_description(project: &Path, node_id: &str, text: &str) -> Result<String, String> {
+    files::edit_node_description(project, node_id, text)
+}
+
+/// Set a node's decisions: its module doc after the first paragraph, or
+/// `ARCHITECTURE.md` after its first for the system.
+pub fn edit_node_decisions(project: &Path, node_id: &str, text: &str) -> Result<String, String> {
+    files::edit_node_decisions(project, node_id, text)
 }
 
 /// One-shot migration of the project's authored model into its code.

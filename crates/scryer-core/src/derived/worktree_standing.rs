@@ -136,6 +136,7 @@ mod tests {
             committed: planned.clone(),
             planned,
             claims: vec![claim("saves", "tests/store.rs"), claim("loads", "tests/load.rs")],
+            doc_files: Default::default(),
             file_nodes: [("src/store.rs".to_string(), "store".to_string())].into(),
             dark_files: Vec::new(),
             style_violations: Vec::new(),

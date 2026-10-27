@@ -1,8 +1,10 @@
-//! What changed since you last looked: per agent session in the window, the
-//! claims its edits newly proved, newly planned, left planned, or made stale
-//! or failing, the surviving mutants and dark files in what it touched, and
-//! which components more than one session touched. Read off the session
-//! logs and the derived status; nothing is recorded for it.
+//! What each agent session is doing and did: per session in the window, its
+//! steps in order (the files it edited, the todo tests it wrote, its turns,
+//! the verdicts its claims got), the claims its edits newly proved, newly
+//! planned, left planned, or made stale or failing, the surviving mutants
+//! and dark files in what it touched, and which components more than one
+//! session touched. Read off the session logs and the derived status;
+//! nothing is recorded for it.
 
 use crate::derived_status::{ClaimState, DerivedStatus};
 use crate::c4_tree::{DerivedClaim, DerivedTree};
@@ -74,6 +76,101 @@ pub struct LandingSession {
     /// spans several worktrees.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<String>,
+    /// The session is working now: its harness process runs, or it edited a
+    /// file recently.
+    #[serde(default)]
+    pub live: bool,
+    /// What it did in the window, oldest first, the last [`MAX_STEPS`].
+    #[serde(default)]
+    pub steps: Vec<SessionStep>,
+}
+
+/// One thing a session did, as the page follows it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum SessionStep {
+    /// It edited `file`, `edits` times in a row; `at` is the last.
+    Edit {
+        at: u64,
+        file: String,
+        /// The component the file belongs to.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        node_id: Option<String>,
+        edits: u32,
+    },
+    /// It wrote a todo test: a claim it will satisfy.
+    Todo { at: u64, claim: LandingClaim },
+    /// A claim its edits reach got a verdict.
+    Verdict { at: u64, claim: LandingClaim },
+    /// It opened or closed a probe.
+    Probe { at: u64, open: bool },
+    /// It finished a turn.
+    Stop { at: u64 },
+}
+
+impl SessionStep {
+    pub fn at(&self) -> u64 {
+        match self {
+            SessionStep::Edit { at, .. }
+            | SessionStep::Todo { at, .. }
+            | SessionStep::Verdict { at, .. }
+            | SessionStep::Probe { at, .. }
+            | SessionStep::Stop { at } => *at,
+        }
+    }
+}
+
+/// How many of a session's latest steps the landing carries.
+pub const MAX_STEPS: usize = 200;
+
+/// A session's steps from `entries` at or after `from`, oldest first: runs
+/// of edits to one file and runs of stops fold into one step, a stub is its
+/// claim when the tree has it, and each claim in `verdicts` is a step at its
+/// verdict's time.
+fn session_steps(
+    entries: &[SessionEntry],
+    from: u64,
+    tree: &DerivedTree,
+    verdicts: Vec<(u64, LandingClaim)>,
+) -> Vec<SessionStep> {
+    use crate::session_log::SessionEvent;
+    let mut steps: Vec<SessionStep> = verdicts.into_iter().map(|(at, claim)| SessionStep::Verdict { at, claim }).collect();
+    for e in entries.iter().filter(|e| e.at >= from) {
+        let step = match &e.event {
+            SessionEvent::Touch { file } => SessionStep::Edit {
+                at: e.at,
+                file: file.clone(),
+                node_id: tree.file_nodes.get(file).cloned(),
+                edits: 1,
+            },
+            SessionEvent::Stub { file, test } => {
+                let Some(c) = tree.claims.iter().find(|c| &c.file == file && &c.junit_name == test) else { continue };
+                SessionStep::Todo { at: e.at, claim: LandingClaim::of(c, ClaimState::Planned) }
+            }
+            SessionEvent::ProbeOpen => SessionStep::Probe { at: e.at, open: true },
+            SessionEvent::ProbeClose => SessionStep::Probe { at: e.at, open: false },
+            SessionEvent::Stop => SessionStep::Stop { at: e.at },
+            _ => continue,
+        };
+        steps.push(step);
+    }
+    // Stable, so log order holds within a second and a verdict lands after
+    // the edits of its second.
+    steps.sort_by_key(SessionStep::at);
+    let mut out: Vec<SessionStep> = Vec::with_capacity(steps.len());
+    for step in steps {
+        match (out.last_mut(), &step) {
+            (Some(SessionStep::Edit { at, file, edits, .. }), SessionStep::Edit { at: next, file: f, .. }) if file == f => {
+                *at = *next;
+                *edits += 1;
+            }
+            (Some(SessionStep::Stop { at }), SessionStep::Stop { at: next }) => *at = *next,
+            _ => out.push(step),
+        }
+    }
+    let cut = out.len().saturating_sub(MAX_STEPS);
+    out.drain(..cut);
+    out
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -219,8 +316,8 @@ pub fn landing(
         if end < since {
             continue;
         }
-        // A session that spans the last look is read for what it did after
-        // it: its touches and stubs since then, and verdicts recorded since.
+        // A session that started before the window is read for what it did
+        // in it: its touches and stubs since, and verdicts recorded since.
         let log = SessionLog::from_events(entries);
         let recent: Vec<SessionEntry> = entries.iter().filter(|e| e.at >= since).cloned().collect();
         let now = SessionLog::from_events(&recent);
@@ -241,7 +338,10 @@ pub fn landing(
             new_dark_files: touched.iter().filter(|f| dark.contains(*f)).map(|f| f.to_string()).collect(),
             components: Vec::new(),
             worktree: None,
+            live: false,
+            steps: Vec::new(),
         };
+        let mut verdicts = Vec::new();
         let stubbed = |c: &DerivedClaim| {
             now.stubs.iter().any(|(f, t)| *f == c.file && *t == c.junit_name)
         };
@@ -249,6 +349,9 @@ pub fn landing(
             let Some(st) = states.get(c.id.as_str()) else { continue };
             let row = LandingClaim::of(c, st.state);
             let verdict_in_window = st.recorded_at.is_some_and(|at| at >= from);
+            if let (Some(at), true, ClaimState::Proven | ClaimState::Failing) = (st.recorded_at, verdict_in_window, st.state) {
+                verdicts.push((at, row.clone()));
+            }
             match st.state {
                 ClaimState::Proven if verdict_in_window => s.newly_proven.push(row),
                 ClaimState::Planned if stubbed(c) => s.newly_planned.push(row),
@@ -271,6 +374,7 @@ pub fn landing(
             touched_by.entry(n.to_string()).or_default().insert(id.clone());
         }
         s.components = components.into_iter().map(str::to_string).collect();
+        s.steps = session_steps(entries, from, tree, verdicts);
         out.sessions.push(s);
     }
     out.sessions.sort_by(|a, b| b.ended_at.cmp(&a.ended_at).then(a.session.cmp(&b.session)));
@@ -320,7 +424,7 @@ mod tests {
     /// mutant survivors count over what it touched, and a component two
     /// sessions touched is shared.
     #[test]
-    fn sessions_since_last_look_sort_their_claims() {
+    fn sessions_in_the_window_sort_their_claims() {
         let mut planned = ScryModel::new();
         planned.nodes.push(
             serde_json::from_value(serde_json::json!({"id": "comp", "kind": "component", "name": "drafts"})).unwrap(),
@@ -340,6 +444,7 @@ mod tests {
                 claim("old_stub", "src/a.rs", true),
                 claim("elsewhere", "src/b.rs", false),
             ],
+            doc_files: Default::default(),
             file_nodes: BTreeMap::from([
                 ("src/a.rs".to_string(), "comp".to_string()),
                 ("src/b.rs".to_string(), "other".to_string()),
@@ -397,11 +502,11 @@ mod tests {
     /// When a session neither oriented on a task nor touched a file of any
     /// component, its title is left empty, for the page to name it by branch
     /// and time.
-    /// When a session spans the last look, shows only what it did after it:
-    /// files touched before then reach nothing, and verdicts recorded before
-    /// then are not newly proven.
+    /// When a session started before the window, shows only what it did in it:
+    /// files touched before the window reach nothing, and verdicts recorded
+    /// before it are not newly proven.
     #[test]
-    fn a_session_spanning_the_last_look_shows_only_what_came_after() {
+    fn a_session_spanning_the_window_start_shows_only_what_came_after() {
         let mut planned = ScryModel::new();
         planned.nodes.push(
             serde_json::from_value(serde_json::json!({"id": "comp", "kind": "component", "name": "drafts"})).unwrap(),
@@ -411,6 +516,7 @@ mod tests {
             committed: planned.clone(),
             planned,
             claims: vec![claim("early", "src/a.rs", false), claim("late", "src/b.rs", false), claim("rerun", "src/b.rs", false)],
+            doc_files: Default::default(),
             file_nodes: BTreeMap::from([("src/a.rs".to_string(), "comp".to_string()), ("src/b.rs".to_string(), "comp".to_string())]),
             dark_files: Vec::new(),
             style_violations: Vec::new(),
@@ -434,6 +540,64 @@ mod tests {
         assert_eq!(ids(&all.newly_proven), vec!["early", "late", "rerun"]);
     }
 
+    /// A session's steps run oldest first: edits to one file in a row fold
+    /// into one step with their count, a stub it wrote is its claim, a
+    /// verdict its claims got lands at the verdict's time, and steps before
+    /// the window are left out.
+    #[test]
+    fn a_sessions_steps_follow_what_it_did_in_order() {
+        let tree = DerivedTree {
+            fingerprint: 0,
+            committed: ScryModel::new(),
+            planned: ScryModel::new(),
+            claims: vec![claim("green", "src/a.rs", false), claim("stub", "src/a.rs", true)],
+            doc_files: Default::default(),
+            file_nodes: BTreeMap::from([("src/a.rs".to_string(), "comp".to_string())]),
+            dark_files: Vec::new(),
+            style_violations: Vec::new(),
+            layer_exempt: Vec::new(),
+            tooling: Default::default(),
+        };
+        let status = DerivedStatus {
+            claims: vec![status("green", ClaimState::Proven, Some(130)), status("stub", ClaimState::Planned, None)],
+            ..Default::default()
+        };
+        let at = |at, event| SessionEntry { at, event };
+        let sessions = vec![(
+            "s".to_string(),
+            vec![
+                touch(5, "src/old.rs"),
+                touch(100, "src/a.rs"),
+                touch(110, "src/a.rs"),
+                at(115, SessionEvent::Stub { file: "src/a.rs".into(), test: "stub".into() }),
+                touch(120, "src/b.rs"),
+                at(140, SessionEvent::Stop),
+                at(141, SessionEvent::Stop),
+            ],
+        )];
+        let steps = &landing(&sessions, &tree, &status, 50).sessions[0].steps;
+        let shape: Vec<String> = steps
+            .iter()
+            .map(|s| match s {
+                SessionStep::Edit { at, file, node_id, edits } => format!("{at} edit {file} {node_id:?} x{edits}"),
+                SessionStep::Todo { at, claim } => format!("{at} todo {}", claim.resp_id),
+                SessionStep::Verdict { at, claim } => format!("{at} verdict {}", claim.resp_id),
+                SessionStep::Probe { at, open } => format!("{at} probe {open}"),
+                SessionStep::Stop { at } => format!("{at} stop"),
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            vec![
+                "110 edit src/a.rs Some(\"comp\") x2",
+                "115 todo stub",
+                "120 edit src/b.rs None x1",
+                "130 verdict green",
+                "141 stop",
+            ]
+        );
+    }
+
     #[test]
     fn a_session_without_task_or_component_has_no_title() {
         let sessions = vec![("dddddddd-4".to_string(), vec![touch(10, "README.md")])];
@@ -442,6 +606,7 @@ mod tests {
             committed: ScryModel::new(),
             planned: ScryModel::new(),
             claims: Vec::new(),
+            doc_files: Default::default(),
             file_nodes: BTreeMap::new(),
             dark_files: Vec::new(),
             style_violations: Vec::new(),
@@ -471,6 +636,8 @@ mod tests {
             new_dark_files: Vec::new(),
             components: vec![comp.into()],
             worktree: None,
+            live: false,
+            steps: Vec::new(),
         };
         let wt = |path: &str, branch: &str| LandingWorktree {
             path: path.into(),

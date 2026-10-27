@@ -615,6 +615,7 @@ mod tests {
             layer: None,
             exercised_by: Vec::new(),
             tooling: None,
+            decisions: None,
             id: "sym".into(),
             kind: Kind::Symbol,
             name: "alpha".into(),

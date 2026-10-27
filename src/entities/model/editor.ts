@@ -16,6 +16,8 @@ export interface Editor {
       name?: string;
       kind?: Kind;
       description?: string;
+      /** The decisions after the description, as markdown. `""` clears them. */
+      decisions?: string;
       technology?: string;
       icon?: string;
       responsibilities?: Responsibility[];
