@@ -3,7 +3,8 @@
  * edge. Left side reads the tree's standing at a glance: the subagent launch
  * setup, the claims by derived status, dark files, and the tree's size. Right
  * side carries the agent's live activity with Cancel while a fixture fill
- * runs.
+ * runs, and the agent session you follow with Stop: its latest step streams
+ * through the middle.
  *
  * Segment shades come from the theme surface vars via an inline `--sb`, which the
  * CSS reuses for each chevron's triangle so the tiling stays seamless (see the
@@ -11,7 +12,7 @@
  */
 
 import type { CSSProperties } from "react";
-import { Loader2, X } from "lucide-react";
+import { Eye, Loader2, X } from "lucide-react";
 import { AgentMark } from "../../shared/ui/pagekit";
 import type { AgentSession } from "../../features/agent-launch/useAgentSession";
 import { darkBoundaries, type ModelHealthReport } from "../../entities/model/health";
@@ -29,12 +30,19 @@ interface PowerlineProps {
   launch: ResolvedLaunch;
   onOpenSpecial: (page: SpecialPage) => void;
   onOpenSettings: () => void;
+  /** The agent session the wiki and map follow, when one is. */
+  follow?: {
+    title: string;
+    /** Its latest step, as one line. */
+    now?: string;
+    onStop: () => void;
+  };
 }
 
 /** Inline `--sb` carrier — drives both a segment's fill and its chevron edge. */
 const sb = (value: string): CSSProperties => ({ ["--sb" as string]: value }) as CSSProperties;
 
-export function Powerline({ model, agent, health, launch, onOpenSpecial, onOpenSettings }: PowerlineProps) {
+export function Powerline({ model, agent, health, launch, onOpenSpecial, onOpenSettings, follow }: PowerlineProps) {
   // Code no test reaches by import.
   const dark = darkBoundaries(health).total;
   const counts = health?.derivedStatus.totals;
@@ -126,12 +134,42 @@ export function Powerline({ model, agent, health, launch, onOpenSpecial, onOpenS
           the violet "what it's doing" label on the right. Doubles as the flex
           spacer that pushes the right segments to the window edge when idle. */}
       <div className="pl-msg">
-        {busy && agentActivity && (
+        {busy && agentActivity ? (
           <span className="max-w-full truncate text-[var(--text-tertiary)]" title={agentActivity}>
             {agentActivity}
           </span>
+        ) : (
+          follow?.now && (
+            <span key={follow.now} className="pl-step max-w-full truncate text-[var(--text-tertiary)]" title={follow.now}>
+              {follow.now}
+            </span>
+          )
         )}
       </div>
+
+      {follow && (
+        <>
+          <div
+            className="rseg r-agent min-w-0"
+            style={sb("color-mix(in srgb, var(--color-violet-500) 14%, var(--surface-active))")}
+            title={`Following ${follow.title}: the wiki and map go where it edits`}
+          >
+            <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-violet-600 dark:bg-violet-400" />
+            <Eye className="h-3 w-3 shrink-0" />
+            <span className="min-w-0 max-w-[24ch] truncate">{follow.title}</span>
+          </div>
+          <button
+            type="button"
+            onClick={follow.onStop}
+            className="rseg"
+            style={sb("color-mix(in srgb, var(--text) 9%, var(--surface-canvas))")}
+            title="Stop following"
+          >
+            <X className="h-3 w-3" />
+            stop
+          </button>
+        </>
+      )}
 
       {busy ? (
         <>

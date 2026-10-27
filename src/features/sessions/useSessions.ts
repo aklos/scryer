@@ -84,16 +84,14 @@ export function sessionTitle(s: Pick<LoggedSession, "title" | "titledByTask" | "
   return `session on ${branch} · ${when(s.startedAt)}`;
 }
 
-/** What changed state in a session, as a short phrase per kind; empty when
- *  nothing did. */
+/** The claims a session moved, as a short phrase per kind: proven, now
+ *  failing, todo it wrote; empty when it moved none. */
 export function sessionCounts(s: LoggedSession): string[] {
-  const todo = s.newlyPlanned.length + s.stillPlanned.length;
+  const failing = s.newlyStaleOrFailing.filter((c) => c.state === "failing").length;
   return [
-    s.newlyProven.length > 0 && `+${s.newlyProven.length} proven`,
-    s.newlyStaleOrFailing.length > 0 && `${s.newlyStaleOrFailing.length} unverified or failing`,
-    todo > 0 && `${todo} todo`,
-    s.survivingMutants > 0 && `${s.survivingMutants} surviving mutant${s.survivingMutants === 1 ? "" : "s"}`,
-    s.newDarkFiles.length > 0 && `${s.newDarkFiles.length} new dark file${s.newDarkFiles.length === 1 ? "" : "s"}`,
+    s.newlyProven.length > 0 && `${s.newlyProven.length} proven`,
+    failing > 0 && `${failing} failing`,
+    s.newlyPlanned.length > 0 && `${s.newlyPlanned.length} todo`,
   ].filter((x): x is string => typeof x === "string");
 }
 

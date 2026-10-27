@@ -34,8 +34,7 @@ import { previewableNodeIds, usePreviewServer } from "../features/preview-client
 import { useModelHealth } from "../features/health-feed/useModelHealth";
 import { useTestStatuses } from "../features/health-feed/useTestStatuses";
 import { useFollow } from "../features/sessions/useFollow";
-import { sessionTitle } from "../features/sessions/useSessions";
-import { FollowBar } from "../widgets/follow-bar/FollowBar";
+import { sessionTitle, stepLine } from "../features/sessions/useSessions";
 import { structuralBySubtree } from "../entities/model/health";
 import { effectiveSourceMap, type ScryModel } from "../entities/model/viewmodel";
 import type { Editor } from "../entities/model/editor";
@@ -487,7 +486,6 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
               following={follow.following}
               onFollow={follow.follow}
               onSelectNode={selectNode}
-              onOpenWorktree={(p) => void openProject(p, { remember: false })}
             />
           )
         ) : selected ? (
@@ -511,14 +509,6 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
           </div>
         )}
       </div>
-      {follow.following && !sessionOpen && (
-        <FollowBar
-          session={follow.session}
-          title={follow.session ? sessionTitle(follow.session, follow.sessions?.branch ?? "detached") : "session"}
-          names={nodeNames}
-          onStop={follow.stop}
-        />
-      )}
       <Powerline
         model={model}
         agent={agent}
@@ -526,6 +516,17 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
         launch={launch}
         onOpenSpecial={openSpecial}
         onOpenSettings={() => setSettingsOpen(true)}
+        follow={
+          follow.following
+            ? {
+                title: follow.session ? sessionTitle(follow.session, follow.sessions?.branch ?? "detached") : "session",
+                now: follow.session?.steps?.length
+                  ? stepLine(follow.session.steps[follow.session.steps.length - 1], (id) => nodeNames.get(id) ?? id)
+                  : undefined,
+                onStop: follow.stop,
+              }
+            : undefined
+        }
       />
       {settingsOpen && (
         <SettingsPanel

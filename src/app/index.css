@@ -339,6 +339,16 @@
   overflow: hidden;
   padding: 0 16px;
 }
+/* A followed session's latest step slides in as it lands. */
+.pl .pl-step {
+  animation: pl-step-in 0.35s ease-out;
+}
+@keyframes pl-step-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
 .pl .rseg {
   display: flex;
   align-items: center;

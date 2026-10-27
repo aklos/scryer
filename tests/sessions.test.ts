@@ -29,11 +29,19 @@ const claim = { respId: "r", nodeId: "n", statement: "Rejects a refund larger th
 const edit = (at: number, file: string, nodeId?: string, edits = 1): SessionStep => ({ kind: "edit", at, file, nodeId, edits });
 
 describe("useSessions", () => {
-  it("Sums a session up on one line by what changed state, leaving out kinds where nothing did", () => {
+  it("Sums a session up by the claims it moved — proven, failing, todo it wrote — leaving out what it did not move", () => {
     expect(sessionCounts(session())).toEqual([]);
     expect(
-      sessionCounts(session({ newlyProven: [claim, claim], newlyPlanned: [claim], stillPlanned: [claim], newDarkFiles: ["a.ts"] })),
-    ).toEqual(["+2 proven", "2 todo", "1 new dark file"]);
+      sessionCounts(
+        session({
+          newlyProven: [claim, claim],
+          newlyPlanned: [claim],
+          stillPlanned: [claim],
+          newlyStaleOrFailing: [{ ...claim, state: "stale" }, { ...claim, state: "failing" }],
+          newDarkFiles: ["a.ts"],
+        }),
+      ),
+    ).toEqual(["2 proven", "1 failing", "1 todo"]);
   });
 
   it("Names a session by its agent's task in quotes, else as a session in the first component it touched, else as a session on its branch", () => {
@@ -109,4 +117,13 @@ describe("followView", () => {
 describe("useFollow", () => {
   it.todo("When you select a node other than where the followed session went, stops following");
   it.todo("When the followed session stops being live, stops following and says so");
+});
+
+describe("LandingPage", () => {
+  it("Says when a session ended as minutes or hours ago, else by its day", async () => {
+    const { ago } = await import("../src/pages/landing/LandingPage");
+    expect(ago(1000, 1030)).toBe("just now");
+    expect(ago(1000, 1000 + 12 * 60)).toBe("12m ago");
+    expect(ago(1000, 1000 + 3 * 3600)).toBe("3h ago");
+  });
 });
