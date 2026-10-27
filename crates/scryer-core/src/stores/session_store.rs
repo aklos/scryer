@@ -93,10 +93,15 @@ pub fn list(r: &ModelRef) -> Vec<(String, u64)> {
 
 /// Project files modified after `ns` (unix nanoseconds) — whatever wrote them.
 pub fn files_modified_since_ns(project: &Path, ns: u64) -> BTreeSet<String> {
+    mtime_changed_files(project, ns / 1_000_000_000, Some(ns)).into_keys().collect()
+}
+
+/// [`files_modified_since_ns`], each with its mtime in unix ns.
+pub fn files_modified_since_ns_at(project: &Path, ns: u64) -> std::collections::BTreeMap<String, u64> {
     mtime_changed_files(project, ns / 1_000_000_000, Some(ns))
 }
 
-/// Files whose mtime is newer than the anchor. With a ns anchor the comparison
+/// Files whose mtime is newer than the anchor, with that mtime in unix ns. With a ns anchor the comparison
 /// is nanosecond-exact (a same-second edit is visible); without one (old
 /// `.sync` files) it falls back to whole seconds. Honors the same directory
 /// skipping as the rest of scryer (SKIP_DIRS / SKIP_BUILD_DIRS, .gitignore).
@@ -104,8 +109,8 @@ fn mtime_changed_files(
     project: &Path,
     baseline_secs: u64,
     baseline_ns: Option<u64>,
-) -> BTreeSet<String> {
-    let mut out = BTreeSet::new();
+) -> std::collections::BTreeMap<String, u64> {
+    let mut out = std::collections::BTreeMap::new();
     for entry in project_walker(project).flatten() {
         if !entry.file_type().is_some_and(|ft| ft.is_file()) {
             continue;
@@ -119,7 +124,7 @@ fn mtime_changed_files(
         };
         if newer {
             if let Ok(rel) = entry.path().strip_prefix(project) {
-                out.insert(rel.to_string_lossy().replace('\\', "/"));
+                out.insert(rel.to_string_lossy().replace('\\', "/"), since_epoch.as_nanos() as u64);
             }
         }
     }

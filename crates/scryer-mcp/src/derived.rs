@@ -128,6 +128,16 @@ pub(crate) fn load_tree(r: &ModelRef) -> Result<DerivedTree, String> {
     scryer_extract::derived_tree::derived_tree(r.project_path())
 }
 
+/// The claims proven now, by derived claim id.
+pub(crate) fn proven_claims(status: &scryer_core::derived_tree::DerivedStatus) -> Vec<String> {
+    status
+        .claims
+        .iter()
+        .filter(|c| c.state == scryer_core::derived_tree::ClaimState::Proven)
+        .map(|c| c.resp_id.clone())
+        .collect()
+}
+
 /// The project's todo tests, `(file, junit_name)`.
 pub(crate) fn planned_tests(tree: &DerivedTree) -> Vec<(String, String)> {
     tree.claims.iter().filter(|c| c.planned).map(|c| (c.file.clone(), c.junit_name.clone())).collect()

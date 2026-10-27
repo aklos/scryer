@@ -38,6 +38,14 @@ pub enum SessionEvent {
         tool: Option<String>,
         ns: u64,
     },
+    /// That shell command finished at `ns`: with its start, the window in
+    /// which files it modified may be this session's — and so are no other
+    /// session's.
+    ShellEnd {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool: Option<String>,
+        ns: u64,
+    },
     /// The session opened a probe; until it closes, the developer's tree is
     /// off-limits to commands that discard uncommitted work.
     ProbeOpen,
@@ -60,6 +68,37 @@ pub enum SessionEvent {
         #[serde(default)]
         ids: Vec<String>,
     },
+    /// The claims proven when the session began (derived claim ids): what
+    /// it proves after is its own, and what of these it breaks.
+    Proven {
+        #[serde(default)]
+        ids: Vec<String>,
+    },
+    /// This session ingested verdicts for these claims (derived claim ids).
+    Verdicts {
+        #[serde(default)]
+        ids: Vec<String>,
+    },
+}
+
+/// How long a session's last work keeps it working without a turn's end:
+/// longer than a slow build, shorter than a lunch break.
+pub const WORKING_SECS: u64 = 600;
+
+/// Whether the session in `entries` is mid-turn at `now`: it read, edited,
+/// ran a command, wrote a todo test or worked a probe since its last stop,
+/// and did so in the last [`WORKING_SECS`] — a session killed mid-turn never
+/// writes its stop. The records a stop writes are no work.
+pub fn working(entries: &[SessionEntry], now: u64) -> bool {
+    let after_stop = entries.iter().rposition(|e| e.event == SessionEvent::Stop).map_or(0, |i| i + 1);
+    entries[after_stop..]
+        .iter()
+        .filter(|e| {
+            !matches!(e.event, SessionEvent::Planned { .. } | SessionEvent::Reached { .. } | SessionEvent::Proven { .. })
+        })
+        .map(|e| e.at)
+        .max()
+        .is_some_and(|at| at + WORKING_SECS >= now)
 }
 
 /// One test as the session log names it: `file#junit_name`. A JUnit name is
@@ -79,6 +118,8 @@ pub struct SessionLog {
     pub probe_open: bool,
     /// Shell commands started, `(tool-call id, unix ns)`, in start order.
     pub shell_starts: Vec<(Option<String>, u64)>,
+    /// Shell commands finished, `(tool-call id, unix ns)`, in end order.
+    pub shell_ends: Vec<(Option<String>, u64)>,
     /// The first task the agent oriented on.
     pub task: Option<String>,
     /// The todo tests last recorded (at start or the last stop), as
@@ -88,6 +129,11 @@ pub struct SessionLog {
     pub stubs: Vec<(String, String)>,
     /// The claims its edits reached at the last stop.
     pub reached: Vec<String>,
+    /// The claims proven when it began; `None` for a log from before the
+    /// baseline was recorded.
+    pub proven_at_start: Option<Vec<String>>,
+    /// The claims it ingested verdicts for, each once.
+    pub verdicts: Vec<String>,
 }
 
 impl SessionLog {
@@ -122,7 +168,20 @@ impl SessionLog {
                 }
             }
             SessionEvent::Reached { ids } => self.reached = ids.clone(),
+            SessionEvent::Proven { ids } => {
+                if self.proven_at_start.is_none() {
+                    self.proven_at_start = Some(ids.clone());
+                }
+            }
+            SessionEvent::Verdicts { ids } => {
+                for id in ids {
+                    if !self.verdicts.contains(id) {
+                        self.verdicts.push(id.clone());
+                    }
+                }
+            }
             SessionEvent::ShellStart { tool, ns } => self.shell_starts.push((tool.clone(), *ns)),
+            SessionEvent::ShellEnd { tool, ns } => self.shell_ends.push((tool.clone(), *ns)),
             SessionEvent::Task { text } => {
                 if self.task.is_none() {
                     self.task = Some(text.clone());
@@ -157,6 +216,20 @@ impl SessionLog {
                 .map(|(_, ns)| *ns)
         })
         .or_else(|| self.shell_starts.last().map(|(_, ns)| *ns))
+    }
+
+    /// Each shell command's window, `(start, end)` in unix ns: a start pairs
+    /// with the first end of the same tool call after it. One with no end yet
+    /// is still running, up to `now` but no longer than `open_for` — a
+    /// session killed mid-command never writes its end.
+    pub fn shell_windows(&self, now: u64, open_for: u64) -> Vec<(u64, u64)> {
+        self.shell_starts
+            .iter()
+            .map(|(tool, start)| {
+                let end = self.shell_ends.iter().find(|(t, ns)| t == tool && ns >= start).map(|(_, ns)| *ns);
+                (*start, end.unwrap_or_else(|| now.min(start + open_for)))
+            })
+            .collect()
     }
 
     /// Whether `hash` is exactly what this session was last shown for `file` —
@@ -202,6 +275,24 @@ mod tests {
         assert_eq!(serde_json::from_str::<SessionEntry>(&line).unwrap(), e);
         let stop = serde_json::to_string(&entry(SessionEvent::Stop)).unwrap();
         assert_eq!(stop, r#"{"at":1,"event":"stop"}"#);
+    }
+
+    /// While a session has worked since its last stop, and lately, it is
+    /// working; a stop, the records a stop writes, or ten quiet minutes end
+    /// it.
+    #[test]
+    fn a_session_works_from_its_first_step_after_a_stop_until_the_next() {
+        let at = |at, event| SessionEntry { at, event };
+        let touch = |t| at(t, SessionEvent::Touch { file: "a.rs".into() });
+        assert!(!working(&[], 100));
+        assert!(working(&[touch(90)], 100));
+        assert!(!working(&[touch(90), at(95, SessionEvent::Stop)], 100), "its turn ended");
+        assert!(
+            !working(&[touch(90), at(95, SessionEvent::Reached { ids: vec![] }), at(95, SessionEvent::Stop), at(96, SessionEvent::Planned { tests: vec![] })], 100),
+            "bookkeeping is no work"
+        );
+        assert!(working(&[touch(90), at(95, SessionEvent::Stop), at(98, SessionEvent::ShellStart { tool: None, ns: 0 })], 100));
+        assert!(!working(&[touch(90)], 90 + WORKING_SECS + 1), "killed mid-turn");
     }
 
     #[test]

@@ -7,18 +7,17 @@ description: How to plan, build and verify code in a project Scryer reads. Scrye
 
 # Working in a Scryer project
 
-Scryer reads this repository and derives its C4 tree: containers from packaging, components from modules and directories, links from imports. Claims come from behaviour tests: **a test's description is a claim** about the code it tests, and its status (proven, stale, failing, planned) comes from test reports. You never edit a model. There is none. You write code and tests; Scryer reads them.
+Scryer reads this repository and derives its C4 tree: containers from packaging, components from modules and directories, links from imports. Claims come from behaviour tests: **a test's description is a claim** about the code it tests, and its status (proven, stale, failing, todo) comes from test reports. You never edit a model. There is none. You write code and tests; Scryer reads them.
 
 The loop: **orient → write the claims as todo tests → build → run what the change reaches → ingest the report → probe what you doubt.**
 
 ## 1. Orient
 
-Before touching code, call `orient` with the task in a few words and the files you expect to touch. Per file you get:
+Before touching code, call `orient` with the task in 3–5 words and the files you expect to touch. The task names your session on the developer's Sessions page, where they follow it as it works: `queue offline saves`, not a sentence. Per file you get:
 
 - where it sits (`system / container / component`), its **layer** with what that layer may import, and any style violation already charged to the file,
 - the module description and the claims that already speak for it, with status,
-- `stubs`: the test file where a new claim for this code goes,
-- what other live sessions are doing near it (`alsoEditing`, `othersTodos`, `radiusOverlap`).
+- `stubs`: the test file where a new claim for this code goes.
 
 `locate {file}` is the one-file form with every claim. `search_model` and `read_model` find and read nodes when you don't know the file yet.
 
@@ -69,6 +68,21 @@ Make the todos pass and turn each into a real test: drop `#[ignore]` / `.todo` /
 
 **Where code goes.** A container may declare an architecture style in `.scryer/structure.toml` (hexagonal, feature-sliced, core-shell, library, …) with layers. Respect what the file's layer may import. When a file breaks its container's style, **fix it by moving code** to the layer it belongs in. Never change the style, the layers or `structure.toml` to make a finding go away, unless the user asks. A container declared `tooling = true` (demos, harnesses, dev apps) is not held to style rules; orient says so.
 
+**How to organise it.** Scryer draws each module or directory as a component, so how you organise code is what the reader sees:
+
+- **A component is one job behind one entry file.** Name it for what it does (`billing`, `claim_text`, `session_store`), never for its layer (`domain`, `services`, `utils`). A layer is where a component sits, not a component.
+- **A component sits in one layer.** In a styled container, end the first paragraph of its module doc with its layer: `//! Which agent to run, and how to spawn it. [domain]`. Don't create layer folders (`domain/`, `infrastructure/`) to hold the code; a concern that spans layers is several components, one per layer (`comment_threads` in the domain, `comment_store` in infrastructure).
+- **Group what belongs together.** A component that grows several files becomes a directory: its entry file (`mod.rs`, `index.ts`, `__init__.py`) carries the module doc and re-exports what others use, and the files inside take its layer. Group files of one layer that import each other and serve one job; one component per small file is as unreadable as three named after layers. Aim for a handful to a couple of dozen components per container.
+- **Go through the front door.** Import a sibling component from its entry file, never from a file inside it, and keep what others don't use private to the component.
+- **New code joins the component whose job it serves.** Start a new component only for a new job, and give it its doc and layer when you create it.
+
+**Decisions live in the module's doc comment.** A node's module doc comment (`//!` in Rust, the file's leading `/** */` in TypeScript, a module docstring in Python) has two parts:
+
+- **The first paragraph is its description:** what the module is, in one card line of at most 200 characters.
+- **Everything after it is its decisions,** as markdown: when you make a design decision a later reader needs (why this shape, what was rejected, what must stay true), add it there with its reason.
+
+No separate ADR files; the doc comment travels with the code it explains. A decision spanning several modules goes on the lowest node containing them all; the ones below inherit it. The system's description and decisions are the root `ARCHITECTURE.md`, first paragraph and the rest.
+
 ## 4. Verify
 
 1. `get_test_radius` (no `files` = this session's edits) names the tests your change reaches and, when configured, the exact command. Run those, never the whole suite.
@@ -83,11 +97,15 @@ A green test proves only what it checks. For a claim that matters, `open_probe {
 
 ## Other sessions
 
-Several agents may be working in this repository at once. Nothing locks.
+Several agents may be working in this repository at once. Nothing locks. Don't revert uncommitted changes you didn't make, and don't delete todo tests you didn't write unless the user asks.
 
-- `alsoEditing`: another live session edited this file. Read its change before yours; don't revert it.
-- `othersTodos`: todo tests another session wrote here. They are that session's work. Leave them alone unless the user asks.
-- `radiusOverlap`: your change reaches files another session is editing. Run the radius tests before you finish.
+## Comments
+
+People and other agents leave comment threads on nodes: questions, requests, decisions to respect. `orient`, `locate` and the overlay on a file you read list the open threads on its node and the nodes above it; `comments` lists them all.
+
+- An open thread is an ask. If your task touches it, answer it with `comment {thread, text}`.
+- Close a thread only when its ask is done: `comment {thread, text, addressed: true}`, saying in `text` what you did and where. A reply never closes a thread on its own, and an ask you only partly did stays open.
+- To ask the user or another agent something you cannot settle yourself, open a thread: `comment {on, text}` with `on` a file, node id or node name. Keep it to one ask; don't narrate your work there.
 
 ## Without the MCP server
 
@@ -96,6 +114,6 @@ The same answers come from the CLI: `scryer-mcp status` (counts and what needs a
 ## Don't
 
 - Don't write a claim anywhere but in a test.
-- Don't mark anything proven by hand or edit files under `.scryer/` other than `structure.toml` when the user asks.
+- Don't mark anything proven by hand or edit files under `.scryer/` other than `structure.toml` when the user asks. Comment threads are written through `comment`, never by hand.
 - Don't loosen a style to clear a violation.
 - Don't delete another session's todo tests.

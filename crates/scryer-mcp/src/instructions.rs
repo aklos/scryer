@@ -15,8 +15,9 @@ it tests, subject dropped, condition first: `<verb> <object>` when always true; 
 and one response per test; a cross-cutting concern is a trailing `[tag]`. The test's level is the \
 claim's level: an e2e test claims for the whole system, an integration test at a deployable's \
 boundary for its container, a unit test for its component — write a claim at the level it speaks \
-for. Before building, `orient {task, files}` and write each claim you will satisfy as a todo test \
-in the file orient names; a todo test is work to do. Run only what `get_test_radius` names, then \
+for. Before building, `orient {task, files}` — the task in 3-5 words, which names your session \
+where the developer follows it — and write each claim you will satisfy as a todo test in the file \
+orient names; a todo test is work to do. Run only what `get_test_radius` names, then \
 `ingest_test_report`. A surviving probe (`open_probe`) is a finding: strengthen the test. An open \
 comment thread on code you work on is an ask: reply with `comment`, and mark it addressed only when \
 it is done. Every \

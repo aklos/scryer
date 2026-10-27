@@ -13,12 +13,11 @@ The loop: **orient → write the claims as todo tests → build → run what the
 
 ## 1. Orient
 
-Before touching code, call `orient` with the task in a few words and the files you expect to touch. Per file you get:
+Before touching code, call `orient` with the task in 3–5 words and the files you expect to touch. The task names your session on the developer's Sessions page, where they follow it as it works: `queue offline saves`, not a sentence. Per file you get:
 
 - where it sits (`system / container / component`), its **layer** with what that layer may import, and any style violation already charged to the file,
 - the module description and the claims that already speak for it, with status,
-- `stubs`: the test file where a new claim for this code goes,
-- what other live sessions are doing near it (`alsoEditing`, `othersTodos`, `radiusOverlap`).
+- `stubs`: the test file where a new claim for this code goes.
 
 `locate {file}` is the one-file form with every claim. `search_model` and `read_model` find and read nodes when you don't know the file yet.
 
@@ -98,11 +97,7 @@ A green test proves only what it checks. For a claim that matters, `open_probe {
 
 ## Other sessions
 
-Several agents may be working in this repository at once. Nothing locks.
-
-- `alsoEditing`: another live session edited this file. Read its change before yours; don't revert it.
-- `othersTodos`: todo tests another session wrote here. They are that session's work. Leave them alone unless the user asks.
-- `radiusOverlap`: your change reaches files another session is editing. Run the radius tests before you finish.
+Several agents may be working in this repository at once. Nothing locks. Don't revert uncommitted changes you didn't make, and don't delete todo tests you didn't write unless the user asks.
 
 ## Comments
 

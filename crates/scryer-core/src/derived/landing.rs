@@ -3,8 +3,9 @@
 //! the verdicts its claims got), the claims its edits newly proved, newly
 //! planned, left planned, or made stale or failing, the surviving mutants
 //! and dark files in what it touched, and which components more than one
-//! session touched. Read off the session logs and the derived status;
-//! nothing is recorded for it.
+//! session touched. Read off the session logs and the derived status: a log
+//! carries the claims proven at the session's start and the claims it
+//! ingested verdicts for, so what it changed is its own.
 
 use crate::derived_status::{ClaimState, DerivedStatus};
 use crate::c4_tree::{DerivedClaim, DerivedTree};
@@ -76,8 +77,8 @@ pub struct LandingSession {
     /// spans several worktrees.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<String>,
-    /// The session is working now: its harness process runs, or it edited a
-    /// file recently.
+    /// The session is working now: mid-turn, not merely open
+    /// ([`crate::session_log::working`]).
     #[serde(default)]
     pub live: bool,
     /// What it did in the window, oldest first, the last [`MAX_STEPS`].
@@ -298,6 +299,13 @@ fn first_component_name(touched: &[String], tree: &DerivedTree) -> Option<String
 /// it did after `since`. A planned claim is a session's newly planned work
 /// when the session's log records it as a stub it wrote; other planned
 /// claims its edits reach are still planned.
+///
+/// A session whose log has its start's baseline is read for the changes of
+/// state it made: it newly proved a claim proven now that was not at its
+/// start, when it recorded that claim's verdict or wrote its test; it broke
+/// one proven at its start and failing now, or made it stale with its
+/// edits. A log from before the baseline is read by reach: every claim its
+/// edits reach, by its state now.
 pub fn landing(
     sessions: &[(String, Vec<SessionEntry>)],
     tree: &DerivedTree,
@@ -345,19 +353,32 @@ pub fn landing(
         let stubbed = |c: &DerivedClaim| {
             now.stubs.iter().any(|(f, t)| *f == c.file && *t == c.junit_name)
         };
-        for c in tree.claims.iter().filter(|c| reached(c) || stubbed(c)) {
+        let baseline: Option<BTreeSet<&str>> =
+            log.proven_at_start.as_ref().map(|ids| ids.iter().map(String::as_str).collect());
+        let ingested: BTreeSet<&str> = log.verdicts.iter().map(String::as_str).collect();
+        for c in tree.claims.iter().filter(|c| reached(c) || stubbed(c) || ingested.contains(c.id.as_str())) {
             let Some(st) = states.get(c.id.as_str()) else { continue };
             let row = LandingClaim::of(c, st.state);
             let verdict_in_window = st.recorded_at.is_some_and(|at| at >= from);
-            if let (Some(at), true, ClaimState::Proven | ClaimState::Failing) = (st.recorded_at, verdict_in_window, st.state) {
+            let own = match &baseline {
+                Some(_) => ingested.contains(c.id.as_str()) || stubbed(c),
+                None => reached(&c) || stubbed(c),
+            };
+            if let (Some(at), true, true, ClaimState::Proven | ClaimState::Failing) =
+                (st.recorded_at, verdict_in_window, own, st.state)
+            {
                 verdicts.push((at, row.clone()));
             }
-            match st.state {
-                ClaimState::Proven if verdict_in_window => s.newly_proven.push(row),
-                ClaimState::Planned if stubbed(c) => s.newly_planned.push(row),
-                ClaimState::Planned => s.still_planned.push(row),
-                ClaimState::Stale => s.newly_stale_or_failing.push(row),
-                ClaimState::Failing if verdict_in_window || touched.contains(c.file.as_str()) => {
+            let was_proven = baseline.as_ref().map(|b| b.contains(c.id.as_str()));
+            match (st.state, was_proven) {
+                (ClaimState::Planned, _) if stubbed(c) => s.newly_planned.push(row),
+                (ClaimState::Planned, _) if reached(&c) => s.still_planned.push(row),
+                (ClaimState::Proven, Some(false)) if own && verdict_in_window => s.newly_proven.push(row),
+                (ClaimState::Proven, None) if own && verdict_in_window => s.newly_proven.push(row),
+                (ClaimState::Stale, Some(true)) if reached(&c) => s.newly_stale_or_failing.push(row),
+                (ClaimState::Stale, None) if reached(&c) => s.newly_stale_or_failing.push(row),
+                (ClaimState::Failing, Some(was)) if was || own => s.newly_stale_or_failing.push(row),
+                (ClaimState::Failing, None) if verdict_in_window || touched.contains(c.file.as_str()) => {
                     s.newly_stale_or_failing.push(row)
                 }
                 _ => {}
@@ -505,6 +526,56 @@ mod tests {
     /// When a session started before the window, shows only what it did in it:
     /// files touched before the window reach nothing, and verdicts recorded
     /// before it are not newly proven.
+    /// When a session's log has the baseline its start recorded, counts the changes of state it made: a claim it got a verdict for that is proven now and was not at its start is newly proven, one already proven is not; one proven at its start and failing now is broken; a todo test already in the code its edits reach is not its newly planned work.
+    #[test]
+    fn a_session_with_a_baseline_counts_the_changes_it_made() {
+        let planned = ScryModel::new();
+        let tree = DerivedTree {
+            fingerprint: 0,
+            committed: planned.clone(),
+            planned,
+            claims: vec![
+                claim("fixed", "src/a.rs", false),
+                claim("rerun", "src/a.rs", false),
+                claim("broke", "src/a.rs", false),
+                claim("theirs", "src/a.rs", false),
+                claim("backlog", "src/a.rs", true),
+                claim("stub", "src/a.rs", true),
+            ],
+            doc_files: Default::default(),
+            file_nodes: BTreeMap::from([("src/a.rs".to_string(), "comp".to_string())]),
+            dark_files: Vec::new(),
+            style_violations: Vec::new(),
+            layer_exempt: Vec::new(),
+            tooling: Default::default(),
+        };
+        let status = DerivedStatus {
+            claims: vec![
+                status("fixed", ClaimState::Proven, Some(150)),
+                status("rerun", ClaimState::Proven, Some(150)),
+                status("broke", ClaimState::Failing, Some(150)),
+                status("theirs", ClaimState::Proven, Some(150)),
+                status("backlog", ClaimState::Planned, None),
+                status("stub", ClaimState::Planned, None),
+            ],
+            ..Default::default()
+        };
+        let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let entries = vec![
+            SessionEntry { at: 100, event: SessionEvent::Proven { ids: ids(&["rerun", "broke"]) } },
+            touch(110, "src/a.rs"),
+            SessionEntry { at: 120, event: SessionEvent::Stub { file: "src/a.rs".into(), test: "stub".into() } },
+            SessionEntry { at: 150, event: SessionEvent::Verdicts { ids: ids(&["fixed", "rerun", "broke"]) } },
+        ];
+        let l = landing(&[("s".to_string(), entries)], &tree, &status, 0);
+        let s = &l.sessions[0];
+        let names = |v: &[LandingClaim]| v.iter().map(|c| c.resp_id.as_str()).collect::<Vec<_>>().join(",");
+        assert_eq!(names(&s.newly_proven), "fixed", "re-proving what was proven, or another session's verdict, is not this session's");
+        assert_eq!(names(&s.newly_stale_or_failing), "broke");
+        assert_eq!(names(&s.newly_planned), "stub");
+        assert_eq!(names(&s.still_planned), "backlog");
+    }
+
     #[test]
     fn a_session_spanning_the_window_start_shows_only_what_came_after() {
         let mut planned = ScryModel::new();

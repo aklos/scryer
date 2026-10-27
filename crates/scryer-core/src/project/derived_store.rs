@@ -78,9 +78,9 @@ pub fn landing_at(
     out
 }
 
-/// The sessions working in checkout `r` now.
+/// The sessions working in checkout `r` now: mid-turn, not merely open.
 pub fn live_session_ids(r: &ModelRef) -> std::collections::BTreeSet<String> {
-    crate::session_hooks::live_sessions(r, None).into_iter().map(|s| s.id).collect()
+    crate::session_hooks::working_sessions(r)
 }
 
 /// Mark the sessions of `landing` that are in `live`.

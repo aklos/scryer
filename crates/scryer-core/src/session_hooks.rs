@@ -46,34 +46,58 @@ pub fn probe_open(r: &ModelRef, session: &str) -> bool {
     session_log(r, session).probe_open
 }
 
+/// How long a shell command with no recorded end counts as still running.
+const OPEN_SHELL_NS: u64 = 1800 * 1_000_000_000;
+
 /// A shell command finished: record every project file modified since it
 /// started as touched — edits made with `sed`, a script or a heredoc are the
-/// session's as surely as an Edit tool's. Scryer's own `.scryer/` files are
-/// not code. Several sessions can share one checkout, so a file another
-/// session logged touching while the command ran is theirs, not this one's.
-/// Returns the newly touched files.
+/// session's as surely as an Edit tool's — and the command's end. Scryer's
+/// own `.scryer/` files are not code. Several sessions can share one
+/// checkout, so a file is left out when another session logged touching it
+/// while the command ran, or when it changed while another session's shell
+/// command was running too: then either could have written it, and a touch
+/// that may be someone else's is worse than one missed. Returns the newly
+/// touched files.
 pub fn record_shell_edits(r: &ModelRef, session: &str, tool: Option<&str>) -> Result<Vec<String>, String> {
     let log = session_log(r, session);
     let Some(since) = log.shell_started(tool) else { return Ok(Vec::new()) };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or_default();
     let since_secs = since / 1_000_000_000;
-    let others: HashSet<String> = session_store::list(r)
+    // A command still running in another session may have started before
+    // this one, so its log can be older than this window.
+    let horizon = since.saturating_sub(OPEN_SHELL_NS) / 1_000_000_000;
+    let others: Vec<Vec<SessionEntry>> = session_store::list(r)
         .into_iter()
-        .filter(|(id, mtime)| id != session && *mtime >= since_secs)
-        .flat_map(|(id, _)| session_store::read(r, &id))
+        .filter(|(id, mtime)| id != session && *mtime >= horizon)
+        .map(|(id, _)| session_store::read(r, &id))
+        .collect();
+    let theirs: HashSet<&str> = others
+        .iter()
+        .flatten()
         .filter(|e| e.at >= since_secs)
-        .filter_map(|e| match e.event {
-            SessionEvent::Touch { file } => Some(file),
+        .filter_map(|e| match &e.event {
+            SessionEvent::Touch { file } => Some(file.as_str()),
             _ => None,
         })
         .collect();
+    let windows: Vec<(u64, u64)> = others
+        .iter()
+        .flat_map(|entries| SessionLog::from_events(entries).shell_windows(now, OPEN_SHELL_NS))
+        .filter(|(_, end)| *end >= since)
+        .collect();
     let mut added = Vec::new();
-    for file in session_store::files_modified_since_ns(r.project_path(), since) {
-        if file.starts_with(".scryer/") || log.touched.contains(&file) || others.contains(&file) {
+    for (file, mtime) in session_store::files_modified_since_ns_at(r.project_path(), since) {
+        let shared = windows.iter().any(|(start, end)| (*start..=*end).contains(&mtime));
+        if file.starts_with(".scryer/") || log.touched.contains(&file) || theirs.contains(file.as_str()) || shared {
             continue;
         }
         session_store::append(r, session, SessionEvent::Touch { file: file.clone() })?;
         added.push(file);
     }
+    session_store::append(r, session, SessionEvent::ShellEnd { tool: tool.map(str::to_string), ns: now })?;
     Ok(added)
 }
 
@@ -115,18 +139,36 @@ pub fn session_task(r: &ModelRef, session: &str) -> Option<String> {
 }
 
 /// The session is starting: the first time, record the todo tests already in
-/// the project (`(file, junit_name)`, computed only then), so its first stop
-/// can tell the stubs it wrote from ones that were there.
+/// the project (`(file, junit_name)`) and the claims already proven (derived
+/// claim ids), computed only then, so its stops can tell the stubs it wrote
+/// from ones that were there and the landing what it proved from what was.
 pub fn begin(
     r: &ModelRef,
     session: &str,
-    planned: impl FnOnce() -> Vec<(String, String)>,
+    snapshot: impl FnOnce() -> (Vec<(String, String)>, Vec<String>),
 ) -> Result<(), String> {
-    if session_log(r, session).planned_seen.is_some() {
+    let log = session_log(r, session);
+    if log.planned_seen.is_some() && log.proven_at_start.is_some() {
         return Ok(());
     }
-    let tests = planned().iter().map(|(f, t)| test_key(f, t)).collect();
-    session_store::append(r, session, SessionEvent::Planned { tests })
+    let (planned, proven) = snapshot();
+    if log.planned_seen.is_none() {
+        let tests = planned.iter().map(|(f, t)| test_key(f, t)).collect();
+        session_store::append(r, session, SessionEvent::Planned { tests })?;
+    }
+    if log.proven_at_start.is_none() {
+        session_store::append(r, session, SessionEvent::Proven { ids: proven })?;
+    }
+    Ok(())
+}
+
+/// Record that this session ingested verdicts for `ids`: the claims whose
+/// change of state is its own.
+pub fn record_verdicts(r: &ModelRef, session: &str, ids: Vec<String>) -> Result<(), String> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    session_store::append(r, session, SessionEvent::Verdicts { ids })
 }
 
 /// The session stopped: close its record. Given the project's todo tests
@@ -175,57 +217,18 @@ pub fn bind_pid(r: &ModelRef, session: &str, pid: u32) -> Result<(), String> {
     std::fs::write(path, session).map_err(|e| e.to_string())
 }
 
-/// Another session working in this project now, as orient shows it.
-#[derive(Debug, Clone, PartialEq)]
-pub struct LiveSession {
-    pub id: String,
-    /// The task it oriented on.
-    pub task: Option<String>,
-    pub touched: Vec<String>,
-    /// The todo tests it owns, `(file, junit_name)`.
-    pub stubs: Vec<(String, String)>,
-}
-
-/// How recent a touch keeps a session live without a running process.
-const LIVE_SECS: u64 = 3600;
-
-/// The sessions live in this project besides `except`: a harness process
-/// bound to it is still running, or it touched a file in the last hour.
-pub fn live_sessions(r: &ModelRef, except: Option<&str>) -> Vec<LiveSession> {
+/// The sessions in this project mid-turn now ([`crate::session_log::working`]).
+pub fn working_sessions(r: &ModelRef) -> std::collections::BTreeSet<String> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let running: HashSet<String> = std::fs::read_dir(r.sessions_dir().join(".by-pid"))
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|e| e.file_name().to_str().and_then(|p| p.parse::<u32>().ok()).is_some_and(process_alive))
-        .filter_map(|e| std::fs::read_to_string(e.path()).ok())
-        .map(|s| s.trim().to_string())
-        .collect();
     session_store::list(r)
         .into_iter()
-        .filter(|(id, _)| Some(id.as_str()) != except)
-        .filter_map(|(id, _)| {
-            let entries = session_store::read(r, &id);
-            let recent = entries
-                .iter()
-                .any(|e| matches!(e.event, SessionEvent::Touch { .. }) && e.at + LIVE_SECS >= now);
-            if !recent && !running.contains(&id) {
-                return None;
-            }
-            let log = SessionLog::from_events(&entries);
-            let task = log.task.clone();
-            Some(LiveSession { id, task, touched: log.touched, stubs: log.stubs })
-        })
+        .filter(|(_, updated)| updated + crate::session_log::WORKING_SECS >= now)
+        .filter(|(id, _)| crate::session_log::working(&session_store::read(r, id), now))
+        .map(|(id, _)| id)
         .collect()
-}
-
-/// Whether process `pid` is running. Known on Linux; elsewhere a session is
-/// live only by its recent touches.
-fn process_alive(pid: u32) -> bool {
-    cfg!(target_os = "linux") && std::path::Path::new(&format!("/proc/{pid}")).exists()
 }
 
 /// The session harness process `pid` last bound, if any.
@@ -274,6 +277,19 @@ mod tests {
         assert_eq!(stops, 2);
     }
 
+    /// When a session starts, records the claims already proven, once, and each report it ingests records the claims it got verdicts for.
+    #[test]
+    fn a_session_records_its_baseline_and_its_verdicts() {
+        let (_dir, r) = project();
+        begin(&r, "s", || (Vec::new(), vec!["c1".to_string()])).unwrap();
+        begin(&r, "s", || panic!("the baseline is recorded once")).unwrap();
+        record_verdicts(&r, "s", vec!["c2".into()]).unwrap();
+        record_verdicts(&r, "s", vec!["c2".into(), "c3".into()]).unwrap();
+        let log = session_log(&r, "s");
+        assert_eq!(log.proven_at_start, Some(vec!["c1".to_string()]));
+        assert_eq!(log.verdicts, vec!["c2".to_string(), "c3".to_string()]);
+    }
+
     /// At a stop, the todo tests the session wrote since its start in files
     /// it touched become its stubs — not ones that were already there, not
     /// ones in files it never touched, not another session's — and the
@@ -282,7 +298,7 @@ mod tests {
     fn a_stop_records_the_sessions_new_stubs_and_what_it_reached() {
         let (_dir, r) = project();
         let t = |f: &str, n: &str| (f.to_string(), n.to_string());
-        begin(&r, "s", || vec![t("src/a.rs", "old")]).unwrap();
+        begin(&r, "s", || (vec![t("src/a.rs", "old")], vec!["c1".to_string()])).unwrap();
         begin(&r, "s", || panic!("the start is recorded once")).unwrap();
         record_touch(&r, "s", "src/a.rs").unwrap();
         record_touch(&r, "other", "src/a.rs").unwrap();
@@ -316,6 +332,26 @@ mod tests {
         record_touch(&r, "s", "/elsewhere/probes/wt/src/auth.rs").unwrap();
         record_touch(&r, "s", &format!("{}/../sibling/x.rs", dir.path().display())).unwrap();
         assert_eq!(session_log(&r, "s").touched, vec!["src/auth.rs"]);
+    }
+
+    /// If a file changed while another session's shell command was running
+    /// too, then it is neither session's touch from this command; a file
+    /// changed after the other command ended is.
+    #[test]
+    fn a_file_changed_during_another_sessions_command_is_not_claimed() {
+        let (dir, r) = project();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        let pause = || std::thread::sleep(std::time::Duration::from_millis(20));
+        record_shell_start(&r, "theirs", Some("t-1")).unwrap();
+        record_shell_start(&r, "mine", Some("m-1")).unwrap();
+        pause();
+        std::fs::write(dir.path().join("src/either.rs"), "?").unwrap();
+        pause();
+        assert!(record_shell_edits(&r, "theirs", Some("t-1")).unwrap().is_empty(), "mine is still running");
+        pause();
+        std::fs::write(dir.path().join("src/after.rs"), "mine").unwrap();
+        assert_eq!(record_shell_edits(&r, "mine", Some("m-1")).unwrap(), vec!["src/after.rs"]);
+        assert!(session_log(&r, "mine").shell_ends.iter().any(|(t, _)| t.as_deref() == Some("m-1")));
     }
 
     /// Files a shell command modified between its start and finish become the
@@ -361,26 +397,6 @@ mod tests {
 
         assert_eq!(record_shell_edits(&r, "a", Some("call-1")).unwrap(), vec!["src/mine.rs"]);
         assert!(!session_log(&r, "a").touched.contains(&"src/theirs.rs".to_string()));
-    }
-
-    /// While a process bound to a session runs or it touched a file in the last hour, counts the session as live, never the caller itself.
-    #[test]
-    fn live_sessions_are_running_or_recently_touching() {
-        let (_dir, r) = project();
-        record_touch(&r, "recent", "src/a.rs").unwrap();
-        record_task(&r, "recent", "rename drafts").unwrap();
-        crate::stores::append(&r, "idle", SessionEvent::Stop).unwrap();
-        crate::stores::append(&r, "bound", SessionEvent::Stop).unwrap();
-        bind_pid(&r, "bound", std::process::id()).unwrap();
-        record_touch(&r, "me", "src/a.rs").unwrap();
-
-        let mut live: Vec<LiveSession> = live_sessions(&r, Some("me"));
-        live.sort_by(|a, b| a.id.cmp(&b.id));
-        let ids: Vec<&str> = live.iter().map(|s| s.id.as_str()).collect();
-        let expected: &[&str] = if cfg!(target_os = "linux") { &["bound", "recent"] } else { &["recent"] };
-        assert_eq!(ids, expected);
-        let recent = live.iter().find(|s| s.id == "recent").unwrap();
-        assert_eq!((recent.task.as_deref(), recent.touched.as_slice()), (Some("rename drafts"), &["src/a.rs".to_string()][..]));
     }
 
     #[test]

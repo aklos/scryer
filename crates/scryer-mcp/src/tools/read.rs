@@ -326,71 +326,6 @@ fn fit_orient(mut payload: serde_json::Value) -> String {
     text
 }
 
-/// The other sessions live in this project, and the import graph to see
-/// where their work and the caller's meet. Awareness only: nothing is ever
-/// refused on its account.
-pub(crate) struct Peers {
-    live: Vec<scryer_core::session::LiveSession>,
-    edges: Vec<(String, String)>,
-}
-
-impl Peers {
-    fn of(server: &ScryerServer, model_ref: &ModelRef, tree: &scryer_core::derived_tree::DerivedTree) -> Self {
-        let me = server.session_id(model_ref);
-        Self::besides(model_ref, tree, me.as_deref())
-    }
-
-    /// The live sessions besides `me`.
-    pub(crate) fn besides(model_ref: &ModelRef, tree: &scryer_core::derived_tree::DerivedTree, me: Option<&str>) -> Self {
-        let live = scryer_core::session::live_sessions(model_ref, me);
-        let edges = if live.is_empty() { Vec::new() } else { derived::import_edges(model_ref, tree).unwrap_or_default() };
-        Peers { live, edges }
-    }
-
-    /// One line each, only when there is something to say: who else is
-    /// editing `file`, the todo tests in it another session owns, and where
-    /// a change here reaches files another session is editing.
-    fn lines(&self, tree: &scryer_core::derived_tree::DerivedTree, file: &str) -> Vec<(&'static str, String)> {
-        let name = |s: &scryer_core::session::LiveSession| {
-            let short: String = s.id.chars().take(8).collect();
-            match &s.task {
-                Some(t) => format!("{short} ({})", clip(t, 40)),
-                None => short,
-            }
-        };
-        let mut out = Vec::new();
-        let editing: Vec<String> = self.live.iter().filter(|s| s.touched.iter().any(|f| f == file)).map(name).collect();
-        if !editing.is_empty() {
-            out.push(("alsoEditing", format!("Also edited by live session {}", editing.join("; "))));
-        }
-        let todos: Vec<String> = self
-            .live
-            .iter()
-            .flat_map(|s| s.stubs.iter().filter(|(f, _)| f == file).map(move |(_, t)| (s, t)))
-            .filter(|(_, t)| tree.claims.iter().any(|c| c.file == file && &c.junit_name == *t && c.planned))
-            .map(|(s, t)| format!("{t} ({})", s.id.chars().take(8).collect::<String>()))
-            .collect();
-        if !todos.is_empty() {
-            out.push(("othersTodos", format!("Todo tests here owned by another session: {}", todos.join(", "))));
-        }
-        let files = [file.to_string()];
-        let reached = derived::reach(&self.edges, &files);
-        let overlaps: Vec<String> = self
-            .live
-            .iter()
-            .filter_map(|s| {
-                let hit: Vec<&str> =
-                    s.touched.iter().map(String::as_str).filter(|f| *f != file && reached.contains(f)).collect();
-                (!hit.is_empty()).then(|| format!("{}: {}", name(s), clip(&hit.join(", "), 120)))
-            })
-            .collect();
-        if !overlaps.is_empty() {
-            out.push(("radiusOverlap", format!("A change here reaches files another live session is editing — {}", overlaps.join("; "))));
-        }
-        out
-    }
-}
-
 /// How many open comment threads a file entry lists.
 const COMMENTS_SHOWN: usize = 3;
 
@@ -404,9 +339,8 @@ pub(crate) fn thread_line(t: &scryer_core::comments::Thread) -> String {
 }
 
 /// What the tree says about one file: its node chain, layer, module
-/// description, claims and where new stubs go — and what other live sessions
-/// are doing near it.
-pub(crate) fn file_report(loaded: &derived::Loaded, peers: &Peers, file: &str, claims_cap: Option<usize>) -> serde_json::Value {
+/// description, claims and where new stubs go.
+pub(crate) fn file_report(loaded: &derived::Loaded, file: &str, claims_cap: Option<usize>) -> serde_json::Value {
     let tree = &loaded.tree;
     let model = &tree.planned;
     let node = derived::file_node(tree, model, file);
@@ -434,9 +368,6 @@ pub(crate) fn file_report(loaded: &derived::Loaded, peers: &Peers, file: &str, c
     });
     if node.is_none() {
         v["note"] = serde_json::json!("No container or component holds this file — dark code, or not product code.");
-    }
-    for (key, line) in peers.lines(tree, file) {
-        v[key] = serde_json::json!(line);
     }
     strip_fields_compact(&mut v);
     v
@@ -600,8 +531,7 @@ impl ScryerServer {
         };
         let tree = &loaded.tree;
         let file = normalize_project_rel(&model_ref, &req.file);
-        let peers = Peers::of(self, &model_ref, tree);
-        let mut payload = file_report(&loaded, &peers, &file, Some(0));
+        let mut payload = file_report(&loaded, &file, Some(0));
         let node = derived::file_node(tree, &tree.planned, &file);
         let claims: Vec<serde_json::Value> = derived::file_claims(tree, node, &file)
             .into_iter()
@@ -627,11 +557,12 @@ impl ScryerServer {
     }
 
     #[tool(
-        description = "The front door for a coding task: pass the `task` in a few words and/or the \
+        description = "The front door for a coding task: pass the `task` in 3-5 words (it names your session \
+         where the developer follows it) and/or the \
          project-relative `files` it touches. Returns, capped at ~4k chars: per file its node \
          chain, layer, module description, one line per claim with status, `stubs` — the test \
-         file where each claim you will satisfy goes as a todo test before you build — and what \
-         other live sessions are doing near it; per task the best-matching nodes. Name claims in \
+         file where each claim you will satisfy goes as a todo test before you build; per task \
+         the best-matching nodes. Name claims in \
          the domain's plain words; a cross-cutting concern is a trailing [tag]."
     )]
     fn orient(
@@ -656,12 +587,11 @@ impl ScryerServer {
             Err(e) => return Ok(e),
         };
         let tree = &loaded.tree;
-        let peers = Peers::of(self, &model_ref, tree);
 
         let mut files_out: Vec<serde_json::Value> = files
             .iter()
             .take(ORIENT_FILES)
-            .map(|f| file_report(&loaded, &peers, &normalize_project_rel(&model_ref, f), Some(ORIENT_CLAIMS_PER_FILE)))
+            .map(|f| file_report(&loaded, &normalize_project_rel(&model_ref, f), Some(ORIENT_CLAIMS_PER_FILE)))
             .collect();
         if files.len() > ORIENT_FILES {
             files_out.push(serde_json::json!({
@@ -794,34 +724,6 @@ mod tests {
         assert!(violations[0].as_str().unwrap().starts_with("breaks the style: "), "{out}");
         assert_eq!(film["tooling"], "tooling: not held to style rules", "{out}");
         assert!(film.get("style").is_none() && film.get("violations").is_none(), "{out}");
-    }
-
-    /// With another session live in the project, orient says per file who
-    /// else is editing it, which of its todo tests that session owns, and
-    /// where a change here reaches files it is editing — and says nothing of
-    /// the caller's own work.
-    #[test]
-    fn orient_names_what_other_live_sessions_are_doing_near_each_file() {
-        let dir = project();
-        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
-        let draft = "crates/notes/src/draft.rs";
-        let store = "crates/notes/src/store/mod.rs";
-        scryer_core::session::record_task(&r, "peer-session-1", "split drafts").unwrap();
-        scryer_core::session::record_touch(&r, "peer-session-1", draft).unwrap();
-        scryer_core::session::stop(&r, "peer-session-1", Some(&[(draft.to_string(), "merges".to_string())]), Vec::new())
-            .unwrap();
-        scryer_core::session::record_touch(&r, "me", store).unwrap();
-
-        let me = ScryerServer::for_session("me");
-        let out = json_of(&orient_as(&me, &dir, None, &[draft, store]));
-        let (d, s) = (&out["files"][0], &out["files"][1]);
-        assert_eq!(d["alsoEditing"], "Also edited by live session peer-ses (split drafts)", "{out}");
-        assert_eq!(d["othersTodos"], "Todo tests here owned by another session: merges (peer-ses)");
-        assert!(s["radiusOverlap"].as_str().unwrap().contains(draft), "store's change reaches draft.rs: {out}");
-        assert!(s.get("alsoEditing").is_none() && d.get("radiusOverlap").is_none(), "{out}");
-
-        let alone = json_of(&orient_as(&ScryerServer::for_session("peer-session-1"), &dir, None, &[draft]));
-        assert!(alone["files"][0].get("othersTodos").is_none(), "a session's own todos are not news to it: {alone}");
     }
 
     /// However many files and claims are asked about, orient's answer stays

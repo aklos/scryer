@@ -95,6 +95,12 @@ impl ScryerServer {
             Err(e) => return error(format!("Failed to ingest '{}': {e}", req.path)),
         };
         drop(_lock);
+        // The claims whose verdicts this session recorded: what it proves
+        // or breaks is its own, not every claim its edits reach.
+        if let Some(session) = self.session_id(&model_ref) {
+            let ids = summary.report.claims.keys().cloned().collect();
+            let _ = scryer_core::session::record_verdicts(&model_ref, &session, ids);
+        }
 
         let name_of = |id: &str| {
             tree.as_ref()

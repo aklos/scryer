@@ -193,8 +193,7 @@ const OVERLAY_CLAIMS_CAP: usize = 8;
 fn overlay_text(r: &ModelRef, event: &serde_json::Value, file: &str) -> Option<String> {
     let rel = scryer_core::session::relativize(r.project_path(), file);
     let loaded = crate::derived::load(r).ok()?;
-    let peers = crate::tools::read::Peers::besides(r, &loaded.tree, session_id(event));
-    let report = crate::tools::read::file_report(&loaded, &peers, &rel, Some(OVERLAY_CLAIMS_CAP));
+    let report = crate::tools::read::file_report(&loaded, &rel, Some(OVERLAY_CLAIMS_CAP));
     let overlay = scryer_core::session::overlay(r, session_id(event), file, report).ok()??;
     render_overlay(&overlay)
 }
@@ -457,10 +456,8 @@ fn render_overlay(overlay: &serde_json::Value) -> Option<String> {
     if let Some(more) = overlay["moreClaims"].as_str() {
         out.push_str(&format!("({more})\n"));
     }
-    for key in ["probe", "alsoEditing", "othersTodos", "radiusOverlap"] {
-        if let Some(line) = overlay[key].as_str() {
-            out.push_str(&format!("{line}\n"));
-        }
+    if let Some(line) = overlay["probe"].as_str() {
+        out.push_str(&format!("{line}\n"));
     }
     if let Some(stubs) = overlay["stubs"].as_str() {
         out.push_str(&format!("A new claim here is a todo test in {stubs}."));
@@ -476,10 +473,12 @@ fn user_prompt_submit(r: &ModelRef, event: &serde_json::Value) {
     for pid in ancestor_pids() {
         let _ = scryer_core::session::bind_pid(r, session, pid);
     }
-    // The first submit notes the todo tests already there, so the stubs this
-    // session writes can be told apart at its stops.
-    let _ = scryer_core::session::begin(r, session, || {
-        crate::derived::load_tree(r).map(|t| crate::derived::planned_tests(&t)).unwrap_or_default()
+    // The first submit notes the todo tests already there and the claims
+    // already proven, so what this session writes and proves can be told
+    // apart from what was.
+    let _ = scryer_core::session::begin(r, session, || match scryer_extract::test_status::derived_status(r) {
+        Ok((tree, status)) => (crate::derived::planned_tests(&tree), crate::derived::proven_claims(&status)),
+        Err(_) => (Vec::new(), Vec::new()),
     });
 }
 

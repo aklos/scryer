@@ -46,7 +46,8 @@ pub(crate) struct SearchModelRequest {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct OrientRequest {
     pub project: Option<String>,
-    /// The task in a few words; give this, `files`, or both.
+    /// The task in 3-5 words, which names your session where the developer
+    /// follows it; give this, `files`, or both.
     pub task: Option<String>,
     /// Project-relative files the task touches.
     pub files: Option<Vec<String>>,

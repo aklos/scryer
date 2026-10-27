@@ -165,8 +165,7 @@ mod tests {
 
         let r = scryer_core::ModelRef::ProjectLocal(dir.path().to_path_buf());
         let loaded = derived::load(&r).unwrap();
-        let peers = crate::tools::read::Peers::besides(&r, &loaded.tree, None);
-        let entry = file_report(&loaded, &peers, "crates/notes/src/draft.rs", None);
+        let entry = file_report(&loaded, "crates/notes/src/draft.rs", None);
         assert!(entry["comments"][0].as_str().unwrap().starts_with(&id), "{entry}");
 
         let replied = json_of(&say(&server, &dir, Some(&id), None, "Looking into it", None));
@@ -174,7 +173,7 @@ mod tests {
         let done = json_of(&say(&server, &dir, Some(&id), None, "save now returns the error; see draft.rs", Some(true)));
         assert_eq!(done["status"], "addressed");
         let loaded = derived::load(&r).unwrap();
-        assert!(file_report(&loaded, &peers, "crates/notes/src/draft.rs", None).get("comments").is_none());
+        assert!(file_report(&loaded, "crates/notes/src/draft.rs", None).get("comments").is_none());
     }
 
     /// If `addressed` comes without a thread to reply to, then refuses it.

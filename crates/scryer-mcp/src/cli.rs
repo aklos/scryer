@@ -468,9 +468,11 @@ pub(crate) fn status_line(t: &DerivedCounts) -> String {
     line
 }
 
-/// The statusline for one agent session: the claims its edits reached, by
-/// status. Stale is left out: what a session edits reads stale until its
-/// tests run again, which is the work under way, not news.
+/// The statusline for one agent session: what it changed, by status — the
+/// claims it newly proved, the ones failing in its runs or that it broke,
+/// and the todo tests it wrote that still don't pass. Stale is left out:
+/// what a session edits reads stale until its tests run again, which is the
+/// work under way, not news. Todo tests already there are not its own.
 /// "scryer: 4 proven · 0 failing · 2 todo".
 pub(crate) fn session_line(s: Option<&scryer_core::derived_tree::LandingSession>) -> String {
     let Some(s) = s else { return "scryer: nothing yet this session".to_string() };
@@ -479,7 +481,7 @@ pub(crate) fn session_line(s: Option<&scryer_core::derived_tree::LandingSession>
         "scryer: {} proven · {} failing · {} todo",
         s.newly_proven.len(),
         failing,
-        s.newly_planned.len() + s.still_planned.len()
+        s.newly_planned.len()
     );
     if s.surviving_mutants > 0 {
         line.push_str(&format!(
@@ -543,7 +545,7 @@ mod tests {
         assert_eq!(status_line(&s.totals), "scryer: 0 proven · 3 stale · 0 failing · 1 todo");
     }
 
-    /// When the statusline is given a session, counts only the claims that session's edits reached, and leaves stale ones out.
+    /// When the statusline is given a session, counts only what that session changed: a todo test already in the code its edits reach is not its own, and stale claims are left out.
     #[test]
     fn the_statusline_counts_only_this_sessions_claims() {
         let dir = project();
@@ -555,7 +557,7 @@ mod tests {
             let l = scryer_core::derived_tree::landing(&[(id.to_string(), entries)], &tree, &status, 0);
             session_line(l.sessions.first())
         };
-        assert_eq!(line("s1"), "scryer: 0 proven · 0 failing · 1 todo");
+        assert_eq!(line("s1"), "scryer: 0 proven · 0 failing · 0 todo");
         assert_eq!(line("s2"), "scryer: nothing yet this session");
         let payload = serde_json::json!({ "session_id": "s1", "cwd": "/c" }).to_string();
         assert_eq!(statusline_session(&payload).as_deref(), Some("s1"));
