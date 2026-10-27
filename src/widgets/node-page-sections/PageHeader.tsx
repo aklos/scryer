@@ -94,14 +94,14 @@ export function PageHeader({
     // The header spans the pane (its rule and surface are chrome), but its
     // content shares the page's bounded column (PAGE_COL) so title, gauges,
     // article and rail all hang on the same grid at any window width.
-    <header className="shrink-0 border-b border-[var(--border)] pt-[13px]">
+    <header className="shrink-0 border-b border-[var(--border)] pb-3 pt-3">
       <div className={PAGE_COL}>
-      <div className="flex min-h-[15px] items-center gap-1 font-mono text-xs text-[var(--text-tertiary)]">
+      <div className="flex min-h-[15px] items-center gap-1 text-xs text-[var(--text-tertiary)]">
         {crumbs}
         <span className="flex-1" />
         {actions}
       </div>
-      <div className="mt-[5px] flex items-start gap-4">
+      <div className="mt-1.5 flex items-start gap-4">
         {editingName ? (
           // The title edits in place as a contentEditable span (same metrics as
           // the h1, no reflow). It edits a DRAFT — like every section, nothing
@@ -142,7 +142,7 @@ export function PageHeader({
           </div>
         )}
       </div>
-      <div className="mt-[3px] flex items-center gap-2 text-xs text-[var(--text-tertiary)]">
+      <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-[var(--text-tertiary)]">
         {typeLine}
       </div>
       </div>

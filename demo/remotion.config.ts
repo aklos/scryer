@@ -34,8 +34,25 @@ const stub = (file: string) => demo("stub", file);
 const derived = demo("fixture.json");
 const base = fs.existsSync(derived) ? derived : demo("fixture.ts");
 
+/**
+ * Tailwind's webpack loader registers its scan base as a context dependency,
+ * and webpack then snapshots that whole tree. Left at the default (the repo
+ * root) that includes target/, tens of gigabytes, and bundling alone ran the
+ * machine out of memory. The app's classes all live under src/.
+ */
+function tailwindFromSrc<T extends { module?: { rules?: unknown[] } }>(config: T): T {
+  const base = path.join(process.cwd(), "src");
+  for (const rule of (config.module?.rules ?? []) as { use?: unknown }[]) {
+    if (!rule || typeof rule !== "object" || !Array.isArray(rule.use)) continue;
+    rule.use = rule.use.map((use: unknown) =>
+      typeof use === "string" && use.includes("@tailwindcss") && use.includes("webpack") ? { loader: use, options: { base } } : use,
+    );
+  }
+  return config;
+}
+
 Config.overrideWebpackConfig((config) =>
-  enableTailwind({
+  tailwindFromSrc(enableTailwind({
     ...config,
     resolve: {
       ...config.resolve,
@@ -48,5 +65,5 @@ Config.overrideWebpackConfig((config) =>
         "@tauri-apps/plugin-dialog": stub("dialog.ts"),
       },
     },
-  }),
+  })),
 );

@@ -31,12 +31,12 @@ describe("code-tier symbol", () => {
     expect(code).toContain('aria-label="useModelHealth, code"');
   });
 
-  it("Draws a symbol with claims in full tone, one with none in a ghost tone, and one with a failing or todo claim in that state's hue, unless it lives elsewhere", () => {
+  it("Draws a symbol with claims in full tone, one with none in a ghost tone, and one with a failing claim in red unless it lives elsewhere; a todo claim adds no hue", () => {
     expect(draw(sym({}))).toContain("text-[var(--text-secondary)] ");
     expect(draw(sym({ hasClaims: false }))).toMatch(/justify-center rounded-md text-\[var\(--text-ghost\)\]/);
     expect(draw(sym({}), "failing")).toContain(CLAIM_TONE.failing);
-    expect(draw(sym({ hasClaims: false }), "planned")).toContain(CLAIM_TONE.planned);
+    expect(draw(sym({}), "planned")).not.toContain(CLAIM_TONE.planned);
     // A symbol from elsewhere tells its state on its own level.
-    expect(draw(sym({ reference: true }), "planned")).not.toContain(CLAIM_TONE.planned);
+    expect(draw(sym({ reference: true }), "failing")).not.toContain(CLAIM_TONE.failing);
   });
 });

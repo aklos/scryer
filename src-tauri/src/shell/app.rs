@@ -78,6 +78,8 @@ pub fn run() {
             preview::cancel_agent_session,
             derived::get_derived_status,
             derived::get_landing,
+            derived::get_worktrees,
+            derived::list_worktrees,
             derived::edit_claim_text,
             derived::add_claim_stub,
             derived::rename_container,

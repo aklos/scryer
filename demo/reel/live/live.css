@@ -1,0 +1,19 @@
+/*
+ * The mounted app fills its window in the reel rather than the viewport:
+ * its shell is sized to the screen (`h-screen w-screen`), which in a
+ * composition is the whole frame.
+ */
+
+[data-live] {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+[data-live] .h-screen {
+  height: 100% !important;
+}
+
+[data-live] .w-screen {
+  width: 100% !important;
+}

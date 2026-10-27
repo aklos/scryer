@@ -183,12 +183,12 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
             className="flex w-full flex-col items-center transition-opacity duration-500"
             style={{ opacity: data.pending ? 0 : 1 }}
           >
-            <div className="line-clamp-2 w-full break-words text-center text-sm font-semibold leading-tight">
+            <div className="line-clamp-2 w-full break-words text-center text-sm font-semibold leading-tight text-[var(--map-title)]">
               {node.name || "Untitled"}
             </div>
             {node.description && (
               <div
-                className="line-clamp-4 mt-2 w-full break-words text-center text-[10px] leading-snug text-[var(--text-muted)]"
+                className="line-clamp-4 mt-2 w-full break-words text-center text-[10px] leading-snug text-[var(--map-desc)]"
               >
                 {node.description}
               </div>
@@ -199,8 +199,9 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
     );
   }
 
-  // The outline carries the state needing attention: red for a failing
-  // claim inside, blue for a todo test; the foot says the rest.
+  // The outline is red only when a claim inside is failing: something is
+  // broken. Todo is work, not a fault, and the foot counts it like the rest,
+  // so a card with todos never reads louder than a proven one.
   const attention = data.attention;
   const kindWord = KIND_WORD[node.kind];
   const typeLine = [isExternal ? "External system" : kindWord, node.technology].filter(Boolean).join(" · ");
@@ -222,11 +223,9 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
               ? "stroke-[var(--text)]"
               : attention === "failing"
                 ? "stroke-red-500/80 dark:stroke-red-400/70"
-                : attention === "planned"
-                  ? "stroke-sky-500/80 dark:stroke-sky-400/70"
-                  : "stroke-[var(--map-card-stroke)]"
+                : "stroke-[var(--map-card-stroke)]"
           }
-          strokeWidth={selected ? 2.5 : attention ? 2 : 1.25}
+          strokeWidth={selected ? 2.5 : attention === "failing" ? 2 : 1.25}
           strokeDasharray={isExternal ? "6 3" : undefined}
           kind={node.kind}
           external={!!isExternal}
@@ -297,7 +296,7 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
                 {node.layer}
               </div>
             )}
-            <div className="line-clamp-2 w-full break-words text-center text-sm font-semibold leading-tight">
+            <div className="line-clamp-2 w-full break-words text-center text-sm font-semibold leading-tight text-[var(--map-title)]">
               {node.name || "Untitled"}
             </div>
             {typeLine && (
@@ -309,7 +308,7 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
             )}
             {node.description && (
               <div
-                className="line-clamp-4 mt-2 w-full break-words text-center text-[10px] leading-snug text-[var(--text-muted)]"
+                className="line-clamp-4 mt-2 w-full break-words text-center text-[10px] leading-snug text-[var(--map-desc)]"
               >
                 {node.description}
               </div>

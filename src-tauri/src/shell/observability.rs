@@ -42,7 +42,11 @@ fn model_health(project: &std::path::Path) -> Result<ModelHealthReport, String> 
     let all_files = scryer_extract::list_project_files(project);
     let derived = scryer_core::build_edges::derive_graph(&tree.committed, &edges);
     let styles = scryer_core::load_styles(project);
-    let structural = scryer_core::style_health::check_code(&tree.committed, &styles, &derived, &edges, Some(&all_files));
+    // The same asks the derived tree makes: no layer for files outside a
+    // container's source root (examples, benches, build scripts).
+    let exempt: std::collections::HashSet<&str> = tree.layer_exempt.iter().map(String::as_str).collect();
+    let structural = scryer_core::style_health::check_code(&tree.committed, &styles, &derived, &edges, Some(&all_files))
+        .exempting(&exempt);
     let mut health = scryer_core::health::compute_health(&tree.committed, Some(&tree.planned), Some(&all_files));
     // Darkness is test reach: the files no test reaches by import.
     for (id, node) in health.nodes.iter_mut() {

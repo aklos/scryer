@@ -4,4 +4,5 @@ import type { ModelTree } from "../src/widgets/model-tree/ModelTree";
 
 describe("ModelTree", () => {
   it.todo("When the user types in the tree's filter, shows only rows whose name matches and their ancestors, with every surviving branch open");
+  it.todo("Shows beside a collapsed row the number of todo claims in its subtree, and beside an open row only its own");
 });

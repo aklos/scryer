@@ -68,13 +68,11 @@ const SYMBOL_CLASS_LABEL: Record<DiagramNode["symbolClass"], string> = {
  *  same everywhere — sized by fan-in, with its name beneath. The glyph's
  *  tone says what is known about it: full for a symbol with claims, ghost
  *  for one with none (a big ghost glyph is a hub nobody has described, the
- *  find worth making), the state's hue when a claim on it fails or is a
- *  todo. */
+ *  find worth making), red when a claim on it fails. A todo is work, not
+ *  a fault, so it stays in the plain tone like a proven claim. */
 export function DotNode({ data }: NodeProps<RFDot>) {
   const { node, selected, attention } = data;
-  const meta = attention
-    ? { color: CLAIM_TONE[attention], label: attention === "failing" ? "a claim here is failing" : "a claim here is a todo test" }
-    : null;
+  const meta = attention === "failing" ? { color: CLAIM_TONE.failing, label: "a claim here is failing" } : null;
   const ghost = node.reference;
   // Size encodes fan-in — the more depended-upon a symbol, the larger it
   // reads. Sized relative to the busiest hub on this level (see diagramLayout).

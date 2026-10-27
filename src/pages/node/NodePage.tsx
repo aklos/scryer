@@ -49,10 +49,10 @@ import {
   sanitizeIdentifier,
 } from "../../shared/ui/pagekit";
 import type { PageProps } from "../../widgets/node-page-sections/types";
-import { TYPE_CHIP, useEditSections } from "../../widgets/node-page-sections/kit";
+import { useEditSections } from "../../widgets/node-page-sections/kit";
 import { CommentsRail } from "../../widgets/comments-rail/CommentsRail";
 import { useComments } from "../../features/comments/useComments";
-import { CLAIM_LABEL, CLAIM_STATES, CLAIM_TONE, describeCounts } from "../../entities/model/claimState";
+import { CLAIM_STATES, CLAIM_TONE } from "../../entities/model/claimState";
 import {
   ancestorChain,
   Crumbs,
@@ -68,6 +68,8 @@ import { PreviewSection } from "../../widgets/node-page-sections/PreviewSection"
 import { ExercisedBySection } from "../../widgets/node-page-sections/ExercisedBySection";
 import { previewEntryFor } from "../../features/preview-client/usePreviewServer";
 import { allowedImports, governingStyleDef, layerOf } from "../../entities/model/styles";
+import { Term } from "../../entities/model/Term";
+import { CLAIM_TERM } from "../../entities/model/glossary";
 
 export function NodePage(props: PageProps) {
   const { model, selected } = props;
@@ -316,7 +318,13 @@ function NodePageBody(props: PageProps & { node: Node }) {
         typeLine={
           <>
             <KindIcon className="h-3.5 w-3.5" />
-            <span>{dataShape ? "Data type" : tag.type}</span>
+            {dataShape ? (
+              <Term id="dataShape">Data type</Term>
+            ) : tag.term ? (
+              <Term id={tag.term}>{tag.type}</Term>
+            ) : (
+              <span>{tag.type}</span>
+            )}
             {/* Technology — editable in place when the header is in edit mode,
                 accumulating in the title draft (committed by Done); otherwise
                 shown only when set. */}
@@ -330,31 +338,24 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 style; a component its layer, with the one line the reader
                 needs about it — what it may import. Symbols inherit. */}
             {node.style && (
-              <span
-                className={TYPE_CHIP}
-                title={styleDef ? `${styleDef.name}: ${styleDef.description}` : `style: ${node.style}`}
-              >
-                <span className="text-[var(--text-muted)]">style</span>
-                {node.style}
-              </span>
+              <>
+                <span className="text-[var(--text-ghost)]">·</span>
+                <span>
+                  <span className="text-[var(--text-secondary)]">{node.style}</span>{" "}
+                  <Term id="style" detail={styleDef ? `${styleDef.name}: ${styleDef.description}` : undefined} />
+                </span>
+              </>
             )}
             {layer && (
               <>
-                <span
-                  className={TYPE_CHIP}
-                  title={
-                    styleDef?.layers.find((l) => l.name === layer)?.description ??
-                    `layer: ${layer}`
-                  }
-                >
-                  <span className="text-[var(--text-muted)]">layer</span>
-                  {layer}
+                <span className="text-[var(--text-ghost)]">·</span>
+                <span>
+                  <span className="text-[var(--text-secondary)]">{layer}</span>{" "}
+                  <Term id="layer" detail={styleDef?.layers.find((l) => l.name === layer)?.description} />
+                  {styleDef && node.kind === "component" && (
+                    <>, may import {allowedImports(styleDef, layer).join(", ") || "nothing"}</>
+                  )}
                 </span>
-                {styleDef && node.kind === "component" && (
-                  <span className="text-[var(--text-tertiary)]">
-                    may import {allowedImports(styleDef, layer).join(", ") || "nothing"}
-                  </span>
-                )}
               </>
             )}
             {defFile && (
@@ -383,15 +384,17 @@ function NodePageBody(props: PageProps & { node: Node }) {
               const c = report?.derivedStatus?.nodes[node.id]?.subtree;
               if (!c || c.claims === 0) return null;
               return (
-                <span className={TYPE_CHIP} title={`Claims in this subtree: ${describeCounts(c)}`}>
-                  <span className="text-[var(--text-muted)]">
-                    {c.claims} claim{c.claims === 1 ? "" : "s"}:
+                <span className="flex items-baseline gap-1.5 tabular-nums">
+                  <span className="text-[var(--text-ghost)]">·</span>
+                  <span>
+                    {c.claims} <Term id="claim">claim{c.claims === 1 ? "" : "s"}</Term>
                   </span>
-                  {CLAIM_STATES.filter((k) => c[k] > 0).map((k, i) => (
-                    <span key={k} className="flex items-center gap-1">
-                      {i > 0 && <span className="text-[var(--text-ghost)]">·</span>}
-                      <span className={CLAIM_TONE[k]}>
-                        {c[k]} {CLAIM_LABEL[k]}
+                  {CLAIM_STATES.filter((k) => c[k] > 0).map((k) => (
+                    <span key={k} className="flex items-baseline gap-1.5">
+                      <span className="text-[var(--text-ghost)]">·</span>
+                      <span>
+                        <span className={`font-medium ${CLAIM_TONE[k]}`}>{c[k]}</span>{" "}
+                        <Term id={CLAIM_TERM[k]} className="text-[var(--text-tertiary)]" />
                       </span>
                     </span>
                   ))}

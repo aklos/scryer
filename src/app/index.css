@@ -103,6 +103,9 @@
   --map-card-stroke: color-mix(in srgb, var(--text-muted) 75%, var(--surface-raised));
   --map-edge: var(--text-tertiary);
   --map-boundary: var(--text-muted);
+  /* A card's name and description: the page's own ink in light mode. */
+  --map-title: var(--text);
+  --map-desc: var(--text-muted);
 }
 
 .dark {
@@ -134,9 +137,15 @@
   --border-overlay: #20262fcc;
   --accent: var(--color-blue-400);
   --accent-strong: var(--color-blue-300);
-  --map-card-stroke: color-mix(in srgb, var(--text-muted) 60%, var(--surface-raised));
+  /* The page's dark text runs dim against halation, which on the map left
+     outline, name and description in one band of mid-grey. The map's few
+     large words can carry more: names near white, descriptions and outlines
+     a step up, so a card reads as a crisp object on the canvas. */
+  --map-card-stroke: color-mix(in srgb, var(--text-tertiary) 80%, var(--surface-raised));
   --map-edge: var(--text-tertiary);
   --map-boundary: var(--text-muted);
+  --map-title: color-mix(in srgb, var(--text) 50%, #ffffff);
+  --map-desc: var(--text-tertiary);
 }
 
 /* Text selection carries the accent — the one hue that means "where you are". */

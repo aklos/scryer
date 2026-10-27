@@ -163,7 +163,8 @@ export interface Node {
    *  reparent — coordinates don't survive a surface change. Mirrors Rust
    *  `Node.position`. */
   position?: { x: number; y: number };
-  /** A container declared dev tooling in structure.toml (`tooling = true`):
+  /** A container declared dev tooling in structure.toml (`tooling = true`),
+   *  or a component outside its container's source root (examples, benches):
    *  part of the codebase, not of the product, and held to no style. Mirrors
    *  Rust `Node.tooling`. */
   tooling?: boolean;

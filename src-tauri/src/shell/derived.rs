@@ -26,6 +26,32 @@ pub(crate) async fn get_landing(cwd: String, since: u64) -> Result<scryer_core::
     .map_err(|e| format!("landing task failed: {e}"))?
 }
 
+/// Each of the project's git worktrees against its base branch: the claims
+/// its changes reach, readiness to merge, and where worktrees overlap.
+#[tauri::command]
+pub(crate) async fn get_worktrees(cwd: String) -> Result<scryer_core::worktree::Worktrees, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        scryer_extract::worktrees::worktrees_overview(std::path::Path::new(&cwd))
+    })
+    .await
+    .map_err(|e| format!("worktrees task failed: {e}"))?
+}
+
+/// The project's live git worktrees, its main checkout first: path, branch,
+/// and whether it is the one open. Cheap: no checkout is derived.
+#[tauri::command]
+pub(crate) fn list_worktrees(cwd: String) -> Vec<serde_json::Value> {
+    let canon = |p: &std::path::Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let here = canon(std::path::Path::new(&cwd));
+    scryer_core::worktree::list_worktrees(std::path::Path::new(&cwd))
+        .into_iter()
+        .map(|w| {
+            let path = canon(&w.path);
+            serde_json::json!({ "path": path.display().to_string(), "branch": w.branch, "current": path == here })
+        })
+        .collect()
+}
+
 /// Reword a claim: edits its test's description in the file. Returns the file.
 #[tauri::command]
 pub(crate) fn edit_claim_text(cwd: String, resp_id: String, text: String) -> Result<String, String> {

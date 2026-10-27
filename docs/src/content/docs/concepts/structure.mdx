@@ -40,4 +40,12 @@ tooling = true
 
 A style is a structural claim: which layers a container has and which may import which. The import graph is checked against it deterministically, and a violation is a red finding like a failing test. It is fixed by moving the code, or, when the declared style was a guess, by declaring the shape the code actually has; never by loosening a rule to let one violation through. A container's files outside its source root (build scripts, tool configs, examples) are asked for no layer.
 
+A component's layer is read from its code. A module whose doc ends with a tag naming one of its style's layers sits on that layer, wherever its file lives:
+
+```rust
+//! Which agent harness to run, and how to spawn it. [domain]
+```
+
+Without a tag, a directory named after a layer (`domain/`, `features/`) is that layer, and the modules inside it take its layer unless their own doc declares another. So the code can be organised by what it does, with each module saying its layer, or by layer folders, as the style's convention suggests.
+
 Renaming a container in the app writes its display name here.

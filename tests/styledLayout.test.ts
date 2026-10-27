@@ -108,6 +108,58 @@ describe("styledLayout", () => {
     expect(withSide.centers.get("caller")!.x).toBeLessThan(withSide.centers.get("p")!.x - CARD_W);
   });
 
+  it("When the hexagon's application layer has no cards, draws its ring as a thin band around the domain rather than room for cards", () => {
+    const hexR = (laid: ReturnType<typeof styledLayout>, layer: string) => {
+      const h = laid.regions.find((r) => r.layer === layer)!;
+      return h.shape === "hex" ? h.r : 0;
+    };
+    const empty = styledLayout(style("library"), [{ id: "d", layer: "domain" }], [], []);
+    const full = styledLayout(style("library"), [{ id: "d", layer: "domain" }, { id: "a", layer: "application" }], [], []);
+    expect(hexR(empty, "application") - hexR(empty, "domain")).toBeLessThan(CARD_H / 2);
+    expect(hexR(full, "application") - hexR(full, "domain")).toBeGreaterThan(CARD_H);
+  });
+
+  it("hexagon: turns the application ring so its cards stay off the straight paths between the domain and the cards outside the hexagon", () => {
+    const laid = styledLayout(
+      style("library"),
+      [
+        { id: "w", layer: "composition" },
+        { id: "d1", layer: "domain" },
+        { id: "d2", layer: "domain" },
+        { id: "a", layer: "application" },
+      ],
+      [],
+      [
+        { source: "w", target: "d1" },
+        { source: "w", target: "d2" },
+        { source: "w", target: "a" },
+      ],
+    );
+    const at = (id: string) => laid.centers.get(id)!;
+    const a = at("a");
+    // Sample each path and check no point lands on the application card.
+    for (const d of ["d1", "d2"]) {
+      const [p, q] = [at("w"), at(d)];
+      for (let t = 0; t <= 1; t += 0.01) {
+        const x = p.x + (q.x - p.x) * t, y = p.y + (q.y - p.y) * t;
+        expect(Math.abs(x - a.x) < CARD_W / 2 && Math.abs(y - a.y) < CARD_H / 2, `${d} at t=${t}`).toBe(false);
+      }
+    }
+  });
+
+  it("When the hexagon's composition band is wider than the hexagon, stands the outside cards clear of it", () => {
+    const wiring = ["w1", "w2", "w3", "w4", "w5"];
+    const laid = styledLayout(
+      style("library"),
+      [...wiring.map((id) => ({ id, layer: "composition" })), { id: "d", layer: "domain" }],
+      ["caller"],
+      [{ source: "caller", target: "w1" }, ...wiring.map((w) => ({ source: w, target: "d" }))],
+    );
+    const at = (id: string) => laid.centers.get(id)!;
+    const left = Math.min(...wiring.map((w) => at(w).x));
+    expect(at("caller").x + CARD_W / 2).toBeLessThan(left - CARD_W / 2);
+  });
+
   it("hexagon: domain centre, application ring, presentation left, infrastructure right", () => {
     const laid = styledLayout(
       style("hexagonal"),
@@ -401,5 +453,26 @@ describe("styled scene", () => {
     expect(scene.nodes.find((n) => n.id === inbound.source)?.reference).toBe(true);
     expect(inbound.implied).toBe(false);
     expect(scene.edges.find((e) => e.source === "a" && e.target === "e")?.implied).toBe(true);
+  });
+
+  it("When a component is tooling, draws it in a tooling strip under the drawing, apart from the layers, its links quiet", async () => {
+    const model = {
+      version: 1,
+      nodes: [
+        { id: "sys", kind: "system", name: "Sys" },
+        { id: "lib", kind: "container", name: "Lib", parentId: "sys", style: "library" },
+        { id: "d", kind: "component", name: "rules", parentId: "lib", layer: "domain" },
+        { id: "i", kind: "component", name: "store", parentId: "lib", layer: "infrastructure" },
+        { id: "x", kind: "component", name: "examples", parentId: "lib", tooling: true },
+      ],
+      links: [{ id: "l1", src: "x", dst: "d", label: "", kind: "depends" }],
+      groups: [],
+    } as unknown as ScryModel;
+    const scene = await buildDiagramScene(model, "lib", null);
+    const at = (id: string) => scene.nodes.find((n) => n.id === id)!;
+    expect(at("x").y).toBeGreaterThan(Math.max(at("d").y, at("i").y) + CARD_H);
+    expect(scene.styled?.regions.map((r) => r.layer)).toContain("tooling");
+    expect(scene.styled?.regions.map((r) => r.layer)).not.toContain("unlayered");
+    expect(scene.edges.find((e) => e.source === "x")?.implied).toBe(true);
   });
 });

@@ -16,7 +16,7 @@ import { AgentMark } from "../../shared/ui/pagekit";
 import type { AgentSession } from "../../features/agent-launch/useAgentSession";
 import { darkBoundaries, type ModelHealthReport } from "../../entities/model/health";
 import { AGENT_LABEL, type ResolvedLaunch } from "../../features/agent-launch/launchSettings";
-import { CLAIM_LABEL } from "../../entities/model/claimState";
+import { Term } from "../../entities/model/Term";
 import type { ScryModel } from "../../entities/model/viewmodel";
 import type { SpecialPage } from "../../entities/model/navigation";
 
@@ -77,15 +77,14 @@ export function Powerline({ model, agent, health, launch, onOpenSpecial, onOpenS
         onClick={() => onOpenSpecial("session")}
         className="seg"
         style={sb("color-mix(in srgb, var(--text) 4%, var(--surface-canvas))")}
-        title="Claims by derived status — proven, unverified, failing, todo. Click for what changed since you last looked."
       >
         {counts ? (
           <>
             <span className="pl-strong font-medium">{counts.proven}</span>
-            <span className="text-[var(--text-secondary)]">proven</span>
+            <Term id="proven" above className="text-[var(--text-secondary)]" />
             <span className="text-[var(--text-tertiary)]">
-              · {counts.stale} {CLAIM_LABEL.stale} · {counts.failing} {CLAIM_LABEL.failing} · {counts.planned}{" "}
-              {CLAIM_LABEL.planned}
+              · {counts.stale} <Term id="unverified" above /> · {counts.failing} <Term id="failing" above /> ·{" "}
+              {counts.planned} <Term id="todo" above />
             </span>
           </>
         ) : (
@@ -100,24 +99,25 @@ export function Powerline({ model, agent, health, launch, onOpenSpecial, onOpenS
         onClick={() => onOpenSpecial("dark")}
         className="seg"
         style={sb("color-mix(in srgb, var(--text) 4%, var(--surface-canvas))")}
-        title="Dark code — product files no test reaches by import. Click to list them."
       >
         {health == null ? (
           <span className="text-[var(--text-secondary)]">dark code —</span>
         ) : dark > 0 ? (
           <>
             <span className="pl-strong font-medium">{dark}</span>
-            <span className="text-[var(--text-secondary)]">dark file{dark === 1 ? "" : "s"}</span>
+            <Term id="dark" above className="text-[var(--text-secondary)]">
+              dark file{dark === 1 ? "" : "s"}
+            </Term>
           </>
         ) : (
           <span className="text-[var(--text-secondary)]">no dark code</span>
         )}
       </button>
 
-      {/* Model size + schema. */}
+      {/* Model size. */}
       <div className="seg" style={sb("color-mix(in srgb, var(--text) 2.5%, var(--surface-canvas))")}>
         <span className="text-[var(--text-tertiary)]">
-          {model.nodes.length} node{model.nodes.length === 1 ? "" : "s"} · {model.version}
+          {model.nodes.length} node{model.nodes.length === 1 ? "" : "s"}
         </span>
       </div>
 

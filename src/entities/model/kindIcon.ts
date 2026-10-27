@@ -12,6 +12,7 @@ import type { LucideProps } from "lucide-react";
 import { Box, Boxes, Cloud, Code, Component, Database, Eye, Layers, User } from "lucide-react";
 import type { Node } from "./viewmodel";
 import { isDataShape } from "./viewmodel";
+import type { TermId } from "./glossary";
 
 /** The minimal node shape these helpers read. */
 type IconNode = Pick<Node, "kind" | "external" | "technology" | "properties" | "responsibilities">;
@@ -45,6 +46,8 @@ export function kindIcon(node: IconNode, previewable = false): ComponentType<Luc
 export interface TypeTag {
   /** The C4 type word(s): "Person", "External System", "Container", … */
   type: string;
+  /** The glossary entry that defines it. */
+  term?: TermId;
   /** The technology, when the node carries one and it's meaningful to show. */
   tech?: string;
 }
@@ -58,13 +61,13 @@ export function typeTag(node: IconNode): TypeTag {
       ? node.technology
       : undefined;
 
-  if (node.kind === "person") return { type: "Person" };
-  if (node.external) return { type: "External System", tech };
+  if (node.kind === "person") return { type: "Person", term: "person" };
+  if (node.external) return { type: "External System", term: "external", tech };
   switch (node.kind) {
-    case "system": return { type: "Software System", tech };
-    case "container": return { type: "Container", tech };
-    case "component": return { type: "Component", tech };
-    case "symbol": return { type: isDataShape(node) ? "Data shape" : "Code" };
+    case "system": return { type: "Software System", term: "system", tech };
+    case "container": return { type: "Container", term: "container", tech };
+    case "component": return { type: "Component", term: "component", tech };
+    case "symbol": return isDataShape(node) ? { type: "Data shape", term: "dataShape" } : { type: "Code", term: "code" };
     default: return { type: "Node", tech };
   }
 }

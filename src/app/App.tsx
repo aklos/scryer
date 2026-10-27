@@ -21,7 +21,6 @@ import { NodePage } from "../pages/node/NodePage";
 import type { Selected, SpecialPage } from "../entities/model/navigation";
 import { DarkCodePage, LandingPage } from "../pages";
 import { makeDerivedEditor } from "../features/derived-tree/derivedEditor";
-import { takeLastOpened } from "../features/derived-tree/lastOpened";
 import { ProjectPicker } from "../pages/project-picker/ProjectPicker";
 import { SearchPalette } from "../features/search/SearchPalette";
 import { Powerline } from "../widgets/top-bar/Powerline";
@@ -99,15 +98,6 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
   const { committed, planDiff, projectPath, reloadFromDisk, externalGeneration, openProject, closeProject } = storage;
   const agent = useAgentSession();
   const { toast } = useToast();
-  // When this project was last opened before now: the landing page's window.
-  // Taken once per project (StrictMode re-runs effects).
-  const [since, setSince] = useState(0);
-  const sinceFor = useRef<string | null>(null);
-  useEffect(() => {
-    if (!projectPath || sinceFor.current === projectPath) return;
-    sinceFor.current = projectPath;
-    setSince(takeLastOpened(projectPath));
-  }, [projectPath]);
   // One preview sidecar per open project; node pages derive their Preview
   // section from the exports it reports.
   const preview = usePreviewServer(projectPath);
@@ -388,6 +378,7 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
         view={view}
         onSetView={showView}
         onOpenProject={(p) => void openProject(p)}
+        onOpenWorktree={(p) => void openProject(p, { remember: false })}
         onCloseProject={closeProject}
         onOpenSearch={() => setSearchOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
@@ -410,7 +401,6 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
           // The map's current level — tinted in the tree so it mirrors what
           // the diagram is showing. Only while in map view.
           activeLevel={view === "diagram" ? diagramFocus : undefined}
-          completeness={healthReport?.completeness}
           concernLens={concernLens}
           onSetConcernLens={setConcernLens}
           testTally={testTally}
@@ -432,7 +422,12 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
           selected.id === "dark" ? (
             <DarkCodePage model={model} report={healthReport} onSelectNode={selectNode} />
           ) : (
-            <LandingPage projectPath={projectPath} since={since} model={model} status={healthReport?.derivedStatus ?? null} onSelectNode={selectNode} />
+            <LandingPage
+              projectPath={projectPath}
+              model={model}
+              onSelectNode={selectNode}
+              onOpenWorktree={(p) => void openProject(p, { remember: false })}
+            />
           )
         ) : selected ? (
           <NodePage

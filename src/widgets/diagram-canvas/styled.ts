@@ -260,6 +260,60 @@ function ringPlace(
   return r;
 }
 
+/** Turn a placed ring about the origin, by less than one card's step, to
+ *  the angle where the fewest `paths` run through its cards; ties keep the
+ *  turn smallest. */
+function turnClear(
+  ids: string[],
+  centers: Map<string, { x: number; y: number }>,
+  /** The paths, read off `centers` as they stand for the turn tried. */
+  paths: () => [{ x: number; y: number }, { x: number; y: number }][],
+) {
+  if (ids.length === 0) return;
+  const at = ids.map((id) => centers.get(id)!);
+  const step = (2 * Math.PI) / ids.length;
+  const tries = 24;
+  const turned = (d: number) =>
+    at.map((p) => ({ x: p.x * Math.cos(d) - p.y * Math.sin(d), y: p.x * Math.sin(d) + p.y * Math.cos(d) }));
+  const hits = (ps: { x: number; y: number }[]) => {
+    ps.forEach((p, i) => centers.set(ids[i], p));
+    return paths().reduce((n, [a, b]) => n + ps.filter((c) => crossesCard(a, b, c)).length, 0);
+  };
+  let best = { d: 0, hits: hits(at), off: 0 };
+  for (let k = 1; k < tries; k++) {
+    const d = (k * step) / tries;
+    const h = hits(turned(d));
+    const off = Math.min(d, step - d);
+    if (h < best.hits || (h === best.hits && off < best.off)) best = { d, hits: h, off };
+  }
+  turned(best.d).forEach((p, i) => centers.set(ids[i], p));
+}
+
+/** Whether the segment a→b passes through a card centred at `c`, with a
+ *  little air around it (Liang–Barsky clip against the card's box). */
+function crossesCard(a: { x: number; y: number }, b: { x: number; y: number }, c: { x: number; y: number }): boolean {
+  const air = 12;
+  const [hw, hh] = [CARD_W / 2 + air, CARD_H / 2 + air];
+  const dx = b.x - a.x, dy = b.y - a.y;
+  let t0 = 0, t1 = 1;
+  for (const [p, q] of [
+    [-dx, a.x - (c.x - hw)],
+    [dx, c.x + hw - a.x],
+    [-dy, a.y - (c.y - hh)],
+    [dy, c.y + hh - a.y],
+  ]) {
+    if (p === 0) {
+      if (q < 0) return false;
+    } else {
+      const t = q / p;
+      if (p < 0) t0 = Math.max(t0, t);
+      else t1 = Math.min(t1, t);
+      if (t0 > t1) return false;
+    }
+  }
+  return true;
+}
+
 /** Order a ring's ids by the mean angle of the neighbours already placed, so
  *  a shell card sits over the core it calls. */
 function orderByAngle(ids: string[], edges: StyledEdge[], centers: Map<string, { x: number; y: number }>): string[] {
@@ -357,13 +411,22 @@ function ringsLayout(def: StyleDef, members: StyledMember[], ghosts: string[], e
 
 // ── hexagon ─────────────────────────────────────────────────────────────────
 
-/** The composition root's own symbols (a crate root's functions beside its
- *  modules) in one row under a styled drawing: a small strip of their own,
- *  so the style's shape stays the style's and nothing lands inside a layer
- *  it does not belong to. Returns their centres and the strip's region. */
-export function rootStrip(
+/** The container's dev tooling (examples, benches) in one row under a styled
+ *  drawing: part of the codebase, held to no layer, so apart from them. */
+export function toolingStrip(
   laid: StyledLayout,
   ids: string[],
+): { centers: Map<string, { x: number; y: number }>; region?: LayerRegion } {
+  return stripBelow(laid, ids, {
+    layer: "tooling",
+    caption: "Dev tooling: part of the codebase, not of the product, and held to no style. Its links are drawn faint.",
+  });
+}
+
+function stripBelow(
+  laid: StyledLayout,
+  ids: string[],
+  meta: { layer: string; caption: string },
 ): { centers: Map<string, { x: number; y: number }>; region?: LayerRegion } {
   const centers = new Map<string, { x: number; y: number }>();
   if (ids.length === 0) return { centers };
@@ -395,8 +458,7 @@ export function rootStrip(
     centers,
     region: {
       shape: "rect",
-      layer: "composition root",
-      caption: "the root module's own definitions, wiring the layers above",
+      ...meta,
       x: left - pad,
       y: top,
       w: width + 2 * pad,
@@ -449,14 +511,57 @@ function hexagonLayout(def: StyleDef, members: StyledMember[], ghosts: string[],
   const centers = new Map<string, { x: number; y: number }>();
   const regions: LayerRegion[] = [];
 
-  // Centre + ring.
+  const memberIds = new Set(members.map((m) => m.id));
+  const sides = ghostSides(ghosts, memberIds, edges);
+
+  // Centre + ring. An empty ring stays a thin band, so the hexagon still
+  // reads as one without a moat of nothing around the centre.
   const coreIds = ids(core);
   let r = packCenter(coreIds, centers) + PAD;
   regions.push({ layer: core, caption: describe(def, core), shape: "hex", cx: 0, cy: 0, r });
   const ringIds = orderByAngle(ids(ring), edges, centers);
-  const ringR = ringPlace(ringIds, r + PAD + CARD_H / 2 + 10, -Math.PI / 2, centers);
-  r = ringR + CARD_H / 2 + PAD;
+  if (ringIds.length) {
+    const ringR = ringPlace(ringIds, r + PAD + CARD_H / 2 + 10, -Math.PI / 2, centers);
+    r = ringR + CARD_H / 2 + PAD;
+    turnClear(ringIds, centers, outsidePaths);
+  } else {
+    r += PAD * 2;
+  }
   regions.push({ layer: ring, caption: describe(def, ring), shape: "hex", cx: 0, cy: 0, r });
+
+  /** The straight paths from each centre card to what it links to outside
+   *  the hexagon: composition where its band will seat it, over the mean x
+   *  of what it touches, and the rest far off on the side they will stand. */
+  function outsidePaths(): [{ x: number; y: number }, { x: number; y: number }][] {
+    const far = 1e4;
+    const layerOf = new Map(members.map((m) => [m.id, m.layer]));
+    const bandY = -r - PAD * 2 - LABEL_ROOM - CARD_H / 2;
+    const meanX = (id: string) => {
+      const xs = edges.flatMap((e) => {
+        const o = e.source === id ? e.target : e.target === id ? e.source : null;
+        const p = o ? centers.get(o) : undefined;
+        return p ? [p.x] : [];
+      });
+      return xs.length ? xs.reduce((t, x) => t + x, 0) / xs.length : 0;
+    };
+    const aim = (id: string): { x: number; y: number } | null => {
+      const l = layerOf.get(id);
+      if (l === wiring) return { x: meanX(id), y: bandY };
+      if (l === driving || sides.get(id) === "in") return { x: -far, y: 0 };
+      if (l === driven || sides.get(id) === "out") return { x: far, y: 0 };
+      if (memberIds.has(id) && l !== core && l !== ring) return { x: 0, y: far };
+      return null;
+    };
+    const paths: [{ x: number; y: number }, { x: number; y: number }][] = [];
+    for (const e of edges) {
+      for (const [inner, other] of [[e.source, e.target], [e.target, e.source]]) {
+        const p = coreIds.includes(inner) ? centers.get(inner) : undefined;
+        const q = p && aim(other);
+        if (p && q) paths.push([p, q]);
+      }
+    }
+    return paths;
+  }
 
   // Side columns, ordered to sit level with the ring cards they touch.
   const column = (colIds: string[], x: number, layer: string | null, ghost = false) => {
@@ -536,11 +641,13 @@ function hexagonLayout(def: StyleDef, members: StyledMember[], ghosts: string[],
   }
 
   // Ghosts: callers on the far left, dependencies on the far right.
-  const memberIds = new Set(members.map((m) => m.id));
-  const sides = ghostSides(ghosts, memberIds, edges);
   // A side with no cards of its own leaves its place to the outside column,
-  // rather than a gap between the hexagon and what talks to it.
-  const ghostX = (side: string) => (ids(side).length ? sideX + CARD_W + PAD * 2 : sideX);
+  // rather than a gap between the hexagon and what talks to it. Either way
+  // the column clears a composition band wider than the hexagon, since an
+  // outside card may be seated level with it.
+  const bandHalf = wiringIds.length ? ((wiringIds.length - 1) * PITCH_X) / 2 + CARD_W / 2 + PAD : 0;
+  const ghostX = (side: string) =>
+    Math.max(ids(side).length ? sideX + CARD_W + PAD * 2 : sideX, bandHalf + PAD * 2 + CARD_W / 2);
   const inG = ghosts.filter((g) => sides.get(g) === "in");
   const outG = ghosts.filter((g) => sides.get(g) === "out");
   column(inG, -ghostX(driving), inG.length ? "driven by" : null, true);

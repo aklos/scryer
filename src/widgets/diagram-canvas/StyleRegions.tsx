@@ -68,6 +68,7 @@ interface LabelSpot {
 
 function labelSpots(regions: LayerRegion[]): LabelSpot[] {
   let hexSeen = 0;
+  let innerR = 0;
   return regions.map((r) => {
     if (r.shape === "rect")
       return r.boundary
@@ -76,10 +77,16 @@ function labelSpots(regions: LayerRegion[]): LabelSpot[] {
     if (r.shape === "ring") return { x: r.cx, y: r.cy - r.r + 7, anchor: "middle", size: 10, boundary: false };
     // Hexagons: the ring cards sit on the top and bottom edges, so the
     // innermost label goes to its bottom edge (below the centre card) and
-    // outer labels to the left vertex, reading inward.
-    const inner = hexSeen++ === 0;
-    return inner
-      ? { x: r.cx, y: r.cy + r.r * 0.866 - 29, anchor: "middle", size: 10, boundary: false }
+    // outer labels to the left vertex, reading inward. A ring with no cards
+    // is a thin band with no room at its vertex: its label lies along its
+    // bottom edge too. A bottom label starts just right of the vertical
+    // axis, where the links from cards above and below the hexagon run.
+    const inner = hexSeen === 0;
+    const thin = !inner && r.r - innerR < 80;
+    hexSeen++;
+    if (inner) innerR = r.r;
+    return inner || thin
+      ? { x: r.cx + 14, y: r.cy + r.r * 0.866 - 29, anchor: "start", size: 10, boundary: false }
       : { x: r.cx - r.r * 0.92, y: r.cy - 15, anchor: "start", size: 10, boundary: false };
   });
 }
@@ -164,9 +171,10 @@ export function StyleRegions({ regions }: { regions: LayerRegion[] }) {
             {regions.map((r, i) => {
               // A ghost band is open: no fill, a dotted edge — the world beyond
               // this level, not a layer of it. A boundary is the C4 frame round
-              // the level's own node: no fill, a long dash in the map's ink.
+              // the level's own node: no fill, a solid line in the map's ink —
+              // dashes belong to edges and the world outside.
               const common = r.boundary
-                ? { fill: "none", stroke: "var(--map-boundary)", strokeWidth: 1.5, strokeDasharray: "10 6" }
+                ? { fill: "none", stroke: "var(--map-boundary)", strokeWidth: 1 }
                 : r.ghost
                 ? { fill: "none", stroke: "var(--border-subtle)", strokeWidth: 1, strokeDasharray: "2 6" }
                 : {

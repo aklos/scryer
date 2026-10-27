@@ -6,11 +6,6 @@ import { useState } from "react";
 export const RESP_ROW = "relative grid grid-cols-[18px_22px_1fr] items-baseline";
 export const PROP_ROW = "relative grid grid-cols-[18px_22px_1fr] items-baseline";
 
-// A chip on the page's type line — style, layer, claims. One size and one
-// shape for all of them; each leads with a muted word saying what it is.
-export const TYPE_CHIP =
-  "flex h-5 shrink-0 items-center gap-1.5 rounded border border-[var(--border)] px-1.5 font-mono text-2xs leading-none tabular-nums text-[var(--text-secondary)]";
-
 // Full-cell field highlight: dim on line hover; the focused field drops onto
 // the recessed field surface (Editable adds the accent ring + full-text lift).
 // The hover half stands alone for mirror-mode statement fields, where the

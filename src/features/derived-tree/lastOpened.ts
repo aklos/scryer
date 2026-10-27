@@ -1,20 +1,27 @@
 /**
- * The app's memory of when each project was last opened — "since you last
- * looked" is the developer's own clock, so it lives in their localStorage,
- * keyed by project path.
+ * The app's memory of when you last looked at each project's landing —
+ * "since you last looked" is the developer's own clock, so it lives in their
+ * localStorage, keyed by project path. A look ends when you leave the
+ * landing, so everything you saw there drops out of the next one.
  */
 
 const OPENED_KEY = "scryer:last-opened:";
 
-/** When the project was opened before this time (unix seconds), recording
- *  now as the new last-opened. 0 when it never was. */
-export function takeLastOpened(projectPath: string): number {
-  const now = Math.floor(Date.now() / 1000);
+/** When you last left this project's landing (unix seconds); 0 when you
+ *  never looked. */
+export function lastLooked(projectPath: string): number {
   try {
-    const prev = Number(localStorage.getItem(OPENED_KEY + projectPath) ?? 0) || 0;
-    localStorage.setItem(OPENED_KEY + projectPath, String(now));
-    return prev;
+    return Number(localStorage.getItem(OPENED_KEY + projectPath) ?? 0) || 0;
   } catch {
     return 0;
+  }
+}
+
+/** Record now as the last look at this project's landing. */
+export function markLooked(projectPath: string): void {
+  try {
+    localStorage.setItem(OPENED_KEY + projectPath, String(Math.floor(Date.now() / 1000)));
+  } catch {
+    // Storage blocked: the next look shows the same window, nothing worse.
   }
 }

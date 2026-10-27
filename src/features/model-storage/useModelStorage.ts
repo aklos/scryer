@@ -71,7 +71,9 @@ export interface ModelStorage {
    *  whose data is not the tree itself (health, status) to re-fetch. */
   externalGeneration: number;
 
-  openProject: (path: string) => Promise<void>;
+  /** Open a project; `remember: false` keeps it out of the recent list,
+   *  as for a switch to another worktree of the open one. */
+  openProject: (path: string, opts?: { remember?: boolean }) => Promise<void>;
   /** Forget the project; UI returns to the picker. */
   closeProject: () => void;
   /** Re-read both layers; true when either changed. */
@@ -141,7 +143,7 @@ export function useModelStorage(): ModelStorage {
     };
   }, [modelRef, reloadFromDisk]);
 
-  const openProject = useCallback(async (path: string) => {
+  const openProject = useCallback(async (path: string, opts?: { remember?: boolean }) => {
     setStatus("loading");
     setError(null);
     setProjectPath(path);
@@ -151,9 +153,11 @@ export function useModelStorage(): ModelStorage {
       const base = await invoke<string>("read_model", { refStr: ref });
       plannedRaw.current = planned;
       committedRaw.current = base;
-      const next = bumpRecent(path);
-      writeRecent(next);
-      setRecentProjects(next);
+      if (opts?.remember !== false) {
+        const next = bumpRecent(path);
+        writeRecent(next);
+        setRecentProjects(next);
+      }
       setModelRef(ref);
       setModel(JSON.parse(planned) as ScryModel);
       setCommitted(JSON.parse(base) as ScryModel);

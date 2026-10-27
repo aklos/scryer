@@ -77,4 +77,10 @@ describe("DiagramCard", () => {
     expect(html).not.toContain("Drawn as");
     expect(html).toContain("Drill into this node");
   });
+
+  it("If a claim inside is failing, then outlines the card in red; a card with todo claims is outlined like a proven one", () => {
+    expect(draw({ attention: "failing" })).toContain("stroke-red-500/80");
+    expect(draw({ attention: "planned" })).not.toContain("stroke-sky");
+    expect(draw({ attention: "planned" })).toContain("stroke-[var(--map-card-stroke)]");
+  });
 });

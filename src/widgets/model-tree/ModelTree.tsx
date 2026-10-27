@@ -12,9 +12,7 @@
 import { useRef, useState } from "react";
 import { Braces, ChevronRight, Crosshair, FlaskConical, Loader2, Pencil, Plus, X } from "lucide-react";
 import type { StyleViolation, TestTally } from "../../entities/model/health";
-import type { Completeness } from "../../entities/model/completeness";
 import { StructuralCount } from "../../entities/model/StructuralCount";
-import { CompletenessPie } from "../../entities/model/CompletenessPie";
 import type { ScryModel, Node, Group } from "../../entities/model/viewmodel";
 import { childKindFor, concernCounts, normalizeConcernSlug } from "../../entities/model/viewmodel";
 import type { Editor } from "../../entities/model/editor";
@@ -184,7 +182,6 @@ export function ModelTree({
   editor,
   activeNodeIds,
   activeLevel,
-  completeness,
   concernLens,
   onSetConcernLens,
   previewable,
@@ -212,9 +209,6 @@ export function ModelTree({
    *  (null = top level). Rows at this level get a faint band so the tree mirrors
    *  the map. `undefined` (i.e. not in map view) disables the tint. */
   activeLevel: string | null | undefined;
-  /** Per-node build completeness, keyed by node id — drives the row's % +
-   *  anchorage badge. Absent until the health report loads. */
-  completeness?: Record<string, Completeness>;
   /** The active concern lens (a registry slug, or null). Rows whose subtree
    *  holds no responsibility tagged with it DIM — they never hide, because "the
    *  concern lives nowhere here" is exactly what the lens exists to show. */
@@ -373,13 +367,6 @@ export function ModelTree({
     model.nodes
       .filter((n) => (n.parentId ?? null) === parentId && visible(n))
       .sort(byName);
-
-  /** Symbol children hidden by the altitude filter — surfaced as a quiet count
-   *  so a collapsed component still reads as "has content". */
-  const hiddenSymbolCount = (nodeId: string) =>
-    showSymbols
-      ? 0
-      : model.nodes.filter((n) => n.parentId === nodeId && n.kind === "symbol").length;
 
   const groupsAtLevel = (parentId: string | null): Group[] =>
     model.groups
@@ -619,8 +606,6 @@ export function ModelTree({
     const ramp = altitudeRamp(node);
     const Icon = lookupIcon(node.icon) ?? kindIcon(node, previewable.has(node.id));
     const active = activeNodeIds.has(node.id);
-    const hiddenSyms =
-      !filterActive && node.kind === "component" ? hiddenSymbolCount(node.id) : 0;
     const isDrop = dropKey === `node:${node.id}`;
     // The gutter shows this node's OWN claim state; when the branch's
     // children are not on screen (collapsed, or hidden by the altitude
@@ -717,41 +702,6 @@ export function ModelTree({
             <Plus className="h-3 w-3" />
           </button>
         )}
-        {/* Layer tag: the fixed word that says what role a component plays in
-            its container's style — scannable down the tree like a concern
-            glyph across claims. */}
-        {node.kind === "component" && node.layer && (
-          <span
-            className="ml-1.5 shrink-0 rounded border border-[var(--border-subtle)] px-1 text-[9px] uppercase tracking-wider text-[var(--text-ghost)]"
-            title={layerTip(model, node.id, node.layer)}
-          >
-            {node.layer.slice(0, 4)}
-          </span>
-        )}
-        {hiddenSyms > 0 && (
-          <span
-            className="shrink-0 font-mono text-2xs tabular-nums text-[var(--text-ghost)]"
-            title={`${hiddenSyms} symbol${hiddenSyms === 1 ? "" : "s"} hidden at this altitude`}
-          >
-            {hiddenSyms}
-          </span>
-        )}
-        {(() => {
-          // Arch tiers only — a symbol's completeness is near-binary noise.
-          if (node.kind === "symbol" || node.kind === "person") return null;
-          const c = completeness?.[node.id];
-          // Cleanliness = completeness: a fully built subtree (and an unmeasured
-          // bare box) shows nothing — only outstanding build work earns a pie.
-          if (!c || c.total === 0 || c.pct === undefined || c.pct >= 100) return null;
-          return (
-            <span
-              className="shrink-0"
-              title={`${c.pct}% of this subtree's claims read through to code`}
-            >
-              <CompletenessPie c={c} size={12} />
-            </span>
-          );
-        })()}
         {concernTally && concernTally.has(node.id) && (
           <span
             className="shrink-0 rounded bg-[var(--accent-soft)] px-1 font-mono text-2xs tabular-nums text-[var(--accent)]"
@@ -767,6 +717,34 @@ export function ModelTree({
         {active && (
           <Loader2 className="h-3 w-3 shrink-0 animate-spin text-violet-500 dark:text-violet-400" />
         )}
+        {/* The two right-hand columns keep a fixed width on every row so
+            they line up down the tree: the layer tag, the fixed word that
+            says what role a component plays in its container's style, then
+            the todo count. */}
+        <span className="flex w-[34px] shrink-0">
+          {node.kind === "component" && node.layer && (
+            <span
+              className="w-full rounded border border-[var(--border-subtle)] text-center text-[9px] uppercase tracking-wider text-[var(--text-ghost)]"
+              title={layerTip(model, node.id, node.layer)}
+            >
+              {node.layer.slice(0, 4)}
+            </span>
+          )}
+        </span>
+        {(() => {
+          // Todo claims left: the node's own while its children are on
+          // screen to carry theirs, its whole subtree's when they are not.
+          const counts = childrenOnScreen ? claimStatus?.[node.id]?.own : claimStatus?.[node.id]?.subtree;
+          const todo = counts?.planned ?? 0;
+          return (
+            <span
+              className={`w-5 shrink-0 text-right font-mono text-2xs tabular-nums ${CLAIM_TONE.planned}`}
+              title={todo ? `${todo} todo claim${todo === 1 ? "" : "s"} ${childrenOnScreen ? "on this node" : "in this subtree"}` : undefined}
+            >
+              {todo || null}
+            </span>
+          );
+        })()}
       </div>
     );
   };

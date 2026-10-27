@@ -7,7 +7,9 @@
 /// suggested CLAUDE.md text is this paragraph.
 pub(crate) const INSTRUCTIONS: &str = "\
 Scryer reads this project's architecture from its code: containers from packaging, components from \
-modules, claims from behaviour tests. A behaviour test's description is an EARS claim about the code \
+modules, claims from behaviour tests. A component is one job behind one entry file, in one layer: \
+name it for its job, never its layer, and in a styled container end its module doc's first \
+paragraph with its layer (`[domain]`). A behaviour test's description is an EARS claim about the code \
 it tests, subject dropped, condition first: `<verb> <object>` when always true; `When <trigger>, \
 <response>`; `While <state>, <response>`; `If <unwanted condition>, then <response>`. One pattern \
 and one response per test; a cross-cutting concern is a trailing `[tag]`. The test's level is the \

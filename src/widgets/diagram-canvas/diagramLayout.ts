@@ -11,10 +11,13 @@
  *     uses below.
  *   - the component level of a styled container → the style's own drawing
  *     (`styledLayout`): rows, columns, rings or Cockburn's hexagon, with each
- *     card fixed to its layer's band and only the order within it free; a
- *     root module's own symbols sit in a composition-root strip below it.
+ *     card fixed to its layer's band and only the order within it free.
  *   - the code tier (symbols) → a force-directed dot graph, where boxes-and-
  *     lines would be noise and relationships read better as a constellation.
+ *
+ * A level with components is drawn at their altitude, as the tree reads it:
+ * the root module's own symbols beside them (a crate's `main`, a constant in
+ * `lib.rs`) are code, listed under the node in the tree, never drawn as cards.
  */
 
 import { c4Layout } from "./c4Layout";
@@ -22,7 +25,7 @@ import type { ScryModel, Kind } from "../../entities/model/viewmodel";
 import { isDataShape } from "../../entities/model/viewmodel";
 import { styleTable, type ModelHealthReport } from "../../entities/model/health";
 import { governingStyleDef, layerOf, type Drawing, type StyleDef } from "../../entities/model/styles";
-import { classifyStyledEdge, rootStrip, styledLayout, type LayerRegion } from "./styled";
+import { classifyStyledEdge, toolingStrip, styledLayout, type LayerRegion } from "./styled";
 import { depthLayout } from "./depth";
 
 export type DiagramMode = "arch" | "styled" | "code";
@@ -174,23 +177,27 @@ export async function buildDiagramScene(
   styles: ReadonlyMap<string, StyleDef> = styleTable(report),
 ): Promise<DiagramScene> {
   const byId = new Map(model.nodes.map((n) => [n.id, n]));
+  // The root's own symbols beside components: not part of the drawn level.
+  const hasComponents = new Set(model.nodes.filter((n) => n.kind === "component").map((n) => n.parentId ?? null));
+  const offLevel = (n: (typeof model.nodes)[number]) => n.kind === "symbol" && hasComponents.has(n.parentId ?? null);
   const childIdsOf = new Map<string, string[]>();
   for (const n of model.nodes)
-    if (n.parentId) (childIdsOf.get(n.parentId) ?? childIdsOf.set(n.parentId, []).get(n.parentId)!).push(n.id);
+    if (n.parentId && !offLevel(n)) (childIdsOf.get(n.parentId) ?? childIdsOf.set(n.parentId, []).get(n.parentId)!).push(n.id);
 
-  const children = model.nodes.filter((n) => (n.parentId ?? null) === focusId);
+  const children = model.nodes.filter((n) => (n.parentId ?? null) === focusId && !offLevel(n));
   const childIds = new Set(children.map((c) => c.id));
 
   // Lift a link endpoint to the visible child that contains it: walk up the
   // parent chain until the parent is the focus level. Returns null when the
-  // endpoint lives outside this level (so the link doesn't belong here).
+  // endpoint lives outside this level (so the link doesn't belong here), or
+  // in a root symbol the level doesn't draw.
   const liftToLevel = (nodeId: string): string | null => {
     let cur = byId.get(nodeId);
     const seen = new Set<string>();
     while (cur && !seen.has(cur.id)) {
       seen.add(cur.id);
       const parent = cur.parentId ?? null;
-      if (parent === focusId) return cur.id;
+      if (parent === focusId) return childIds.has(cur.id) ? cur.id : null;
       if (parent === null) return null;
       cur = byId.get(parent);
     }
@@ -271,7 +278,8 @@ export async function buildDiagramScene(
       if (srcIn === (dstChild !== null)) continue; // not crossing this level's boundary
       const child = (srcIn ? srcChild : dstChild)!;
       const ghost = rollAbove(srcIn ? e.dstNode : e.srcNode);
-      if (!byId.has(ghost) || ghost === child || childIds.has(ghost)) continue;
+      // A root symbol's edge rolls up to the focus itself: no ghost.
+      if (!byId.has(ghost) || ghost === child || ghost === focusId || childIds.has(ghost)) continue;
       const source = srcIn ? child : ghost;
       const target = srcIn ? ghost : child;
       const key = source + ">" + target;
@@ -328,13 +336,7 @@ export async function buildDiagramScene(
   };
 
   // The component level of a styled container draws in its style's shape.
-  // A crate root's own definitions may sit beside the components; they go in
-  // a composition-root strip at the edge rather than costing the level its
-  // drawing.
-  const styledLevel =
-    focusId !== null &&
-    children.some((c) => c.kind === "component") &&
-    children.every((c) => c.kind === "component" || c.kind === "symbol");
+  const styledLevel = focusId !== null && children.length > 0 && children.every((c) => c.kind === "component");
   const styleDef = styledLevel ? governingStyleDef(model, focusId, styles) : undefined;
   const mode: DiagramMode =
     children.length > 0 && children.every((c) => c.kind === "symbol")
@@ -422,16 +424,20 @@ export async function buildDiagramScene(
       edgeMap.set(key, e);
       edges.push(e);
     }
-    const members = children.filter((c) => c.kind === "component").map((c) => ({ id: c.id, layer: c.layer }));
-    const rootIds = new Set(children.filter((c) => c.kind === "symbol").map((c) => c.id));
+    // Tooling components (examples, benches) hold no layer: a strip of
+    // their own under the drawing.
+    const toolIds = new Set(children.filter((c) => c.kind === "component" && c.tooling).map((c) => c.id));
+    const members = children
+      .filter((c) => c.kind === "component" && !toolIds.has(c.id))
+      .map((c) => ({ id: c.id, layer: c.layer }));
     const laid = styledLayout(styleDef, members, ghosts, edges);
     for (const e of edges) e.waypoints = laid.routes?.get(`${e.source}\0${e.target}`);
-    const strip = rootStrip(laid, [...rootIds]);
+    const tools = toolingStrip(laid, [...toolIds]);
     positions = new Map(
-      [...laid.centers, ...strip.centers].map(([id, c]) => [id, { x: c.x - CARD_W / 2, y: c.y - CARD_H / 2 }]),
+      [...laid.centers, ...tools.centers].map(([id, c]) => [id, { x: c.x - CARD_W / 2, y: c.y - CARD_H / 2 }]),
     );
     for (const [id, at] of pinnedPos) positions.set(id, at);
-    const allRegions = strip.region ? [...laid.regions, strip.region] : laid.regions;
+    const allRegions = tools.region ? [...laid.regions, tools.region] : laid.regions;
     styled = { name: styleDef.name, drawing: styleDef.drawing, regions: allRegions };
     regions = allRegions;
     // The drawing already says the legal ones: drawn quiet. Links that leave
@@ -442,13 +448,13 @@ export async function buildDiagramScene(
     const innermost = styleDef.layers[styleDef.layers.length - 1]?.name;
     for (const e of edges) {
       if (e.id.startsWith("violation:")) continue;
-      // The root's own links sit outside the drawing: always shown.
-      if (rootIds.has(e.source) || rootIds.has(e.target)) {
+      if (ghostIds.has(e.source) || ghostIds.has(e.target)) {
         e.implied = false;
         continue;
       }
-      if (ghostIds.has(e.source) || ghostIds.has(e.target)) {
-        e.implied = false;
+      // Tooling links say little about the product: drawn quiet.
+      if (toolIds.has(e.source) || toolIds.has(e.target)) {
+        e.implied = true;
         continue;
       }
       const sl = layerById.get(e.source), tl = layerById.get(e.target);

@@ -1,6 +1,8 @@
 /**
  * The application top bar: the scryer logo on the left is the app action menu
- * (open / close project, settings) with the project name beside it; search sits
+ * (open / close project, settings) with the project name beside it and, when
+ * the project has several git worktrees, the open checkout's branch, a menu
+ * that switches to another checkout; search sits
  * dead-centre; the Wiki / Map view switch (plus Recent, when the host passes a
  * session page), theme toggle and window controls are on the right. Page
  * content lives below; this bar is app chrome only.
@@ -19,6 +21,7 @@ import {
   ChevronDown,
   Copy,
   FileText,
+  GitBranch,
   History,
   Minus,
   Moon,
@@ -29,6 +32,7 @@ import {
   X,
 } from "lucide-react";
 import { ContextMenu, type ContextMenuItem } from "../../features/search/ContextMenu";
+import { useWorktreeList } from "../../features/worktrees/useWorktrees";
 import { applyColorMode, loadTheme, saveTheme, type ColorMode } from "../../shared/theme/theme";
 
 export type WorkspaceView = "wiki" | "diagram";
@@ -46,6 +50,7 @@ export function TopBar({
   view,
   onSetView,
   onOpenProject,
+  onOpenWorktree,
   onCloseProject,
   onOpenSearch,
   onOpenSettings,
@@ -58,6 +63,8 @@ export function TopBar({
   view: WorkspaceView;
   onSetView: (view: WorkspaceView) => void;
   onOpenProject: (path: string) => void;
+  /** Switch to another worktree of the open project. */
+  onOpenWorktree: (path: string) => void;
   onCloseProject: () => void;
   onOpenSearch: () => void;
   onOpenSettings: () => void;
@@ -70,6 +77,9 @@ export function TopBar({
   onOpenSession?: () => void;
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [worktreeMenu, setWorktreeMenu] = useState<{ x: number; y: number } | null>(null);
+  const worktrees = useWorktreeList(projectPath);
+  const here = worktrees.list.find((w) => w.current);
   const projectName = projectPath?.split("/").filter(Boolean).pop() ?? "scryer";
 
   const items: ContextMenuItem[] = [
@@ -114,6 +124,24 @@ export function TopBar({
           <span className="truncate">{projectName}</span>
           <ChevronDown className="h-3 w-3 shrink-0 text-[var(--text-ghost)]" />
         </button>
+
+        {worktrees.list.length > 1 && (
+          <button
+            type="button"
+            data-worktree-switch
+            onClick={(e) => {
+              const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              worktrees.refresh();
+              setWorktreeMenu({ x: r.left, y: r.bottom + 2 });
+            }}
+            title="Switch to another worktree of this project"
+            className="ml-1 flex min-w-0 items-center gap-1 rounded-md px-1.5 py-1 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+          >
+            <GitBranch className="h-3 w-3 shrink-0 text-[var(--text-ghost)]" />
+            <span className="truncate font-mono">{here?.branch ?? "detached"}</span>
+            <ChevronDown className="h-3 w-3 shrink-0 text-[var(--text-ghost)]" />
+          </button>
+        )}
 
         {projectPath && (
           <span
@@ -206,6 +234,22 @@ export function TopBar({
           items={items}
           searchable={false}
           onClose={() => setMenu(null)}
+        />
+      )}
+      {worktreeMenu && (
+        <ContextMenu
+          x={worktreeMenu.x}
+          y={worktreeMenu.y}
+          items={worktrees.list.map((w) => ({
+            id: w.path,
+            label: w.branch ?? "detached",
+            hint: w.current ? "open" : undefined,
+            onSelect: () => {
+              if (!w.current) onOpenWorktree(w.path);
+            },
+          }))}
+          searchable={false}
+          onClose={() => setWorktreeMenu(null)}
         />
       )}
     </div>
