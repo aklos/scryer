@@ -378,8 +378,10 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         edges_from.entry(e.src.as_str()).or_default().push(e.dst.as_str());
     }
 
-    // The layers a container's style gives its components, by container dir.
+    // The layers a container's style gives its components, by container dir:
+    // a package's are those of the container it is built into.
     let layers_of = |dir: &str| -> Vec<String> {
+        let dir = s.package_owner(dir).unwrap_or(dir);
         match input.containers.iter().find(|c| c.dir == dir).and_then(|c| s.container(&c.name, &c.dir)) {
             Some(k) if !k.layers.is_empty() => k.layers.clone(),
             Some(k) => k
@@ -855,6 +857,17 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         push_link(&mut model, &mut seen, &mut taken, &system_id, &context_ids[external.as_str()], None, "");
     }
 
+    // A container built from several packages takes them in.
+    let absorbed: HashMap<String, String> = s
+        .containers
+        .iter()
+        .filter_map(|(key, k)| Some((container_ids.get(key.as_str())?, &k.packages)))
+        .flat_map(|(into, packages)| {
+            packages.iter().filter_map(|p| container_ids.get(p.as_str())).map(move |from| (from.clone(), into.clone()))
+        })
+        .collect();
+    absorb_packages(&mut model, &mut claims, &absorbed);
+
     scryer_core::concerns::register_concerns(&mut model);
     let planned_ids: HashSet<&str> = claims.iter().filter(|c| c.planned).map(|c| c.id.as_str()).collect();
     let mut committed = model.clone();
@@ -899,6 +912,13 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
     for n in model.nodes.iter_mut().filter(|n| outside.contains(n.id.as_str())) {
         n.tooling = Some(true);
     }
+    let file_nodes: BTreeMap<String, String> =
+        file_nodes.into_iter().map(|(f, id)| (f, absorbed.get(&id).cloned().unwrap_or(id))).collect();
+    let mut merged_tooling: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (id, files) in tooling {
+        merged_tooling.entry(absorbed.get(&id).cloned().unwrap_or(id)).or_default().extend(files);
+    }
+    let tooling = merged_tooling;
     let mut layer_exempt: Vec<String> =
         outside.iter().map(|id| id.to_string()).chain(stem_ids.values().cloned()).collect();
     layer_exempt.sort();
@@ -962,6 +982,49 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         style_violations: Vec::new(),
         layer_exempt,
         tooling,
+    }
+}
+
+/// Fold each package container into the container built from it: its
+/// components, claims and boundary move over, its links follow it, and a
+/// link between two packages of one container is no longer between
+/// containers.
+fn absorb_packages(model: &mut ScryModel, claims: &mut [DerivedClaim], absorbed: &HashMap<String, String>) {
+    if absorbed.is_empty() {
+        return;
+    }
+    let to = |id: &str| absorbed.get(id).map_or(id, String::as_str).to_string();
+    let mut moved_claims = Vec::new();
+    let mut technology = HashMap::new();
+    for n in model.nodes.iter().filter(|n| absorbed.contains_key(&n.id)) {
+        moved_claims.extend(n.responsibilities.iter().cloned().map(|r| (to(&n.id), r)));
+        if let Some(t) = &n.technology {
+            technology.entry(to(&n.id)).or_insert_with(|| t.clone());
+        }
+    }
+    model.nodes.retain(|n| !absorbed.contains_key(&n.id));
+    for n in model.nodes.iter_mut() {
+        if let Some(p) = n.parent_id.as_deref().filter(|p| absorbed.contains_key(*p)) {
+            n.parent_id = Some(to(p));
+        }
+        n.responsibilities.extend(moved_claims.iter().filter(|(into, _)| *into == n.id).map(|(_, r)| r.clone()));
+        if n.technology.is_none() {
+            n.technology = technology.get(&n.id).cloned();
+        }
+    }
+    for (from, into) in absorbed {
+        if let Some(globs) = model.boundaries.remove(from) {
+            model.boundaries.entry(into.clone()).or_default().extend(globs);
+        }
+    }
+    let mut seen = HashSet::new();
+    model.links.retain_mut(|l| {
+        l.src = to(&l.src);
+        l.dst = to(&l.dst);
+        l.src != l.dst && seen.insert((l.src.clone(), l.dst.clone(), l.label.clone()))
+    });
+    for c in claims.iter_mut() {
+        c.node_id = to(&c.node_id);
     }
 }
 

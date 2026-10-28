@@ -118,6 +118,11 @@ pub struct ContainerConfig {
     /// The externals this container is the one to talk to.
     #[serde(default)]
     pub uses: Vec<Relation>,
+    /// The packages this container is built from, by directory, when one
+    /// deployable spans several (a library and the app that links it). They
+    /// become one container: their components sit in it, on its layers.
+    #[serde(default)]
+    pub packages: Vec<String>,
     /// Dev tooling (a demo, a harness, a viewer): on the map, but no product.
     /// It needs no style, and it may import any layer of what it builds on;
     /// its own cycles still count. A declaration, never detected.
@@ -258,6 +263,11 @@ impl Structure {
             });
         }
         containers.sort_by(|a, b| a.dir.cmp(&b.dir));
+    }
+
+    /// The container whose `packages` name the package at `dir`.
+    pub fn package_owner(&self, dir: &str) -> Option<&str> {
+        self.containers.iter().find(|(_, k)| k.packages.iter().any(|p| p == dir)).map(|(key, _)| key.as_str())
     }
 
     /// The config for a container, looked up by directory, then by name

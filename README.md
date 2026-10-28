@@ -111,6 +111,8 @@ Download the latest release for your platform from the [releases page](https://g
    uses = ["payments-db"]
    ```
 
+   Each package is a container. When one deployable is built from several (a core library and the app that links it), list them under one container with `packages = ["client/core", "client/app"]`: they become that container, their components on its style's layers.
+
 4. Give your agent a task. It orients, writes the claims it will satisfy as todo tests, builds, runs the radius, and ingests the report. Open scryer's Sessions page and follow it as it works: the map goes where it edits while claims turn todo, then proven.
 5. Run `scryer-mcp check` in CI to fail on failing claims, architecture violations, or lint errors in claim text.
 

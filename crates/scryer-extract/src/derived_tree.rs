@@ -333,6 +333,61 @@ mod tests {
         assert_eq!(layerless, BTreeSet::from(["odd"]), "{:?}", tree.style_violations);
     }
 
+    /// When structure.toml gives a container the packages it is built from,
+    /// makes them one container: their components on its style's layers,
+    /// the imports between them inside it.
+    #[test]
+    fn a_container_spans_the_packages_it_names() {
+        let fixture = |packages: bool| {
+            let dir = tempfile::tempdir().unwrap();
+            let d = dir.path();
+            write(d, "Client/Core/Core.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n");
+            write(d, "Client/Core/Cab/Cab.cs", "// The cab's readouts. [viewmodel]\n\nnamespace Core.Cab;\n");
+            write(d, "Client/Core/Cab/CabFeed.cs", "namespace Core.Cab;\npublic class CabFeed {}\n");
+            write(d, "Client/Game/Game.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n");
+            write(d, "Client/Game/View/View.cs", "// Draws the cab. [view]\n\nnamespace Game.View;\n");
+            write(d, "Client/Game/View/Screen.cs", "using Core.Cab;\nnamespace Game.View;\npublic class Screen { CabFeed feed; }\n");
+            let packages = if packages { "packages = [\"Client/Core\", \"Client/Game\"]\n" } else { "" };
+            let styles = "[containers.\"Client/Core\"]\nstyle = \"mvvm\"\n\n[containers.\"Client/Game\"]\nstyle = \"mvvm\"\n";
+            write(d, ".scryer/structure.toml", &format!("[containers.Client]\nstyle = \"mvvm\"\n{packages}\n{styles}"));
+            let tree = derived_tree_uncached(d).unwrap();
+            (dir, tree)
+        };
+        let (_split_dir, split) = fixture(false);
+        assert!(split.style_violations.iter().any(|v| v.detail.contains("reaches into container")), "{:?}", split.style_violations);
+
+        let (_dir, tree) = fixture(true);
+        let nodes = &tree.planned.nodes;
+        let containers: Vec<&str> = nodes.iter().filter(|n| n.kind == Kind::Container).map(|n| n.name.as_str()).collect();
+        assert_eq!(containers, vec!["Client"]);
+        let client = nodes.iter().find(|n| n.name == "Client").unwrap();
+        let layer_of = |name: &str| {
+            let n = nodes.iter().find(|n| n.name == name).unwrap_or_else(|| panic!("no {name}"));
+            assert_eq!(n.parent_id.as_deref(), Some(client.id.as_str()), "{name} sits in Client");
+            n.layer.clone()
+        };
+        assert_eq!(layer_of("Cab").as_deref(), Some("viewmodel"));
+        assert_eq!(layer_of("View").as_deref(), Some("view"));
+        assert!(tree.file_nodes.values().all(|id| nodes.iter().any(|n| &n.id == id)), "every file's node exists");
+        assert!(tree.style_violations.is_empty(), "{:?}", tree.style_violations);
+    }
+
+    /// If a container's packages name a directory that holds no package,
+    /// then reports it as unmatched.
+    #[test]
+    fn a_package_that_is_not_one_is_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "Client/Core/Core.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n");
+        write(d, "Client/Core/Feed.cs", "namespace Core;\npublic class Feed {}\n");
+        write(d, ".scryer/structure.toml", "[containers.Client]\npackages = [\"Client/Core\", \"Client/Gmae\"]\n");
+        let tree = derived_tree_uncached(d).unwrap();
+        let unmatched: Vec<&str> =
+            tree.style_violations.iter().filter(|v| v.kind == "unmatched").map(|v| v.detail.as_str()).collect();
+        assert_eq!(unmatched.len(), 1, "{unmatched:?}");
+        assert!(unmatched[0].contains("Client/Gmae"), "{unmatched:?}");
+    }
+
     /// Takes a Ruby container's `lib/` as its source root, so each file and
     /// folder in it is a component, a folder's same-named file its root.
     #[test]

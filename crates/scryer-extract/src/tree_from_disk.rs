@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 /// Bumped whenever derivation changes, so a cache from an older binary is
 /// never mistaken for current.
-const DERIVE_VERSION: u32 = 27;
+const DERIVE_VERSION: u32 = 28;
 
 thread_local! {
     static PARSER: RefCell<tree_sitter::Parser> = RefCell::new(tree_sitter::Parser::new());
@@ -244,16 +244,25 @@ fn unmatched_entries(
         kind: "unmatched".to_string(),
         detail: format!("[{table}.\"{key}\"] keys no {what} in the code: re-key it to where the code is now, or remove it"),
     };
+    let containers_found = containers;
     let containers = structure
         .containers
         .keys()
-        .filter(|key| !containers.iter().any(|c| &c.dir == *key || &c.name == *key))
+        .filter(|key| !containers_found.iter().any(|c| &c.dir == *key || &c.name == *key))
         .map(|key| finding("containers", key, "container"));
     let components = structure
         .components
         .keys()
         .filter(|key| !component_paths.contains(key.as_str()))
         .map(|key| finding("components", key, "component"));
-    containers.chain(components).collect()
+    let packages = structure.containers.iter().flat_map(|(key, k)| {
+        k.packages.iter().filter(|p| !containers_found.iter().any(|c| &c.dir == *p)).map(move |p| DerivedViolation {
+            node_id: system.id.clone(),
+            file: ".scryer/structure.toml".to_string(),
+            kind: "unmatched".to_string(),
+            detail: format!("[containers.\"{key}\"] packages names {p}, which holds no package: name the package's directory, or remove it"),
+        })
+    });
+    containers.chain(components).chain(packages).collect()
 }
 
