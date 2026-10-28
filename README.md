@@ -114,6 +114,8 @@ Download the latest release for your platform from the [releases page](https://g
 4. Give your agent a task. It orients, writes the claims it will satisfy as todo tests, builds, runs the radius, and ingests the report. Open scryer's Sessions page and follow it as it works: the map goes where it edits while claims turn todo, then proven.
 5. Run `scryer-mcp check` in CI to fail on failing claims, architecture violations, or lint errors in claim text.
 
+A project set up before claims lived in tests still has an authored model in `.scryer/model.scry`. Commit your work, then run `scryer-mcp migrate` (or Migrate in the app): it writes each claim into the test it fits, untested ones as todo tests, and container styles into `structure.toml`, and leaves `.scryer/migration.md`, a checklist of what it wrote and what it could not place. Rules can't tell whether an old claim is still true or whether its test checks it, so then ask an agent session to finish the migration: it works through the checklist against the code and asks you what only you can answer.
+
 ## Writing claims
 
 EARS, subject dropped, condition first, one response per claim:

@@ -156,6 +156,9 @@ pub(crate) fn run_migrate(args: &[String]) -> Result<(), Box<dyn std::error::Err
     if !report.wrote_anything() {
         println!("nothing to migrate: the code already says it all");
     }
+    if let Some(list) = &report.checklist {
+        println!("review: {list} lists each write to confirm and each claim left; an agent session can work through it");
+    }
     Ok(())
 }
 

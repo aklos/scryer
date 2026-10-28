@@ -7,6 +7,7 @@ use std::path::Path;
 
 pub use crate::claim_writing::stub_target;
 pub use crate::claim_writing::MigrationReport;
+pub use crate::migrate::{open_items as migration_open_items, CHECKLIST as MIGRATION_CHECKLIST};
 
 /// Reword a derived claim's test description in its file. Returns the file.
 pub fn edit_claim_text(project: &Path, resp_id: &str, text: &str) -> Result<String, String> {

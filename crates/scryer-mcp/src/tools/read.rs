@@ -638,6 +638,21 @@ impl ScryerServer {
         }
 
         let mut payload = serde_json::json!({ "files": files_out, "matches": matches_out });
+        // Keys serialize sorted, so this one leads and the cap's clip never
+        // reaches it.
+        let project = model_ref.project_path();
+        if let Some(open) = scryer_extract::claim_files::migration_open_items(project).filter(|n| *n > 0) {
+            payload["authoredModel"] = serde_json::json!(format!(
+                "a migration from the old authored model is unfinished: {} lists {open} open item(s) to judge \
+                 against the code with the developer, as the scryer skill's migration section says",
+                scryer_extract::claim_files::MIGRATION_CHECKLIST
+            ));
+        } else if model_ref.dir().join("model.scry").is_file() {
+            payload["authoredModel"] = serde_json::json!(
+                "this project still has an authored model (.scryer/model.scry) from before claims lived in \
+                 tests; once the developer's work is committed, `scryer-mcp migrate` moves it into the code"
+            );
+        }
         strip_fields_compact(&mut payload);
         Ok(CallToolResult::success(vec![Content::text(fit_orient(payload))]))
     }
@@ -740,6 +755,33 @@ mod tests {
         let text = text_of(&orient(&dir, Some("answer requests"), &files));
         assert!(text.len() <= ORIENT_MAX_CHARS, "{} chars", text.len());
         assert!(text.contains("claims — locate {file}"), "{text}");
+    }
+
+    /// While the project still holds an authored model, orient names
+    /// `scryer-mcp migrate` as the way to move it into the code, ahead of
+    /// anything its cap could shed.
+    #[test]
+    fn orient_names_the_migration_while_an_authored_model_remains() {
+        let dir = project();
+        assert!(json_of(&orient(&dir, Some("persist text"), &[])).get("authoredModel").is_none());
+        write(dir.path(), ".scryer/model.scry", "{}");
+        let files: Vec<&str> = vec!["crates/notes/src/draft.rs"; 10];
+        let text = text_of(&orient(&dir, Some("persist text"), &files));
+        assert!(text.starts_with(r#"{"authoredModel":"#), "{text}");
+        assert!(text.contains("scryer-mcp migrate"), "{text}");
+    }
+
+    /// While a migration checklist has open items, orient names it as the
+    /// work that finishes the migration.
+    #[test]
+    fn orient_names_an_unfinished_migration() {
+        let dir = project();
+        write(dir.path(), ".scryer/model.scry", "{}");
+        write(dir.path(), ".scryer/migration.md", "# Migration checklist\n\n- [x] done\n- [ ] a\n- [ ] b\n");
+        let out = json_of(&orient(&dir, Some("finish the migration"), &[]));
+        let note = out["authoredModel"].as_str().unwrap();
+        assert!(note.contains(".scryer/migration.md lists 2 open item(s)"), "{note}");
+        assert!(!note.contains("scryer-mcp migrate"), "the mechanical pass already ran: {note}");
     }
 
     /// locate on a test file lists the claims written in it with their

@@ -20,6 +20,7 @@ where the developer follows it — and write each claim you will satisfy as a to
 orient names; a todo test is work to do. Run only what `get_test_radius` names, then \
 `ingest_test_report`. A surviving probe (`open_probe`) is a finding: strengthen the test. An open \
 comment thread on code you work on is an ask: reply with `comment`, and mark it addressed only when \
-it is done. Every \
+it is done. A `.scryer/migration.md` is an unfinished move from an old authored model: finishing \
+it means working through its checklist as the skill says. Every \
 tool takes an optional absolute `project`, defaulting to the working directory. The `scryer` skill, \
 when installed, has the full loop with examples.";

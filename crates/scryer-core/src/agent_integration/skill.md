@@ -107,6 +107,24 @@ People and other agents leave comment threads on nodes: questions, requests, dec
 - Close a thread only when its ask is done: `comment {thread, text, addressed: true}`, saying in `text` what you did and where. A reply never closes a thread on its own, and an ask you only partly did stays open.
 - To ask the user or another agent something you cannot settle yourself, open a thread: `comment {on, text}` with `on` a file, node id or node name. Keep it to one ask; don't narrate your work there.
 
+## A project from before claims lived in tests
+
+Older projects kept an authored model in `.scryer/model.scry`; nothing reads it now. Moving it into the code takes two passes, and orient says which one is due.
+
+**1. The mechanical pass: `scryer-mcp migrate`** (or Migrate in the app). Ask the developer before running it and have their work committed first, since it writes into test files. By rule it writes each claim linked to a test as that test's description (the one closest to the test's name, and only when it fits the name), each descriptive statement as a module doc, each untested claim as a todo test in an existing test project, and container names and styles into `.scryer/structure.toml`. It leaves `.scryer/migration.md`: a checklist of every write to confirm and every claim it could not place, with why.
+
+**2. The review: finish `.scryer/migration.md`.** When the developer asks you to finish the migration, or orient names the checklist, work through it against today's code. The old model can be weeks behind, and its links were often to a related test rather than the one that checks the claim.
+
+- Go file by file: read a test file once and settle every item that names it.
+- **Written as a test description:** keep it when the test checks it and it is true. Otherwise reword it, move it to the test that does check it, or delete the summary so the test's name speaks; a test name that already says it well beats an old sentence.
+- **Written as a todo test:** keep it when it is still wanted; delete it when the code moved on.
+- **Not written:** describe the test that checks it, write a todo test where it belongs, or drop it when it is no longer true. Several claims on one test usually mean one belongs there and the rest belong to other tests or none.
+- Settle by reading the code what the code can settle. Ask the developer only what it cannot, such as whether an unbuilt claim is still wanted, and ask in batches.
+- Keep each claim in the EARS shape above; an old claim in the imperative (`clunk it`) becomes a response (`Clunks it`).
+- Tick each item (`- [x]`) as you settle it, so the review survives across sessions; a long checklist is several sessions' work. Run what `get_test_radius` names for the tests you changed and ingest the report.
+
+When no item is open, delete `.scryer/migration.md` and the old model's files (`model.scry`, `planned.scry`, `model.baseline.scry`, `history.jsonl`).
+
 ## Without the MCP server
 
 The same answers come from the CLI: `scryer-mcp status` (counts and what needs attention), `scryer-mcp check` (structural and test gates, non-zero on findings), `scryer-mcp lint` (claim wording), `scryer-mcp export` (the derived tree as JSON).
