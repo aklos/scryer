@@ -77,8 +77,15 @@ pub fn lift_file(rel_path: &str, source: &str, parser: &mut Parser) -> FileLift 
             py_tests(root, bytes, false, &mut lift.tests);
             (lift.module_description, lift.module_body) = py_module_doc(root, bytes);
         }
-        "cs" => {
-            cs_tests(root, bytes, &mut lift.tests);
+        "cs" | "go" | "java" | "kt" | "kts" | "rb" | "php" => {
+            match ext {
+                "cs" => cs_tests(root, bytes, &mut lift.tests),
+                "go" => go_tests(root, bytes, &mut lift.tests),
+                "java" => java_tests(root, bytes, &mut lift.tests),
+                "kt" | "kts" => kotlin_tests(root, bytes, &mut lift.tests),
+                "rb" => rb_tests(root, bytes, &mut lift.tests),
+                _ => php_tests(root, bytes, &mut lift.tests),
+            }
             (lift.module_description, lift.module_body) = head_doc_parts(ext, source);
         }
         _ => (lift.module_description, lift.module_body) = head_doc_parts(ext, source),
@@ -145,6 +152,7 @@ pub fn de_snake(identifier: &str) -> String {
     let trimmed = identifier
         .strip_prefix("test_")
         .or_else(|| identifier.strip_prefix("Test").filter(|r| r.starts_with(|c: char| c.is_uppercase() || c == '_')))
+        .or_else(|| identifier.strip_prefix("test").filter(|r| r.starts_with(char::is_uppercase)))
         .unwrap_or(identifier);
     let mut words: Vec<String> = Vec::new();
     for part in trimmed.split(|c: char| c == '_' || c == '-' || c.is_whitespace()) {
@@ -436,8 +444,8 @@ fn js_unescape(raw: &str) -> String {
     out
 }
 
-/// One step of [`js_tests`]' walk.
-enum JsStep<'t> {
+/// One step of a walk that tracks the `describe`s around it ([`js_tests`], [`rb_tests`]).
+enum SuiteStep<'t> {
     /// Look for tests under a node, inside these `describe`s.
     Walk(Node<'t>, Rc<Vec<String>>, bool),
     /// A test found, emitted when the walk reaches it in source order.
@@ -448,14 +456,14 @@ fn js_tests(root: Node, bytes: &[u8], out: &mut Vec<LiftedTest>) {
     // An explicit stack, not recursion: generated files nest thousands of
     // levels deep (a long chain of joined strings), past a worker thread's
     // stack. Children go on in reverse so tests come out in source order.
-    let mut stack = vec![JsStep::Walk(root, Rc::new(Vec::new()), false)];
+    let mut stack = vec![SuiteStep::Walk(root, Rc::new(Vec::new()), false)];
     while let Some(step) = stack.pop() {
         let (node, suite, skipped) = match step {
-            JsStep::Emit(test) => {
+            SuiteStep::Emit(test) => {
                 out.push(test);
                 continue;
             }
-            JsStep::Walk(node, suite, skipped) => (node, suite, skipped),
+            SuiteStep::Walk(node, suite, skipped) => (node, suite, skipped),
         };
         let mut cursor = node.walk();
         let children: Vec<Node> = node.named_children(&mut cursor).collect();
@@ -476,7 +484,7 @@ fn js_tests(root: Node, bytes: &[u8], out: &mut Vec<LiftedTest>) {
                             if let Some(args) = args {
                                 let mut inner = (*suite).clone();
                                 inner.push(name);
-                                stack.push(JsStep::Walk(args, Rc::new(inner), skipped || skip_here));
+                                stack.push(SuiteStep::Walk(args, Rc::new(inner), skipped || skip_here));
                             }
                             continue;
                         }
@@ -495,15 +503,292 @@ fn js_tests(root: Node, bytes: &[u8], out: &mut Vec<LiftedTest>) {
                                 t[1..t.len().saturating_sub(1)].to_string()
                             });
                             let identifier = raw.unwrap_or_else(|| name.clone());
-                            stack.push(JsStep::Emit(make_test(child, bytes, identifier, Some(name), junit, planned)));
+                            stack.push(SuiteStep::Emit(make_test(child, bytes, identifier, Some(name), junit, planned)));
                             continue;
                         }
                         _ => {}
                     }
                 }
             }
-            stack.push(JsStep::Walk(child, Rc::clone(&suite), skipped));
+            stack.push(SuiteStep::Walk(child, Rc::clone(&suite), skipped));
         }
+    }
+}
+
+// --- Go, JUnit/TestNG, RSpec/Minitest, PHPUnit ---
+
+/// Every node under `root` in source order, walked without recursion.
+fn descendants(root: Node) -> Vec<Node> {
+    let mut out = Vec::new();
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        out.push(n);
+        let mut cursor = n.walk();
+        let children: Vec<Node> = n.named_children(&mut cursor).collect();
+        stack.extend(children.into_iter().rev());
+    }
+    out
+}
+
+/// The prose of the comments right above `node`: a run of comment siblings
+/// ending on the line before it, markers gone.
+fn comment_above(node: Node, bytes: &[u8], kinds: &[&str]) -> Vec<String> {
+    // A grammar may wrap a body's statements in a node that starts with the
+    // first of them, leaving a comment above it outside (Ruby's class body).
+    let mut anchor = node;
+    while anchor.prev_named_sibling().is_none() {
+        match anchor.parent() {
+            Some(p) if p.start_position().row == anchor.start_position().row => anchor = p,
+            _ => break,
+        }
+    }
+    let mut raws = Vec::new();
+    let mut row = node.start_position().row;
+    let mut cur = anchor.prev_named_sibling();
+    while let Some(c) = cur {
+        if !kinds.contains(&c.kind()) || c.end_position().row + 1 != row {
+            break;
+        }
+        raws.push(text(c, bytes));
+        row = c.start_position().row;
+        cur = c.prev_named_sibling();
+    }
+    raws.reverse();
+    raws.iter()
+        .flat_map(|raw| raw.lines())
+        .map(|l| {
+            let l = l.trim().trim_start_matches("/**").trim_start_matches("/*").trim_end_matches("*/").trim();
+            let l = l.strip_prefix("//").or_else(|| l.strip_prefix('#')).or_else(|| l.strip_prefix('*')).unwrap_or(l);
+            l.trim().to_string()
+        })
+        .collect()
+}
+
+/// The first statement of a body, through the list nodes grammars wrap
+/// statements in.
+fn first_statement(body: Node) -> Option<Node> {
+    let mut n = body;
+    loop {
+        let mut cursor = n.walk();
+        let first = n.named_children(&mut cursor).find(|c| !c.kind().contains("comment"))?;
+        if matches!(first.kind(), "statement_list" | "body_statement" | "compound_statement" | "block") {
+            n = first;
+        } else {
+            return Some(first);
+        }
+    }
+}
+
+/// A string literal's text without its quotes.
+fn quoted(node: Node, bytes: &[u8]) -> Option<String> {
+    let t = text(node, bytes).trim();
+    let q = t.chars().next().filter(|c| matches!(c, '"' | '\''))?;
+    Some(t.trim_start_matches(q).trim_end_matches(q).to_string())
+}
+
+/// `func TestX(t *testing.T)`: its doc comment (which opens with the name it
+/// documents), else its name; todo while it opens with `t.Skip`.
+fn go_tests(root: Node, bytes: &[u8], out: &mut Vec<LiftedTest>) {
+    let mut cursor = root.walk();
+    for f in root.named_children(&mut cursor).filter(|n| n.kind() == "function_declaration") {
+        let Some(name) = f.child_by_field_name("name").map(|n| text(n, bytes).to_string()) else { continue };
+        let params = f.child_by_field_name("parameters").map_or("", |p| text(p, bytes));
+        if !name.starts_with("Test") || !params.contains("testing.T") {
+            continue;
+        }
+        let doc = first_paragraph(&comment_above(f, bytes, &["comment"])).map(|d| {
+            d.strip_prefix(name.as_str()).map(str::trim_start).filter(|r| !r.is_empty()).map_or(d.clone(), str::to_string)
+        });
+        let planned = f
+            .child_by_field_name("body")
+            .and_then(first_statement)
+            .is_some_and(|s| text(s, bytes).split_once('.').is_some_and(|(_, call)| call.starts_with("Skip")));
+        out.push(make_test(f, bytes, name.clone(), doc, name, planned));
+    }
+}
+
+const JAVA_TEST_ANNOTATIONS: &[&str] = &["Test", "ParameterizedTest", "RepeatedTest", "TestFactory", "TestTemplate"];
+
+/// A JUnit or TestNG test method: its `@DisplayName`, else its Javadoc, else
+/// its name; todo while `@Disabled` or `@Ignore`d.
+fn java_tests(root: Node, bytes: &[u8], out: &mut Vec<LiftedTest>) {
+    for m in descendants(root).into_iter().filter(|n| n.kind() == "method_declaration") {
+        let mut cursor = m.walk();
+        let annotations: Vec<(String, Node)> = m
+            .named_children(&mut cursor)
+            .filter(|n| n.kind() == "modifiers")
+            .flat_map(|mods| {
+                let mut c = mods.walk();
+                mods.named_children(&mut c).filter(|a| a.kind().ends_with("annotation")).collect::<Vec<_>>()
+            })
+            .filter_map(|a| {
+                let name = text(a.child_by_field_name("name")?, bytes);
+                Some((name.rsplit('.').next().unwrap_or(name).to_string(), a))
+            })
+            .collect();
+        let has = |names: &[&str]| annotations.iter().any(|(n, _)| names.contains(&n.as_str()));
+        if !has(JAVA_TEST_ANNOTATIONS) {
+            continue;
+        }
+        let Some(name) = m.child_by_field_name("name").map(|n| text(n, bytes).to_string()) else { continue };
+        let display = annotations
+            .iter()
+            .find(|(n, _)| n == "DisplayName")
+            .and_then(|(_, a)| a.child_by_field_name("arguments"))
+            .and_then(|args| args.named_child(0))
+            .and_then(|lit| quoted(lit, bytes));
+        let javadoc = || {
+            let lines: Vec<String> =
+                comment_above(m, bytes, &["block_comment", "line_comment"]).into_iter().take_while(|l| !l.starts_with('@')).collect();
+            first_paragraph(&lines)
+        };
+        let doc = display.or_else(javadoc);
+        out.push(make_test(m, bytes, name.clone(), doc, name, has(&["Disabled", "Ignore"])));
+    }
+}
+
+/// A Kotlin annotation's name and its first string argument:
+/// `@Test` → (`Test`, None), `@DisplayName("…")` → (`DisplayName`, "…").
+pub(crate) fn kotlin_annotation<'t>(a: Node<'t>, bytes: &[u8]) -> Option<(String, Option<Node<'t>>)> {
+    let user_type = descendants(a).into_iter().find(|n| n.kind() == "user_type")?;
+    let name = text(user_type, bytes);
+    let arg = descendants(a).into_iter().find(|n| n.kind() == "string_literal");
+    Some((name.rsplit('.').next().unwrap_or(name).to_string(), arg))
+}
+
+/// A Kotlin JUnit test: its `@DisplayName`, else its KDoc, else its name
+/// (often a backticked sentence); todo while `@Disabled` or `@Ignore`d.
+fn kotlin_tests(root: Node, bytes: &[u8], out: &mut Vec<LiftedTest>) {
+    for f in descendants(root).into_iter().filter(|n| n.kind() == "function_declaration") {
+        let mut cursor = f.walk();
+        let annotations: Vec<(String, Option<Node>)> = f
+            .named_children(&mut cursor)
+            .filter(|n| n.kind() == "modifiers")
+            .flat_map(|mods| {
+                let mut c = mods.walk();
+                mods.named_children(&mut c).filter(|a| a.kind() == "annotation").collect::<Vec<_>>()
+            })
+            .filter_map(|a| kotlin_annotation(a, bytes))
+            .collect();
+        let has = |names: &[&str]| annotations.iter().any(|(n, _)| names.contains(&n.as_str()));
+        if !has(JAVA_TEST_ANNOTATIONS) {
+            continue;
+        }
+        let Some(name) = f.child_by_field_name("name").map(|n| text(n, bytes).trim_matches('`').to_string()) else { continue };
+        let display = annotations.iter().find(|(n, _)| n == "DisplayName").and_then(|(_, arg)| *arg).and_then(|lit| quoted(lit, bytes));
+        let kdoc = || {
+            let lines: Vec<String> = comment_above(f, bytes, &["block_comment", "line_comment"]).into_iter().take_while(|l| !l.starts_with('@')).collect();
+            first_paragraph(&lines)
+        };
+        let doc = display.or_else(kdoc);
+        out.push(make_test(f, bytes, name.clone(), doc, name, has(&["Disabled", "Ignore"])));
+    }
+}
+
+/// RSpec examples inside their `describe`s, and Minitest's `test_` methods
+/// and `test "…"` blocks. An RSpec example's report name is its full
+/// description: the `describe`s and the example, joined by spaces.
+fn rb_tests(root: Node, bytes: &[u8], out: &mut Vec<LiftedTest>) {
+    let skips = |block: Option<Node>| {
+        block
+            .and_then(|b| b.child_by_field_name("body").or(Some(b)))
+            .and_then(first_statement)
+            .is_some_and(|s| text(s, bytes).split(|c: char| !c.is_alphanumeric() && c != '_').next() == Some("skip"))
+    };
+    let mut stack = vec![SuiteStep::Walk(root, Rc::new(Vec::new()), false)];
+    while let Some(step) = stack.pop() {
+        let (node, suite, skipped) = match step {
+            SuiteStep::Emit(test) => {
+                out.push(test);
+                continue;
+            }
+            SuiteStep::Walk(node, suite, skipped) => (node, suite, skipped),
+        };
+        let mut cursor = node.walk();
+        let children: Vec<Node> = node.named_children(&mut cursor).collect();
+        for child in children.into_iter().rev() {
+            if child.kind() == "method" {
+                let name = child.child_by_field_name("name").map(|n| text(n, bytes).to_string()).unwrap_or_default();
+                if name.starts_with("test_") {
+                    let doc = first_paragraph(&comment_above(child, bytes, &["comment"]));
+                    let planned = skipped || skips(Some(child));
+                    stack.push(SuiteStep::Emit(make_test(child, bytes, name.clone(), doc, name, planned)));
+                    continue;
+                }
+            }
+            if child.kind() == "call" {
+                let method = child.child_by_field_name("method").map_or("", |m| text(m, bytes));
+                let arg = child.child_by_field_name("arguments").and_then(|a| a.named_child(0));
+                let label = arg.and_then(|a| if a.kind() == "string" { quoted(a, bytes) } else { None });
+                let block = child.child_by_field_name("block");
+                match method {
+                    "describe" | "context" | "feature" | "xdescribe" | "xcontext" | "fdescribe" | "fcontext" => {
+                        let name = label.or_else(|| arg.map(|a| text(a, bytes).to_string()));
+                        if let (Some(name), Some(block)) = (name, block) {
+                            let mut inner = (*suite).clone();
+                            inner.push(name);
+                            stack.push(SuiteStep::Walk(block, Rc::new(inner), skipped || method.starts_with('x')));
+                            continue;
+                        }
+                    }
+                    "it" | "specify" | "scenario" | "example" | "fit" | "xit" | "xspecify" | "pending" | "skip" => {
+                        if let Some(label) = label.filter(|_| !suite.is_empty()) {
+                            let planned = skipped || block.is_none() || matches!(method, "xit" | "xspecify" | "pending" | "skip");
+                            let junit = suite.iter().cloned().chain(std::iter::once(label.clone())).collect::<Vec<_>>().join(" ");
+                            stack.push(SuiteStep::Emit(make_test(child, bytes, label.clone(), Some(label), junit, planned)));
+                            continue;
+                        }
+                    }
+                    "test" => {
+                        if let Some(label) = label {
+                            let identifier = format!("test_{}", label.split_whitespace().collect::<Vec<_>>().join("_"));
+                            let planned = skipped || block.is_none() || skips(block);
+                            stack.push(SuiteStep::Emit(make_test(child, bytes, identifier.clone(), Some(label), identifier, planned)));
+                            continue;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            stack.push(SuiteStep::Walk(child, Rc::clone(&suite), skipped));
+        }
+    }
+}
+
+/// A PHPUnit test method (`test…`, `@test` or `#[Test]`): its TestDox, else
+/// its name; todo while it only marks itself incomplete or skipped.
+fn php_tests(root: Node, bytes: &[u8], out: &mut Vec<LiftedTest>) {
+    for m in descendants(root).into_iter().filter(|n| n.kind() == "method_declaration") {
+        let Some(name) = m.child_by_field_name("name").map(|n| text(n, bytes).to_string()) else { continue };
+        let docblock = comment_above(m, bytes, &["comment"]);
+        let attributes: Vec<(String, Option<String>)> = m
+            .child_by_field_name("attributes")
+            .map(|list| {
+                descendants(list)
+                    .into_iter()
+                    .filter(|n| n.kind() == "attribute")
+                    .map(|a| {
+                        let name = a.named_child(0).map_or("", |n| text(n, bytes));
+                        let arg = descendants(a).into_iter().find(|n| n.kind() == "string").and_then(|s| quoted(s, bytes));
+                        (name.rsplit('\\').next().unwrap_or(name).to_string(), arg)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let is_test = name.starts_with("test") || docblock.iter().any(|l| l == "@test") || attributes.iter().any(|(n, _)| n == "Test");
+        if !is_test {
+            continue;
+        }
+        let testdox = attributes
+            .iter()
+            .find(|(n, _)| n == "TestDox")
+            .and_then(|(_, arg)| arg.clone())
+            .or_else(|| docblock.iter().find_map(|l| l.strip_prefix("@testdox ").map(|r| r.trim().to_string())));
+        let planned = m
+            .child_by_field_name("body")
+            .and_then(first_statement)
+            .is_some_and(|s| ["markTestIncomplete", "markTestSkipped"].iter().any(|c| text(s, bytes).contains(c)));
+        out.push(make_test(m, bytes, name.clone(), testdox, name, planned));
     }
 }
 
@@ -770,11 +1055,19 @@ pub(crate) fn strip_xml_tags(s: &str) -> String {
 mod tests {
     use super::*;
 
+    const GO_SRC: &str = "package cargo\n\nimport \"testing\"\n\n// TestRejectsEmpty rejects an empty rack.\nfunc TestRejectsEmpty(t *testing.T) {\n\tif false {\n\t\tt.Fatal()\n\t}\n}\n\nfunc TestLoadsTheHold(t *testing.T) {\n\tt.Skip(\"todo\")\n}\n\nfunc helper(t *testing.T) {}\n\nfunc TestMain(m *testing.M) {}\n";
+    const JAVA_SRC: &str = "class RackTest {\n  @Test\n  @DisplayName(\"Rejects an empty rack\")\n  void rejectsEmpty() {}\n\n  /** Loads the hold first. @see Hold */\n  @org.junit.jupiter.api.Test\n  void loadsHold() {}\n\n  @Test\n  @Disabled\n  void stacksCrates() {}\n\n  void helper() {}\n}\n";
+    const RSPEC_SRC: &str = "RSpec.describe Invoice do\n  context \"when paid\" do\n    it \"totals the lines\" do\n      expect(1).to eq 1\n    end\n    xit \"rounds up\" do\n    end\n    it \"refunds the change\"\n  end\n  it { is_expected.to be_valid }\nend\n";
+    const MINITEST_SRC: &str = "class InvoiceTest < Minitest::Test\n  # Totals the lines.\n  def test_totals\n    assert true\n  end\n\n  def test_rounds_up\n    skip \"later\"\n  end\n\n  test \"refunds the change\" do\n    assert true\n  end\n\n  def helper\n  end\nend\n";
+    const PHP_SRC: &str = "<?php\nclass RackTest extends TestCase {\n  /**\n   * @testdox Rejects an empty rack\n   */\n  public function testRejectsEmpty(): void { $this->assertTrue(true); }\n\n  #[TestDox('Loads the hold')]\n  #[Test]\n  public function loads(): void { $this->assertTrue(true); }\n\n  public function testStacksCrates(): void { $this->markTestIncomplete('todo'); }\n\n  private function helper(): void {}\n}\n";
+
+    const KOTLIN_SRC: &str = "package space.cargo\n\nclass RackTest {\n    @Test\n    @DisplayName(\"Rejects an empty rack\")\n    fun rejectsEmpty() {}\n\n    /** Loads the hold first. */\n    @org.junit.jupiter.api.Test\n    fun loadsHold() {}\n\n    @Test\n    @Disabled(\"todo\")\n    fun `stacks crates in order`() {}\n\n    @Test fun `keeps the manifest`() {}\n\n    fun helper() {}\n}\n";
+
     fn lift(path: &str, src: &str) -> FileLift {
         lift_file(path, src, &mut Parser::new())
     }
 
-    /// When a C#, Java, Go, C, C++, PHP or Ruby file opens with a comment
+    /// When a C#, Java, Kotlin, Go, C, C++, PHP or Ruby file opens with a comment
     /// that is not a licence and not on a declaration, reads it as the
     /// file's module doc.
     #[test]
@@ -790,6 +1083,7 @@ mod tests {
         assert_eq!(desc("Head.cs", "/// <summary>Racks and holds.</summary>\nusing System;\n").as_deref(), Some("Racks and holds."));
         assert_eq!(desc("Rack.cs", "/// <summary>A rack.</summary>\npublic class Rack {}\n"), None, "a type's own doc");
         assert_eq!(desc("cargo.go", "// Package cargo moves cargo.\npackage cargo\n").as_deref(), Some("Package cargo moves cargo."));
+        assert_eq!(desc("Rack.kt", "// Racks cargo.\npackage space.cargo\n\nclass Rack\n").as_deref(), Some("Racks cargo."));
         assert_eq!(
             desc("package-info.java", "/**\n * Market rules.\n *\n * @author someone\n */\npackage market;\n").as_deref(),
             Some("Market rules.")
@@ -812,6 +1106,154 @@ mod tests {
         assert_eq!(l.module_description.as_deref(), Some("Moves cargo."));
         assert_eq!(l.module_body.as_deref(), Some("Racks first."));
         assert_eq!(lift("bare.clj", "(ns space.bare\n  (:require [clojure.string]))\n").module_description, None);
+    }
+
+    /// Reads a Go test function as a claim worded by the comment above it,
+    /// falling back to its name.
+    #[test]
+    fn lifts_go_tests() {
+        let rows = |l: FileLift| -> Vec<(String, String)> {
+            l.tests.into_iter().map(|t| (t.description, t.junit_name)).collect()
+        };
+        let r = |d: &str, j: &str, _todo: bool| (d.to_string(), j.to_string());
+        assert_eq!(
+            rows(lift("cargo_test.go", GO_SRC)),
+            vec![r("Rejects an empty rack.", "TestRejectsEmpty", false), r("Loads the hold", "TestLoadsTheHold", true)]
+        );
+    }
+
+    /// While a Go test opens with `t.Skip`, reads its claim as todo.
+    #[test]
+    fn go_tests_that_skip_are_todo() {
+        let planned: Vec<bool> = lift("cargo_test.go", GO_SRC).tests.iter().map(|t| t.planned).collect();
+        assert_eq!(planned, vec![false, true]);
+    }
+
+    /// Reads a JUnit or TestNG test method as a claim worded by the first of
+    /// its `@DisplayName`, its Javadoc and its name.
+    #[test]
+    fn lifts_java_tests() {
+        let rows = |l: FileLift| -> Vec<(String, String)> {
+            l.tests.into_iter().map(|t| (t.description, t.junit_name)).collect()
+        };
+        let r = |d: &str, j: &str, _todo: bool| (d.to_string(), j.to_string());
+        assert_eq!(
+            rows(lift("RackTest.java", JAVA_SRC)),
+            vec![
+                r("Rejects an empty rack", "rejectsEmpty", false),
+                r("Loads the hold first. @see Hold", "loadsHold", false),
+                r("Stacks crates", "stacksCrates", true),
+            ]
+        );
+    }
+
+    /// While a JUnit test is `@Disabled` or `@Ignore`d, reads its claim as
+    /// todo.
+    #[test]
+    fn disabled_java_tests_are_todo() {
+        let planned: Vec<bool> = lift("RackTest.java", JAVA_SRC).tests.iter().map(|t| t.planned).collect();
+        assert_eq!(planned, vec![false, false, true]);
+    }
+
+    /// Reads an RSpec example as a claim worded by its `it` string, named
+    /// in reports with its `describe`s.
+    #[test]
+    fn lifts_rspec_examples() {
+        let rows = |l: FileLift| -> Vec<(String, String)> {
+            l.tests.into_iter().map(|t| (t.description, t.junit_name)).collect()
+        };
+        let r = |d: &str, j: &str, _todo: bool| (d.to_string(), j.to_string());
+        assert_eq!(
+            rows(lift("invoice_spec.rb", RSPEC_SRC)),
+            vec![
+                r("Totals the lines", "Invoice when paid totals the lines", false),
+                r("Rounds up", "Invoice when paid rounds up", true),
+                r("Refunds the change", "Invoice when paid refunds the change", true),
+            ]
+        );
+    }
+
+    /// If an RSpec example is `xit`, `pending`, `skip` or has no block, then
+    /// reads its claim as todo.
+    #[test]
+    fn pending_rspec_examples_are_todo() {
+        let planned: Vec<bool> = lift("invoice_spec.rb", RSPEC_SRC).tests.iter().map(|t| t.planned).collect();
+        assert_eq!(planned, vec![false, true, true]);
+    }
+
+    /// Reads a Minitest `test_` method or `test "…"` block as a claim.
+    #[test]
+    fn lifts_minitest_tests() {
+        let rows = |l: FileLift| -> Vec<(String, String)> {
+            l.tests.into_iter().map(|t| (t.description, t.junit_name)).collect()
+        };
+        let r = |d: &str, j: &str, _todo: bool| (d.to_string(), j.to_string());
+        assert_eq!(
+            rows(lift("invoice_test.rb", MINITEST_SRC)),
+            vec![
+                r("Totals the lines.", "test_totals", false),
+                r("Rounds up", "test_rounds_up", true),
+                r("Refunds the change", "test_refunds_the_change", false),
+            ]
+        );
+    }
+
+    /// While a Minitest test opens with `skip`, reads its claim as todo.
+    #[test]
+    fn skipped_minitests_are_todo() {
+        let planned: Vec<bool> = lift("invoice_test.rb", MINITEST_SRC).tests.iter().map(|t| t.planned).collect();
+        assert_eq!(planned, vec![false, true, false]);
+    }
+
+    /// Reads a PHPUnit test method as a claim worded by its TestDox, falling
+    /// back to its name.
+    #[test]
+    fn lifts_phpunit_tests() {
+        let rows = |l: FileLift| -> Vec<(String, String)> {
+            l.tests.into_iter().map(|t| (t.description, t.junit_name)).collect()
+        };
+        let r = |d: &str, j: &str, _todo: bool| (d.to_string(), j.to_string());
+        assert_eq!(
+            rows(lift("RackTest.php", PHP_SRC)),
+            vec![
+                r("Rejects an empty rack", "testRejectsEmpty", false),
+                r("Loads the hold", "loads", false),
+                r("Stacks crates", "testStacksCrates", true),
+            ]
+        );
+    }
+
+    /// While a PHPUnit test only marks itself incomplete or skipped, reads
+    /// its claim as todo.
+    #[test]
+    fn incomplete_phpunit_tests_are_todo() {
+        let planned: Vec<bool> = lift("RackTest.php", PHP_SRC).tests.iter().map(|t| t.planned).collect();
+        assert_eq!(planned, vec![false, false, true]);
+    }
+
+    /// Reads a Kotlin JUnit test as a claim worded by the first of its
+    /// `@DisplayName`, its KDoc and its name, backticks dropped.
+    #[test]
+    fn lifts_kotlin_tests() {
+        let got: Vec<(String, String)> = lift("RackTest.kt", KOTLIN_SRC).tests.into_iter().map(|t| (t.description, t.junit_name)).collect();
+        let r = |d: &str, j: &str| (d.to_string(), j.to_string());
+        assert_eq!(
+            got,
+            vec![
+                r("Rejects an empty rack", "rejectsEmpty"),
+                r("Loads the hold first.", "loadsHold"),
+                r("Stacks crates in order", "stacks crates in order"),
+                r("Keeps the manifest", "keeps the manifest"),
+            ]
+        );
+    }
+
+    /// While a Kotlin test is `@Disabled` or `@Ignore`d, reads its claim as
+    /// todo.
+    #[test]
+    fn disabled_kotlin_tests_are_todo() {
+        let planned: Vec<bool> = lift("RackTest.kt", KOTLIN_SRC).tests.iter().map(|t| t.planned).collect();
+        assert_eq!(planned, vec![false, false, true, false]);
     }
 
     /// When a JS file nests thousands of expressions deep, such as a long

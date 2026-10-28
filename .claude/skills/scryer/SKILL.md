@@ -60,6 +60,25 @@ def test_posts_settled_capture():
 public void PostsSettledCapture() { }
 ```
 
+```go
+// When a capture settles, posts it to the ledger.
+func TestPostsSettledCapture(t *testing.T) { t.Skip("todo") }
+```
+
+```java
+@Test @Disabled @DisplayName("When a capture settles, posts it to the ledger")
+void postsSettledCapture() {}
+```
+
+```ruby
+it "When a capture settles, posts it to the ledger"   # RSpec: no block is pending
+```
+
+```php
+/** @testdox When a capture settles, posts it to the ledger */
+public function testPostsSettledCapture(): void { $this->markTestIncomplete('todo'); }
+```
+
 **Level.** The test's level is the claim's level. A unit test claims for its component, an integration test (at a deployable's boundary) for its container, an e2e test for the whole system. Write each claim at the level it speaks for; `.scryer/structure.toml` `[levels]` says which paths are which.
 
 ## 3. Build
@@ -76,7 +95,7 @@ Make the todos pass and turn each into a real test: drop `#[ignore]` / `.todo` /
 - **Go through the front door.** Import a sibling component from its entry file, never from a file inside it, and keep what others don't use private to the component.
 - **New code joins the component whose job it serves.** Start a new component only for a new job, and give it its doc and layer when you create it.
 
-**Decisions live in the module's doc comment.** A node's module doc comment (`//!` in Rust, the file's leading `/** */` in TypeScript, a module docstring in Python, the `ns` docstring in Clojure, and in C#, Java, Go, C/C++, PHP and Ruby the comment the file opens with, before any code, apart from a licence and not sitting on a declaration) has two parts:
+**Decisions live in the module's doc comment.** A node's module doc comment (`//!` in Rust, the file's leading `/** */` in TypeScript, a module docstring in Python, the `ns` docstring in Clojure, and in C#, Java, Kotlin, Go, C/C++, PHP and Ruby the comment the file opens with, before any code, apart from a licence and not sitting on a declaration) has two parts:
 
 - **The first paragraph is its description:** what the module is, in one card line of at most 200 characters.
 - **Everything after it is its decisions,** as markdown: when you make a design decision a later reader needs (why this shape, what was rejected, what must stay true), add it there with its reason.

@@ -26,6 +26,7 @@ pub fn language_for_ext(ext: &str) -> Option<Language> {
         "py" | "pyi" => tree_sitter_python::LANGUAGE,
         "go" => tree_sitter_go::LANGUAGE,
         "java" => tree_sitter_java::LANGUAGE,
+        "kt" | "kts" => tree_sitter_kotlin_ng::LANGUAGE,
         "rb" => tree_sitter_ruby::LANGUAGE,
         "c" | "h" => tree_sitter_c::LANGUAGE,
         "cpp" | "cc" | "cxx" | "hpp" | "hh" | "hxx" => tree_sitter_cpp::LANGUAGE,

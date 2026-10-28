@@ -83,6 +83,11 @@ pub fn rewrite_description(rel_path: &str, source: &str, site: &ClaimSite, new_t
         "ts" | "tsx" | "js" | "jsx" | "mts" | "cts" | "mjs" | "cjs" => js_rewrite(root, source, site, &new_text),
         "py" => py_rewrite(root, source, site, &new_text),
         "cs" => cs_rewrite(root, source, site, &new_text),
+        "go" => go_rewrite(root, source, site, &new_text),
+        "java" => java_rewrite(root, source, site, &new_text),
+        "kt" | "kts" => kotlin_rewrite(root, source, site, &new_text),
+        "rb" => rb_rewrite(root, source, site, &new_text),
+        "php" => php_rewrite(root, source, site, &new_text),
         _ => Err(format!("cannot edit claims in .{ext} files")),
     }
 }
@@ -592,6 +597,11 @@ pub fn insert_stub(rel_path: &str, source: Option<&str>, claim: &str, suite: Opt
         "ts" | "tsx" | "js" | "jsx" | "mts" | "cts" | "mjs" | "cjs" => js_stub(rel_path, source, claim, suite),
         "py" => Ok(py_stub(source, claim)),
         "cs" => cs_stub(rel_path, source, claim),
+        "go" => go_stub(rel_path, source, claim),
+        "java" => java_stub(rel_path, source, claim),
+        "kt" | "kts" => kotlin_stub(rel_path, source, claim),
+        "rb" => rb_stub(rel_path, source, claim, suite),
+        "php" => php_stub(rel_path, source, claim),
         _ => Err(format!("cannot write stubs into .{ext} files")),
     }
 }
@@ -718,12 +728,22 @@ fn cs_stub(rel_path: &str, source: Option<&str>, claim: &str) -> Result<String, 
         let ns = path.parent().and_then(|p| p.file_name()).and_then(|s| s.to_str()).unwrap_or("Tests");
         return Ok(format!("using Xunit;\n\nnamespace {ns};\n\npublic class {class}\n{{\n{}}}\n", stub("    ")));
     };
+    append_to_last_class(rel_path, src, stub)
+}
+
+/// `src` with a stub added as the last member of its last class, indented
+/// one step in from the class.
+fn append_to_last_class(rel_path: &str, src: &str, stub: impl Fn(&str) -> String) -> Result<String, String> {
     let tree = parse(rel_path, src)?;
     let mut classes = Vec::new();
     all_of(tree.root_node(), &["class_declaration"], &mut classes);
     let body = classes
         .last()
-        .and_then(|c| c.child_by_field_name("body"))
+        .and_then(|c| {
+            let mut cursor = c.walk();
+            let kotlin = c.named_children(&mut cursor).find(|n| n.kind() == "class_body");
+            c.child_by_field_name("body").or(kotlin)
+        })
         .ok_or("no class to add the test to")?;
     let close = body.end_byte() - 1;
     let indent = format!("{}    ", indent_at(src, body.start_byte()));
@@ -734,9 +754,432 @@ fn cs_stub(rel_path: &str, source: Option<&str>, claim: &str) -> Result<String, 
     Ok(format!("{before}{lead}{}{outer}{}", stub(&indent), &src[close..]))
 }
 
+/// The comments right above `node`, top to bottom: a run of comment
+/// siblings ending on the line before it.
+fn comments_above<'t>(node: Node<'t>, kinds: &[&str]) -> Vec<Node<'t>> {
+    let mut anchor = node;
+    while anchor.prev_named_sibling().is_none() {
+        match anchor.parent() {
+            Some(p) if p.start_position().row == anchor.start_position().row => anchor = p,
+            _ => break,
+        }
+    }
+    let mut out = Vec::new();
+    let mut row = node.start_position().row;
+    let mut cur = anchor.prev_named_sibling();
+    while let Some(c) = cur {
+        if !kinds.contains(&c.kind()) || c.end_position().row + 1 != row {
+            break;
+        }
+        out.push(c);
+        row = c.start_position().row;
+        cur = c.prev_named_sibling();
+    }
+    out.reverse();
+    out
+}
+
+/// The definition named `identifier` nearest its recorded line.
+fn named<'t>(root: Node<'t>, src: &str, kinds: &[&str], site: &ClaimSite) -> Result<Node<'t>, String> {
+    let mut defs = Vec::new();
+    all_of(root, kinds, &mut defs);
+    nearest(
+        defs.into_iter()
+            .filter(|d| d.child_by_field_name("name").is_some_and(|n| text(n, src) == site.identifier))
+            .collect(),
+        site.line,
+    )
+    .ok_or_else(|| format!("no test {} in the file", site.identifier))
+}
+
+/// Replace the comments above `node` with `doc`, or put `doc` above it.
+fn set_comment_above(src: &str, node: Node, comments: &[Node], doc: &str) -> String {
+    let indent = indent_at(src, node.start_byte()).to_string();
+    match (comments.first(), comments.last()) {
+        (Some(a), Some(b)) => splice(src, a.start_byte(), b.end_byte(), doc),
+        _ => {
+            let at = line_start(src, node.start_byte());
+            splice(src, at, at, &format!("{indent}{doc}\n"))
+        }
+    }
+}
+
+/// The text inside a string literal node, quotes excluded, as a byte span.
+fn string_inner(node: Node) -> (usize, usize) {
+    (node.start_byte() + 1, node.end_byte() - 1)
+}
+
+fn go_rewrite(root: Node, src: &str, site: &ClaimSite, new_text: &str) -> Result<String, String> {
+    let f = named(root, src, &["function_declaration"], site)?;
+    let comments = comments_above(f, &["comment"]);
+    // Keep Go's habit of opening a doc comment with the name it documents.
+    let named_first = comments.first().is_some_and(|c| text(*c, src).trim_start_matches("//").trim_start().starts_with(site.identifier));
+    let doc = if named_first {
+        let mut chars = new_text.chars();
+        let lowered = match (chars.next(), chars.clone().next()) {
+            (Some(f), Some(n)) if !n.is_uppercase() => f.to_lowercase().collect::<String>() + chars.as_str(),
+            _ => new_text.to_string(),
+        };
+        format!("// {} {lowered}", site.identifier)
+    } else {
+        format!("// {new_text}")
+    };
+    Ok(set_comment_above(src, f, &comments, &doc))
+}
+
+fn java_rewrite(root: Node, src: &str, site: &ClaimSite, new_text: &str) -> Result<String, String> {
+    let m = named(root, src, &["method_declaration"], site)?;
+    let escaped = new_text.replace('\\', "\\\\").replace('"', "\\\"");
+    // A @DisplayName is what the lifter reads first.
+    let mut annotations = Vec::new();
+    all_of(m, &["annotation"], &mut annotations);
+    let display = annotations.into_iter().find(|a| {
+        a.child_by_field_name("name").is_some_and(|n| text(n, src).rsplit('.').next() == Some("DisplayName"))
+    });
+    if let Some(lit) = display.and_then(|a| a.child_by_field_name("arguments")).and_then(|args| args.named_child(0)) {
+        let (a, b) = string_inner(lit);
+        return Ok(splice(src, a, b, &escaped));
+    }
+    // Else the Javadoc above, its tags kept.
+    Ok(set_javadoc(src, m, new_text))
+}
+
+/// Write `new_text` as the Javadoc or KDoc above `m`, keeping the old
+/// one's `@` tags, or as a new one.
+fn set_javadoc(src: &str, m: Node, new_text: &str) -> String {
+    let comments: Vec<Node> = comments_above(m, &["block_comment"]).into_iter().filter(|c| text(*c, src).starts_with("/**")).collect();
+    let indent = indent_at(src, m.start_byte()).to_string();
+    let body = new_text.replace("*/", "* /");
+    let tags: Vec<String> = comments
+        .last()
+        .map(|c| {
+            text(*c, src)
+                .lines()
+                .map(|l| l.trim().trim_start_matches("/**").trim_end_matches("*/").trim().trim_start_matches('*').trim().to_string())
+                .skip_while(|l| !l.starts_with('@'))
+                .filter(|l| !l.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    let doc = if tags.is_empty() {
+        format!("/** {body} */")
+    } else {
+        let tags: String = tags.iter().map(|t| format!("{indent} * {t}\n")).collect();
+        format!("/**\n{indent} * {body}\n{indent} *\n{tags}{indent} */")
+    };
+    set_comment_above(src, m, comments.last().map(std::slice::from_ref).unwrap_or(&[]), &doc)
+}
+
+/// A Ruby string literal for `text`, double-quoted.
+fn rb_quote(text: &str) -> String {
+    format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\"").replace("#{", "\\#{"))
+}
+
+fn rb_rewrite(root: Node, src: &str, site: &ClaimSite, new_text: &str) -> Result<String, String> {
+    // A Minitest method: the comment above it.
+    if let Ok(m) = named(root, src, &["method"], site) {
+        let comments = comments_above(m, &["comment"]);
+        return Ok(set_comment_above(src, m, &comments, &format!("# {new_text}")));
+    }
+    // An RSpec example or a `test "…"` block: its string.
+    let mut calls = Vec::new();
+    all_of(root, &["call"], &mut calls);
+    fn label<'t>(c: &Node<'t>, src: &str) -> Option<(Node<'t>, String)> {
+        let arg = c.child_by_field_name("arguments").and_then(|a| a.named_child(0)).filter(|a| a.kind() == "string")?;
+        let t = text(arg, src);
+        Some((arg, t[1..t.len() - 1].to_string()))
+    }
+    let hits: Vec<Node> = calls
+        .into_iter()
+        .filter(|c| {
+            let method = c.child_by_field_name("method").map_or("", |m| text(m, src));
+            label(c, src).is_some_and(|(_, l)| match method {
+                "test" => format!("test_{}", l.split_whitespace().collect::<Vec<_>>().join("_")) == site.identifier,
+                "it" | "specify" | "scenario" | "example" | "fit" | "xit" | "xspecify" | "pending" | "skip" => l == site.identifier,
+                _ => false,
+            })
+        })
+        .collect();
+    let call = nearest(hits, site.line).ok_or_else(|| format!("no test {} in the file", site.identifier))?;
+    let (arg, _) = label(&call, src).ok_or("the test has no string to reword")?;
+    Ok(splice(src, arg.start_byte(), arg.end_byte(), &rb_quote(new_text)))
+}
+
+fn php_rewrite(root: Node, src: &str, site: &ClaimSite, new_text: &str) -> Result<String, String> {
+    let m = named(root, src, &["method_declaration"], site)?;
+    // A #[TestDox] is what the lifter reads first.
+    let mut attributes = Vec::new();
+    all_of(m, &["attribute"], &mut attributes);
+    let dox = attributes.into_iter().find(|a| a.named_child(0).is_some_and(|n| text(n, src).rsplit('\\').next() == Some("TestDox")));
+    if let Some(dox) = dox {
+        let mut strings = Vec::new();
+        all_of(dox, &["string", "encapsed_string"], &mut strings);
+        if let Some(lit) = strings.first() {
+            let (a, b) = string_inner(*lit);
+            let quote = &src[lit.start_byte()..lit.start_byte() + 1];
+            return Ok(splice(src, a, b, &new_text.replace('\\', "\\\\").replace(quote, &format!("\\{quote}"))));
+        }
+    }
+    // Else the docblock's @testdox line, added when it has none.
+    let body = new_text.replace("*/", "* /");
+    let comments: Vec<Node> = comments_above(m, &["comment"]).into_iter().filter(|c| text(*c, src).starts_with("/**")).collect();
+    let indent = indent_at(src, m.start_byte()).to_string();
+    let Some(block) = comments.last() else {
+        return Ok(set_comment_above(src, m, &[], &format!("/**\n{indent} * @testdox {body}\n{indent} */")));
+    };
+    let raw = text(*block, src);
+    if let Some(at) = raw.find("@testdox") {
+        let start = block.start_byte() + at + "@testdox".len();
+        let end = start + raw[at + "@testdox".len()..].find('\n').unwrap_or(raw.len() - at - "@testdox".len());
+        let end = end.min(block.end_byte() - 2);
+        return Ok(splice(src, start, end, &format!(" {body}")));
+    }
+    let close = block.end_byte() - 2;
+    let before = src[..close].trim_end_matches([' ', '\t']);
+    let before = before.strip_suffix('\n').unwrap_or(before);
+    Ok(format!("{before}\n{indent} * @testdox {body}\n{indent} */{}", &src[block.end_byte()..]))
+}
+
+fn kotlin_rewrite(root: Node, src: &str, site: &ClaimSite, new_text: &str) -> Result<String, String> {
+    let mut fns = Vec::new();
+    all_of(root, &["function_declaration"], &mut fns);
+    let f = nearest(
+        fns.into_iter()
+            .filter(|f| f.child_by_field_name("name").is_some_and(|n| text(n, src).trim_matches('`') == site.identifier))
+            .collect(),
+        site.line,
+    )
+    .ok_or_else(|| format!("no test {} in the file", site.identifier))?;
+    // A @DisplayName is what the lifter reads first.
+    let mut annotations = Vec::new();
+    all_of(f, &["annotation"], &mut annotations);
+    let display = annotations
+        .into_iter()
+        .filter_map(|a| crate::claim_text::claims::kotlin_annotation(a, src.as_bytes()))
+        .find(|(n, _)| n == "DisplayName")
+        .and_then(|(_, arg)| arg);
+    if let Some(lit) = display {
+        let (a, b) = string_inner(lit);
+        let escaped = new_text.replace('\\', "\\\\").replace('"', "\\\"").replace('$', "\\$");
+        return Ok(splice(src, a, b, &escaped));
+    }
+    Ok(set_javadoc(src, f, new_text))
+}
+
+fn kotlin_stub(rel_path: &str, source: Option<&str>, claim: &str) -> Result<String, String> {
+    let src = source.unwrap_or("");
+    let pascal = pascal_name(claim);
+    let base = pascal[..1].to_lowercase() + &pascal[1..];
+    let name = unique(base, src, |s, n| s.contains(&format!("fun {n}(")));
+    let doc = claim.replace("*/", "* /");
+    let junit4 = src.contains("import org.junit.Test\n") || src.contains("import org.junit.*");
+    let (short, full) = if junit4 { ("Ignore", "org.junit.Ignore") } else { ("Disabled", "org.junit.jupiter.api.Disabled") };
+    let pkg = full.rsplit_once('.').map_or("", |(p, _)| p);
+    let imported = source.is_none() || src.contains(&format!("import {full}\n")) || src.contains(&format!("import {pkg}.*"));
+    let skip = if imported { short.to_string() } else { full.to_string() };
+    let stub = |indent: &str| format!("{indent}/** {doc} */\n{indent}@Test\n{indent}@{skip}(\"todo\")\n{indent}fun {name}() {{\n{indent}}}\n");
+    let Some(src) = source else {
+        let path = rel_path.replace('\\', "/");
+        let class = Path::new(rel_path).file_stem().and_then(|s| s.to_str()).unwrap_or("PlannedTest");
+        let package = path
+            .split_once("src/test/kotlin/")
+            .and_then(|(_, rest)| rest.rsplit_once('/'))
+            .map(|(dirs, _)| format!("package {}\n\n", dirs.replace('/', ".")))
+            .unwrap_or_default();
+        return Ok(format!(
+            "{package}import org.junit.jupiter.api.Disabled\nimport org.junit.jupiter.api.Test\n\nclass {class} {{\n{}}}\n",
+            stub("    ")
+        ));
+    };
+    append_to_last_class(rel_path, src, stub)
+}
+
+fn go_stub(rel_path: &str, source: Option<&str>, claim: &str) -> Result<String, String> {
+    let src = source.unwrap_or("");
+    let name = unique(format!("Test{}", pascal_name(claim)), src, |s, n| s.contains(&format!("func {n}(")));
+    let stub = format!("// {claim}\nfunc {name}(t *testing.T) {{\n\tt.Skip(\"todo\")\n}}\n");
+    let Some(src) = source else {
+        // A test file shares its folder's package.
+        let dir = Path::new(rel_path).parent().and_then(|p| p.file_name()).and_then(|s| s.to_str()).unwrap_or("main");
+        let package: String = dir.chars().map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { '_' }).collect();
+        return Ok(format!("package {package}\n\nimport \"testing\"\n\n{stub}"));
+    };
+    Ok(format!("{}\n{stub}", ensure_trailing_newline(src)))
+}
+
+fn java_stub(rel_path: &str, source: Option<&str>, claim: &str) -> Result<String, String> {
+    let src = source.unwrap_or("");
+    let pascal = pascal_name(claim);
+    let base = pascal[..1].to_lowercase() + &pascal[1..];
+    let name = unique(base, src, |s, n| s.contains(&format!(" {n}(")));
+    let doc = claim.replace("*/", "* /");
+    // JUnit 4 skips with @Ignore, Jupiter with @Disabled; spelled out in full
+    // when the file does not import it, so the stub compiles as written.
+    let junit4 = src.contains("import org.junit.Test;") || src.contains("import org.junit.*;");
+    let (short, full) = if junit4 { ("Ignore", "org.junit.Ignore") } else { ("Disabled", "org.junit.jupiter.api.Disabled") };
+    let pkg = full.rsplit_once('.').map_or("", |(p, _)| p);
+    let imported = source.is_none() || src.contains(&format!("import {full};")) || src.contains(&format!("import {pkg}.*;"));
+    let skip = if imported { short.to_string() } else { full.to_string() };
+    let stub = |indent: &str| format!("{indent}/** {doc} */\n{indent}@Test\n{indent}@{skip}(\"todo\")\n{indent}void {name}() {{\n{indent}}}\n");
+    let Some(src) = source else {
+        let path = rel_path.replace('\\', "/");
+        let class = Path::new(rel_path).file_stem().and_then(|s| s.to_str()).unwrap_or("PlannedTest");
+        let package = path
+            .split_once("src/test/java/")
+            .and_then(|(_, rest)| rest.rsplit_once('/'))
+            .map(|(dirs, _)| format!("package {};\n\n", dirs.replace('/', ".")))
+            .unwrap_or_default();
+        return Ok(format!(
+            "{package}import org.junit.jupiter.api.Disabled;\nimport org.junit.jupiter.api.Test;\n\nclass {class} {{\n{}}}\n",
+            stub("    ")
+        ));
+    };
+    append_to_last_class(rel_path, src, stub)
+}
+
+fn rb_stub(rel_path: &str, source: Option<&str>, claim: &str, suite: Option<&str>) -> Result<String, String> {
+    let file = Path::new(rel_path).file_stem().and_then(|s| s.to_str()).unwrap_or("planned");
+    let Some(src) = source else {
+        if let Some(stem) = file.strip_suffix("_spec") {
+            let suite = suite.unwrap_or(stem);
+            return Ok(format!("RSpec.describe {} do\n  it {}\nend\n", rb_quote(suite), rb_quote(claim)));
+        }
+        let class: String = file.split('_').map(|w| w[..1].to_uppercase() + &w[1..]).collect();
+        let name = format!("test_{}", snake_name(claim));
+        return Ok(format!(
+            "require \"minitest/autorun\"\n\nclass {class} < Minitest::Test\n  # {claim}\n  def {name}\n    skip \"todo\"\n  end\nend\n"
+        ));
+    };
+    let tree = parse(rel_path, src)?;
+    let root = tree.root_node();
+    // RSpec: a pending example (no block) at the end of the first describe.
+    let mut calls = Vec::new();
+    all_of(root, &["call"], &mut calls);
+    let describe = calls.into_iter().find(|c| {
+        c.child_by_field_name("method").is_some_and(|m| text(m, src) == "describe")
+            && c.child_by_field_name("block").is_some_and(|b| b.kind() == "do_block")
+    });
+    let (container, member) = match describe {
+        Some(d) => (d.child_by_field_name("block").unwrap(), format!("it {}\n", rb_quote(claim))),
+        None => {
+            // Minitest: a skipping method at the end of the last class.
+            let mut classes = Vec::new();
+            all_of(root, &["class"], &mut classes);
+            let class = *classes.last().ok_or("no describe or test class to add the test to")?;
+            let name = unique(format!("test_{}", snake_name(claim)), src, |s, n| s.contains(&format!("def {n}")));
+            (class, format!("# {claim}\n{{indent}}def {name}\n{{indent}}  skip \"todo\"\n{{indent}}end\n"))
+        }
+    };
+    // Before the closing `end`, one step in from the line that opens it.
+    let end_line = line_start(src, container.end_byte() - 3);
+    let indent = format!("{}  ", indent_at(src, line_start(src, container.start_byte())));
+    let member = member.replace("{indent}", &indent);
+    let before = &src[..end_line];
+    let lead = if before.trim_end().ends_with(" do") || before.trim_end().ends_with("Test") { "" } else { "\n" };
+    Ok(format!("{before}{lead}{indent}{member}{}", &src[end_line..]))
+}
+
+fn php_stub(rel_path: &str, source: Option<&str>, claim: &str) -> Result<String, String> {
+    let src = source.unwrap_or("");
+    let name = unique(format!("test{}", pascal_name(claim)), src, |s, n| s.contains(&format!("function {n}(")));
+    let doc = claim.replace("*/", "* /");
+    let stub = |indent: &str| {
+        format!(
+            "{indent}/**\n{indent} * @testdox {doc}\n{indent} */\n{indent}public function {name}(): void\n{indent}{{\n{indent}    $this->markTestIncomplete('todo');\n{indent}}}\n"
+        )
+    };
+    let Some(src) = source else {
+        let class = Path::new(rel_path).file_stem().and_then(|s| s.to_str()).unwrap_or("PlannedTest");
+        return Ok(format!(
+            "<?php\n\ndeclare(strict_types=1);\n\nuse PHPUnit\\Framework\\TestCase;\n\nfinal class {class} extends TestCase\n{{\n{}}}\n",
+            stub("    ")
+        ));
+    };
+    append_to_last_class(rel_path, src, stub)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// When a claim is reworded in a Go, JUnit, Kotlin, RSpec, Minitest or
+    /// PHPUnit test, writes it where the lifter reads it first, and it reads
+    /// back as written.
+    #[test]
+    fn rewords_claims_in_every_runner() {
+        let descriptions = |path: &str, src: &str| -> Vec<String> {
+            crate::claim_text::lift_file(path, src, &mut Parser::new()).tests.into_iter().map(|t| t.description).collect()
+        };
+        let reword = |path: &str, src: &str, id: &str| -> String {
+            let lifted = crate::claim_text::lift_file(path, src, &mut Parser::new());
+            let t = lifted.tests.iter().find(|t| t.identifier == id).unwrap_or_else(|| panic!("no {id} in {:?}", lifted.tests));
+            let site = ClaimSite { identifier: &t.identifier, line: t.line, concerns: &t.concerns };
+            rewrite_description(path, src, &site, "Refuses an empty rack").unwrap()
+        };
+        let cases: &[(&str, &str, &str)] = &[
+            ("cargo_test.go", "package cargo\n\n// TestRejectsEmpty rejects it.\nfunc TestRejectsEmpty(t *testing.T) {}\n", "TestRejectsEmpty"),
+            ("cargo_test.go", "package cargo\n\nfunc TestRejectsEmpty(t *testing.T) {}\n", "TestRejectsEmpty"),
+            ("RackTest.java", "class RackTest {\n  @Test\n  @DisplayName(\"Rejects it\")\n  void rejectsEmpty() {}\n}\n", "rejectsEmpty"),
+            ("RackTest.java", "class RackTest {\n  /**\n   * Rejects it.\n   *\n   * @see Hold\n   */\n  @Test\n  void rejectsEmpty() {}\n}\n", "rejectsEmpty"),
+            ("RackTest.java", "class RackTest {\n  @Test\n  void rejectsEmpty() {}\n}\n", "rejectsEmpty"),
+            ("RackTest.kt", "class RackTest {\n    @Test\n    @DisplayName(\"Rejects it\")\n    fun rejectsEmpty() {}\n}\n", "rejectsEmpty"),
+            ("RackTest.kt", "class RackTest {\n    @Test\n    fun `rejects it`() {}\n}\n", "rejects it"),
+            ("rack_spec.rb", "RSpec.describe Rack do\n  it \"rejects it\" do\n  end\nend\n", "rejects it"),
+            ("rack_test.rb", "class RackTest < Minitest::Test\n  # Rejects it.\n  def test_rejects\n  end\nend\n", "test_rejects"),
+            ("rack_test.rb", "class RackTest < ActiveSupport::TestCase\n  test \"rejects it\" do\n  end\nend\n", "test_rejects_it"),
+            ("RackTest.php", "<?php\nclass RackTest extends TestCase {\n  /**\n   * @testdox Rejects it\n   */\n  public function testRejects(): void {}\n}\n", "testRejects"),
+            ("RackTest.php", "<?php\nclass RackTest extends TestCase {\n  #[TestDox('Rejects it')]\n  public function testRejects(): void {}\n}\n", "testRejects"),
+            ("RackTest.php", "<?php\nclass RackTest extends TestCase {\n  /** Checks the rack. */\n  public function testRejects(): void {}\n}\n", "testRejects"),
+            ("RackTest.php", "<?php\nclass RackTest extends TestCase {\n  public function testRejects(): void {}\n}\n", "testRejects"),
+        ];
+        for (path, src, id) in cases {
+            let out = reword(path, src, id);
+            assert_eq!(descriptions(path, &out), vec!["Refuses an empty rack".to_string()], "{path}:\n{out}");
+        }
+        let java = reword(cases[3].0, cases[3].1, cases[3].2);
+        assert!(java.contains("* @see Hold"), "a Javadoc keeps its tags: {java}");
+        let go = reword(cases[0].0, cases[0].1, cases[0].2);
+        assert!(go.contains("// TestRejectsEmpty refuses an empty rack"), "{go}");
+    }
+
+    /// When a claim is added to a Go, JUnit, Kotlin, RSpec, Minitest or
+    /// PHPUnit test file, or to a new one, writes it as a todo test that
+    /// reads back as that claim, planned.
+    #[test]
+    fn writes_todo_tests_in_every_runner() {
+        let claim = "When cargo lands, stacks it";
+        let cases: &[(&str, Option<&str>)] = &[
+            ("cargo/cargo_test.go", Some("package cargo\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {}\n")),
+            ("cargo/cargo_test.go", None),
+            ("RackTest.java", Some("import org.junit.jupiter.api.Test;\n\nclass RackTest {\n    @Test\n    void a() {}\n}\n")),
+            ("RackTest.java", Some("import org.junit.Test;\nimport org.junit.Ignore;\n\npublic class RackTest {\n    @Test\n    public void a() {}\n}\n")),
+            ("src/test/java/space/cargo/RackTest.java", None),
+            ("RackTest.kt", Some("import org.junit.jupiter.api.Test\n\nclass RackTest {\n    @Test\n    fun a() {}\n}\n")),
+            ("src/test/kotlin/space/cargo/RackTest.kt", None),
+            ("spec/rack_spec.rb", Some("RSpec.describe Rack do\n  it \"holds\" do\n  end\nend\n")),
+            ("spec/rack_spec.rb", None),
+            ("test/rack_test.rb", Some("class RackTest < Minitest::Test\n  def test_holds\n  end\nend\n")),
+            ("test/rack_test.rb", None),
+            ("tests/RackTest.php", Some("<?php\n\nclass RackTest extends TestCase\n{\n    public function testHolds(): void {}\n}\n")),
+            ("tests/RackTest.php", None),
+        ];
+        for (path, existing) in cases {
+            let out = insert_stub(path, *existing, claim, Some("Rack")).unwrap();
+            let tests = crate::claim_text::lift_file(path, &out, &mut Parser::new()).tests;
+            let stub = tests.iter().find(|t| t.description == claim).unwrap_or_else(|| panic!("{path}: no stub in\n{out}"));
+            assert!(stub.planned, "{path}: the stub is todo\n{out}");
+            assert_eq!(tests.len(), if existing.is_some() { 2 } else { 1 }, "{path}:\n{out}");
+        }
+        let jupiter = insert_stub(cases[2].0, cases[2].1, claim, None).unwrap();
+        assert!(jupiter.contains("@org.junit.jupiter.api.Disabled(\"todo\")"), "spelled out when not imported: {jupiter}");
+        let junit4 = insert_stub(cases[3].0, cases[3].1, claim, None).unwrap();
+        assert!(junit4.contains("    @Ignore(\"todo\")\n"), "{junit4}");
+        let fresh_java = insert_stub(cases[4].0, None, claim, None).unwrap();
+        assert!(fresh_java.starts_with("package space.cargo;\n"), "{fresh_java}");
+        assert!(insert_stub("cargo/cargo_test.go", None, claim, None).unwrap().starts_with("package cargo\n"));
+        let kotlin = insert_stub("src/test/kotlin/space/cargo/RackTest.kt", None, claim, None).unwrap();
+        assert!(kotlin.starts_with("package space.cargo\n"), "{kotlin}");
+    }
 
     /// When a module doc is written or edited in C#, Go, Ruby or Clojure,
     /// writes it in the language's own form, keeping a Go package comment on

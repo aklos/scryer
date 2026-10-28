@@ -311,7 +311,8 @@ fn manifest_role(filename: &str) -> Option<bool> {
     ) || filename == "requirements.txt"
         || (filename.starts_with("requirements") && filename.ends_with(".txt"))
         || filename.ends_with(".csproj")
-        || filename.ends_with(".fsproj");
+        || filename.ends_with(".fsproj")
+        || filename.ends_with(".gemspec");
     if code {
         return Some(false);
     }

@@ -333,6 +333,51 @@ mod tests {
         assert_eq!(layerless, BTreeSet::from(["odd"]), "{:?}", tree.style_violations);
     }
 
+    /// Takes a Ruby container's `lib/` as its source root, so each file and
+    /// folder in it is a component, a folder's same-named file its root.
+    #[test]
+    fn ruby_lib_is_a_source_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "billing/billing.gemspec", "Gem::Specification.new do |s|\n  s.name = \"billing\"\nend\n");
+        write(d, "billing/lib/billing.rb", "# Bills customers.\nmodule Billing\nend\n");
+        write(d, "billing/lib/billing/invoice.rb", "module Billing\n  class Invoice\n  end\nend\n");
+        write(d, "billing/lib/ledger.rb", "class Ledger\nend\n");
+        let tree = derived_tree_uncached(d).unwrap();
+        let components: BTreeMap<&str, Option<&str>> = tree
+            .planned
+            .nodes
+            .iter()
+            .filter(|n| n.kind == Kind::Component)
+            .map(|n| (n.name.as_str(), n.description.as_deref()))
+            .collect();
+        assert_eq!(components, BTreeMap::from([("billing", Some("Bills customers.")), ("ledger", None)]));
+    }
+
+    /// Reads Ruby specs and minitests and PHPUnit classes as test files, so
+    /// their claims land on the code they test.
+    #[test]
+    fn ruby_and_php_test_files_are_tests() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "billing/Gemfile", "source \"https://rubygems.org\"\n");
+        write(d, "billing/lib/invoice.rb", "class Invoice\n  def total\n  end\nend\n");
+        write(d, "billing/spec/invoice_spec.rb", "RSpec.describe Invoice do\n  it \"totals the lines\" do\n    Invoice.new.total\n  end\nend\n");
+        write(d, "shop/composer.json", "{\"name\": \"acme/shop\"}\n");
+        write(d, "shop/src/Rack.php", "<?php\nclass Rack {\n  public function load(): void {}\n}\n");
+        write(d, "shop/tests/RackTest.php", "<?php\nclass RackTest extends TestCase {\n  public function testLoadsCrates(): void { (new Rack())->load(); }\n}\n");
+        let tree = derived_tree_uncached(d).unwrap();
+        let node_of = |claim: &str| {
+            let c = tree.claims.iter().find(|c| c.description == claim).unwrap_or_else(|| panic!("no claim {claim}: {:?}", tree.claims));
+            tree.planned.nodes.iter().find(|n| n.id == c.node_id).unwrap().name.clone()
+        };
+        assert_eq!(node_of("Totals the lines"), "invoice");
+        assert_eq!(node_of("Loads crates"), "Rack");
+        for test_file in ["billing/spec/invoice_spec.rb", "shop/tests/RackTest.php"] {
+            assert!(scan::is_product_code(test_file) && crate::derivation::is_test_path(test_file), "{test_file}");
+        }
+    }
+
     /// Takes a folder component's description and layer from the file named
     /// after the folder, Go's `doc.go` or Java's `package-info.java`, and
     /// never splits that file out as a component of its own.

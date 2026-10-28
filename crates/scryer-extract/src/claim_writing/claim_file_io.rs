@@ -101,10 +101,27 @@ pub fn stub_target(tree: &DerivedTree, node_id: &str) -> Result<String, String> 
             .unwrap_or_else(|| format!("tests/{}.Tests", pascal(&container.name)))
     };
     let stem = snake_name(&n.name).replace('_', "-");
+    // Ruby keeps tests in spec/ (RSpec) or test/ (Minitest): whichever this
+    // container's claims already use, RSpec when it has none.
+    let rb_dir = || {
+        let minitest = tree
+            .claims
+            .iter()
+            .any(|c| c.file.ends_with("_test.rb") && in_subtree(tree, &container.id, &c.node_id));
+        if minitest { ("test", "_test") } else { ("spec", "_spec") }
+    };
     if n.kind == Kind::Container {
         return Ok(match ext.as_str() {
             "rs" => join("tests/claims.rs"),
             "py" => join("tests/test_integration.py"),
+            "go" => join("integration_test.go"),
+            "java" => join(&format!("src/test/java/{}IntegrationTest.java", pascal(&n.name))),
+            "kt" => join(&format!("src/test/kotlin/{}IntegrationTest.kt", pascal(&n.name))),
+            "rb" => {
+                let (dir, suffix) = rb_dir();
+                join(&format!("{dir}/integration{suffix}.rb"))
+            }
+            "php" => join(&format!("tests/{}IntegrationTest.php", pascal(&n.name))),
             "cs" => format!("{}/{}IntegrationTests.cs", cs_dir(), pascal(&n.name)),
             "tsx" | "ts" | "mts" => join(&format!("tests/{stem}.test.ts")),
             _ => join(&format!("tests/{stem}.test.js")),
@@ -122,9 +139,29 @@ pub fn stub_target(tree: &DerivedTree, node_id: &str) -> Result<String, String> 
         .ok_or("this component has no files to put a test beside")?;
     let root_dir = root.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
     let beside = |name: &str| if root_dir.is_empty() { name.to_string() } else { format!("{root_dir}/{name}") };
+    let root_stem = root.rsplit('/').next().and_then(|f| f.split('.').next()).unwrap_or(root);
     Ok(match ext.as_str() {
         "rs" => root.to_string(),
         "py" => join(&format!("tests/test_{}.py", snake_name(&n.name))),
+        // Go tests sit beside the code, in its package.
+        "go" => beside(&format!("{root_stem}_test.go")),
+        // Maven and Gradle mirror main/ in test/.
+        "java" | "kt" => {
+            let lang = if ext == "kt" { "kotlin" } else { "java" };
+            match root.split_once(&format!("src/main/{lang}/")) {
+                Some((base, rest)) => {
+                    let pkg = rest.rsplit_once('/').map_or("", |(p, _)| p);
+                    let dir = if pkg.is_empty() { format!("{base}src/test/{lang}") } else { format!("{base}src/test/{lang}/{pkg}") };
+                    format!("{dir}/{root_stem}Test.{ext}")
+                }
+                None => beside(&format!("{root_stem}Test.{ext}")),
+            }
+        }
+        "rb" => {
+            let (dir, suffix) = rb_dir();
+            join(&format!("{dir}/{}{suffix}.rb", snake_name(&n.name)))
+        }
+        "php" => join(&format!("tests/{}Test.php", pascal(&n.name))),
         "cs" => format!("{}/{}Tests.cs", cs_dir(), pascal(&n.name)),
         "tsx" | "ts" | "mts" | "cts" => beside(&format!("{}.test.ts", n.name)),
         _ => beside(&format!("{}.test.js", n.name)),
@@ -435,6 +472,31 @@ mod tests {
         rename_node(d, &container, "Draft Core").unwrap();
         let tree = derived_tree(d).unwrap();
         assert!(tree.planned.nodes.iter().any(|n| n.kind == Kind::Container && n.name == "Draft Core"));
+    }
+
+    /// When a new claim lands on a Go, Java, Kotlin, Ruby or PHP component
+    /// with no tests yet, puts its todo test where that language keeps tests.
+    #[test]
+    fn new_claims_go_where_each_language_keeps_tests() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "svc/go.mod", "module example.com/svc\n\ngo 1.22\n");
+        write(d, "svc/billing/bill.go", "package billing\n\nfunc Bill() {}\n");
+        write(d, "yard/pom.xml", "<project></project>\n");
+        write(d, "yard/src/main/java/space/cargo/Rack.java", "package space.cargo;\npublic class Rack {}\n");
+        write(d, "shop/Gemfile", "source \"https://rubygems.org\"\n");
+        write(d, "shop/lib/invoice.rb", "class Invoice\nend\n");
+        write(d, "dock/composer.json", "{\"name\": \"acme/dock\"}\n");
+        write(d, "hull/build.gradle.kts", "plugins { kotlin(\"jvm\") }\n");
+        write(d, "hull/src/main/kotlin/space/hull/Plate.kt", "package space.hull\nclass Plate\n");
+        write(d, "dock/src/Berth.php", "<?php\nclass Berth {}\n");
+        let tree = derived_tree(d).unwrap();
+        let target = |file: &str| stub_target(&tree, &tree.file_nodes[file]).unwrap();
+        assert_eq!(target("svc/billing/bill.go"), "svc/billing/bill_test.go");
+        assert_eq!(target("yard/src/main/java/space/cargo/Rack.java"), "yard/src/test/java/space/cargo/RackTest.java");
+        assert_eq!(target("shop/lib/invoice.rb"), "shop/spec/invoice_spec.rb");
+        assert_eq!(target("dock/src/Berth.php"), "dock/tests/BerthTest.php");
+        assert_eq!(target("hull/src/main/kotlin/space/hull/Plate.kt"), "hull/src/test/kotlin/space/hull/PlateTest.kt");
     }
 
     /// When a description or decisions are edited, they land where they are read from (a module doc, a manifest, ARCHITECTURE.md, structure.toml) and read back on the next derive.

@@ -127,7 +127,7 @@ EARS, subject dropped, condition first, one response per claim:
 | State | `While <state>, <response>` | While settlement is unconfirmed, holds funds in escrow |
 | Unwanted | `If <condition>, then <response>` | If the bank times out, then retries once |
 
-A trailing `[tag]` names a concern. A todo test (`it.todo`, `#[ignore]`, `@pytest.mark.skip`, `[Fact(Skip = …)]`) is a todo claim. A `[manual]` tag keeps a test out of the model.
+A trailing `[tag]` names a concern. A todo test (`it.todo`, `#[ignore]`, `@pytest.mark.skip`, `[Fact(Skip = …)]`, Go's `t.Skip`, JUnit's `@Disabled`, a pending RSpec example, PHPUnit's `markTestIncomplete`) is a todo claim. A `[manual]` tag keeps a test out of the model.
 
 ## MCP server
 
@@ -212,7 +212,7 @@ The server's own instructions, worth keeping in the project's CLAUDE.md (or AGEN
 
 ## Tech
 
-Rust core (`scryer-core`, `scryer-extract`, `scryer-mcp`), Tauri 2 shell, React frontend. Import resolution for Rust, TypeScript/JavaScript, Python, Go and Clojure; name-matching heuristics for Java, Ruby, C/C++, C#, PHP. Test lifting for Rust, Vitest/Jest, pytest and .NET. Module docs in every language it parses: `//!` in Rust, a file-head JSDoc, a module docstring, Clojure's `ns` docstring, and elsewhere the comment a file opens with.
+Rust core (`scryer-core`, `scryer-extract`, `scryer-mcp`), Tauri 2 shell, React frontend. Import resolution for Rust, TypeScript/JavaScript, Python, Go and Clojure; name-matching heuristics for Java, Kotlin, Ruby, C/C++, C#, PHP. Test lifting for Rust, Vitest/Jest, pytest, .NET, Go, JUnit/TestNG (Java and Kotlin), RSpec, Minitest and PHPUnit. Module docs in every language it parses: `//!` in Rust, a file-head JSDoc, a module docstring, Clojure's `ns` docstring, and elsewhere the comment a file opens with.
 
 ## Building from source
 

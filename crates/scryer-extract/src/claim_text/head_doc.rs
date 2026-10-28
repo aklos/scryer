@@ -1,6 +1,6 @@
 //! The module doc of a language with no doc-comment form for a whole file:
-//! the comment at the head of the file, before any code (C#, Java, Go, C,
-//! C++, PHP, Ruby), and Clojure's namespace docstring. Read here for the
+//! the comment at the head of the file, before any code (C#, Java, Kotlin,
+//! Go, C, C++, PHP, Ruby), and Clojure's namespace docstring. Read here for the
 //! lifter and rewritten here for the editors, so both agree on where it is.
 //!
 //! A head comment is the file's doc unless it is a licence, which is skipped,
@@ -42,7 +42,7 @@ pub(crate) struct Insert {
 /// comment.
 pub(crate) fn line_marker(ext: &str) -> Option<&'static str> {
     match ext {
-        "cs" | "java" | "go" | "c" | "h" | "cpp" | "cc" | "cxx" | "hpp" | "hh" | "hxx" | "php" => Some("//"),
+        "cs" | "java" | "kt" | "kts" | "go" | "c" | "h" | "cpp" | "cc" | "cxx" | "hpp" | "hh" | "hxx" | "php" => Some("//"),
         "rb" => Some("#"),
         _ => None,
     }

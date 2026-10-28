@@ -105,16 +105,17 @@ pub fn is_test_path(rel: &str) -> bool {
         || file == "conftest.py"
         || (file.ends_with(".py") && (stem.starts_with("test_") || stem.ends_with("_test")))
         || file.ends_with("_test.go")
-        || ((file.ends_with(".cs") || file.ends_with(".java"))
+        || (file.ends_with(".rb") && (stem.ends_with("_spec") || stem.ends_with("_test") || stem.starts_with("test_")))
+        || ([".cs", ".java", ".kt", ".php"].iter().any(|e| file.ends_with(e))
             && (stem.ends_with("Tests") || stem.ends_with("Test")))
 }
 
 /// A test file's stem with its runner markers dropped: `tree.test.ts`,
-/// `test_tree.py` and `TreeTests.cs` all name `tree`/`Tree`.
+/// `test_tree.py`, `tree_spec.rb` and `TreeTests.cs` all name `tree`/`Tree`.
 fn tested_stem(file: &str) -> String {
     let stem = file.split('.').next().unwrap_or(file);
     let stem = stem.strip_prefix("test_").unwrap_or(stem);
-    let stem = stem.strip_suffix("_test").unwrap_or(stem);
+    let stem = stem.strip_suffix("_test").or_else(|| stem.strip_suffix("_spec")).unwrap_or(stem);
     let stem = stem.strip_suffix("Tests").or_else(|| stem.strip_suffix("Test")).unwrap_or(stem);
     stem.to_string()
 }
@@ -167,7 +168,11 @@ fn inner_path<'p>(container_dir: &str, rel: &'p str) -> (&'p str, &'p str) {
     } else {
         rel.strip_prefix(container_dir).and_then(|r| r.strip_prefix('/')).unwrap_or(rel)
     };
-    let inner = inner.strip_prefix("src/").unwrap_or(inner);
+    // `src/` is a source root; so is `lib/` for Ruby, where a gem keeps its code.
+    let inner = inner
+        .strip_prefix("src/")
+        .or_else(|| inner.strip_prefix("lib/").filter(|_| rel.ends_with(".rb")))
+        .unwrap_or(inner);
     (rel[..rel.len() - inner.len()].trim_end_matches('/'), inner)
 }
 

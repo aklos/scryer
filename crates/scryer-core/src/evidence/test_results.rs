@@ -287,6 +287,8 @@ pub fn match_report(
 /// drift on exactly these.
 pub fn normalize_leaf(name: &str) -> String {
     let leaf = name.rsplit(" > ").next().unwrap_or(name);
+    // JUnit 5 shows a method as `name()`, a Kotlin backticked sentence too.
+    let leaf = leaf.strip_suffix("()").unwrap_or(leaf);
     // A data-driven case (xUnit `[InlineData]`, NUnit `[TestCase]`) is the
     // method's name plus its arguments: `Name(kind: "rock")`. Drop the list
     // — only after an identifier, so a sentence title ending in "(slow)"
@@ -304,6 +306,13 @@ pub fn normalize_leaf(name: &str) -> String {
         Some(i) if leaf.ends_with(']') => &leaf[..i],
         _ => leaf,
     };
+    // A Go subtest runs under its function: `TestParse/empty_input`.
+    let leaf = match leaf.split_once('/') {
+        Some((test, _)) if test.starts_with("Test") && !test.chars().any(char::is_whitespace) => test,
+        _ => leaf,
+    };
+    // A PHPUnit data set runs its method: `testParse with data set #0`.
+    let leaf = leaf.split(" with data set ").next().unwrap_or(leaf);
     let mut out = String::with_capacity(leaf.len());
     let mut pending_space = false;
     for ch in leaf.chars() {
@@ -452,6 +461,24 @@ mod tests {
         assert_eq!(m.claims["resp-1"].outcome, TestOutcome::Passed);
         assert_eq!(m.claims["resp-2"].outcome, TestOutcome::Passed, "spaced :: is a title, not a path");
         assert!(m.unseen.is_empty());
+    }
+
+    /// When JUnit reports a Kotlin test named by a backticked sentence, with
+    /// its trailing `()`, matches it to that test.
+    #[test]
+    fn matches_a_kotlin_sentence_test_by_its_name() {
+        assert_eq!(normalize_leaf("stacks crates in order()"), normalize_leaf("stacks crates in order"));
+        assert_eq!(normalize_leaf("rejectsEmpty()"), normalize_leaf("rejectsEmpty"));
+    }
+
+    /// When a report names a Go subtest or a PHPUnit data set, matches it to
+    /// the test it runs under.
+    #[test]
+    fn matches_go_subtests_and_phpunit_data_sets_by_their_test() {
+        assert_eq!(normalize_leaf("TestParse/empty_input"), normalize_leaf("TestParse"));
+        assert_eq!(normalize_leaf("testParse with data set #0"), normalize_leaf("testParse"));
+        assert_eq!(normalize_leaf("testParse with data set \"empty\""), normalize_leaf("testParse"));
+        assert_eq!(normalize_leaf("splits a/b paths"), "splits a/b paths", "a sentence keeps its slash");
     }
 
     /// xUnit/NUnit report each data-driven case as the method name plus its

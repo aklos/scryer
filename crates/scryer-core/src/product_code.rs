@@ -68,6 +68,7 @@ pub const SOURCE_EXTS: &[&str] = &[
     "py", "pyi", // Python
     "go", // Go
     "java", // Java
+    "kt", "kts", // Kotlin
     "rb", // Ruby
     "c", "h", // C
     "cpp", "cc", "cxx", "hpp", "hh", "hxx", // C++
@@ -131,6 +132,7 @@ pub(crate) fn classify_file(name: &str, rel_path: &Path) -> Option<Category> {
         | "bun.lock" | "flake.nix"
         | "deps.edn" | "project.clj" | "shadow-cljs.edn" | "bb.edn"
         | "build.boot" => return Some(Category::Manifest),
+        _ if name.ends_with(".gemspec") => return Some(Category::Manifest),
         _ => {}
     }
     if name.ends_with(".csproj") || name.ends_with(".fsproj") || name.ends_with(".sln") {
