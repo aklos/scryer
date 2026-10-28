@@ -45,8 +45,8 @@ pub fn classify(statement: &str) -> EarsPattern {
         ("if", EarsPattern::Unwanted),
         ("where", EarsPattern::Optional),
     ] {
-        if s.len() > kw.len() && s[..kw.len()].eq_ignore_ascii_case(kw) {
-            let rest = &s[kw.len()..];
+        let Some((head, rest)) = s.split_at_checked(kw.len()) else { continue };
+        if head.eq_ignore_ascii_case(kw) {
             if rest.starts_with("**") || rest.starts_with(char::is_whitespace) {
                 return pattern;
             }
@@ -112,6 +112,15 @@ mod tests {
     fn codes(description: &str, concerns: &[&str]) -> Vec<&'static str> {
         let concerns: Vec<String> = concerns.iter().map(|c| c.to_string()).collect();
         lint(description, &concerns).into_iter().map(|i| i.code).collect()
+    }
+
+    /// When a multibyte character falls where a keyword would end, classifies
+    /// the claim without panicking.
+    #[test]
+    fn classifies_a_claim_with_a_multibyte_character_at_a_keyword_boundary() {
+        assert_eq!(classify("GDD §4.2 rule 10: shows each hazard"), EarsPattern::Ubiquitous);
+        assert_eq!(classify("If§"), EarsPattern::Ubiquitous);
+        assert_eq!(classify("When the rig is in a field, shows its chip"), EarsPattern::Event);
     }
 
     /// Well-formed claims in each pattern pass.
