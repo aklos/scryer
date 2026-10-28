@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use tauri::Manager;
 
 use crate::shell::state::{AcpState, PreviewState, WatcherState};
-use crate::shell::{derived, mcp_setup, observability, preview, project, source_view};
+use crate::shell::{authored_model, derived, mcp_setup, observability, preview, project, source_view};
 
 /// macOS GUI apps launched via Spotlight, Dock, or Finder inherit a minimal
 /// PATH (`/usr/bin:/bin:/usr/sbin:/sbin`) that excludes user-installed tools.
@@ -68,6 +68,9 @@ pub fn run() {
             mcp_setup::detect_ai_tools,
             mcp_setup::agent_integration,
             mcp_setup::set_agent_integration,
+            authored_model::authored_model,
+            authored_model::migrate_authored_model,
+            authored_model::remove_authored_model,
             project::get_subagent_settings,
             project::set_subagent_settings,
             preview::ensure_preview_server,

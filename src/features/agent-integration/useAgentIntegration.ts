@@ -31,6 +31,36 @@ export interface SetupStatus {
   notes: string[];
 }
 
+/** What each part is called where people read it. */
+export const PART_LABEL: Record<SetupEntry["part"], string> = {
+  mcpServer: "mcp server",
+  autoApprove: "auto-approve",
+  hooks: "hooks",
+  statusline: "status line",
+  skill: "skill",
+  gitignore: "gitignore",
+};
+
+/** What `setup on` would fix in a project scryer was set up in before. */
+export interface IntegrationGap {
+  /** Scryer's, but not what this scryer writes: an earlier skill, a moved binary. */
+  stale: SetupEntry["part"][];
+  /** Not there, for a tool `setup on` writes for. */
+  missing: SetupEntry["part"][];
+}
+
+/** The parts out of date and the parts missing, when some of scryer's
+ *  entries are in place but integration is not on: a project set up by an
+ *  earlier scryer, or half-undone by hand. Null when it is on, or was never
+ *  set up at all. */
+export function integrationGap(status: SetupStatus): IntegrationGap | null {
+  const all = [status.gitignore, ...status.tools.flatMap((t) => t.entries)];
+  if (status.on || !all.some((e) => e.state === "installed" || e.state === "stale")) return null;
+  const writable = [status.gitignore, ...status.tools.filter((t) => t.detected).flatMap((t) => t.entries)];
+  const parts = (state: EntryState) => [...new Set(writable.filter((e) => e.state === state).map((e) => e.part))];
+  return { stale: parts("stale"), missing: parts("missing") };
+}
+
 export interface AgentIntegration {
   status: SetupStatus | null;
   busy: boolean;

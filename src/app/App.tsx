@@ -26,6 +26,7 @@ import { ProjectPicker } from "../pages/project-picker/ProjectPicker";
 import { SearchPalette } from "../features/search/SearchPalette";
 import { Powerline } from "../widgets/top-bar/Powerline";
 import { SettingsPanel } from "../widgets/settings-panel/SettingsPanel";
+import { ProjectNotices } from "../widgets/project-notices/ProjectNotices";
 import { useLaunchSettings } from "../features/agent-launch/useLaunchSettings";
 import { useAgentLaunchGate } from "../features/agent-launch/AgentLaunchConfirm";
 import { useModelStorage, type ModelStorage } from "../features/model-storage/useModelStorage";
@@ -429,6 +430,7 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
         treeOpen={sidebar.open}
         onToggleTree={toggleTree}
       />
+      <ProjectNotices projectPath={projectPath} />
       <div className="relative flex min-h-0 flex-1">
         {sidebar.mode === "drawer" && (
           <div className="absolute inset-0 z-30 bg-black/30" onClick={dismissTree} />

@@ -4,16 +4,7 @@
  * the new-project screen both mount it.
  */
 
-import { useAgentIntegration, type SetupEntry, type SetupStatus } from "./useAgentIntegration";
-
-const PART_LABEL: Record<SetupEntry["part"], string> = {
-  mcpServer: "mcp server",
-  autoApprove: "auto-approve",
-  hooks: "hooks",
-  statusline: "status line",
-  skill: "skill",
-  gitignore: "gitignore",
-};
+import { PART_LABEL, useAgentIntegration, type SetupEntry, type SetupStatus } from "./useAgentIntegration";
 
 const STATE_CLASS: Record<SetupEntry["state"], string> = {
   installed: "text-emerald-500",

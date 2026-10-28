@@ -2,6 +2,7 @@
 //! they share.
 
 pub mod app;
+pub mod authored_model;
 pub mod derived;
 pub mod mcp_setup;
 pub mod observability;
