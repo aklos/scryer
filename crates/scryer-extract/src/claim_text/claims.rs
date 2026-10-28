@@ -10,6 +10,7 @@
 use crate::code_map as lang;
 use std::collections::BTreeSet;
 use std::path::Path;
+use std::rc::Rc;
 use tree_sitter::{Node, Parser};
 
 /// One behaviour test as a claim.
@@ -69,7 +70,7 @@ pub fn lift_file(rel_path: &str, source: &str, parser: &mut Parser) -> FileLift 
             (lift.module_description, lift.module_body) = rust_module_doc(root, bytes);
         }
         "ts" | "mts" | "cts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" => {
-            js_tests(root, bytes, &mut Vec::new(), false, &mut lift.tests);
+            js_tests(root, bytes, &mut lift.tests);
             (lift.module_description, lift.module_body) = js_module_doc(root, bytes);
         }
         "py" => {
@@ -423,58 +424,74 @@ fn js_unescape(raw: &str) -> String {
     out
 }
 
-fn js_tests(
-    node: Node,
-    bytes: &[u8],
-    suite: &mut Vec<String>,
-    skipped: bool,
-    out: &mut Vec<LiftedTest>,
-) {
-    let mut cursor = node.walk();
-    for child in node.named_children(&mut cursor) {
-        if child.kind() == "call_expression" {
-            let shape = child
-                .child_by_field_name("function")
-                .and_then(|f| js_call_shape(f, bytes));
-            let args = child.child_by_field_name("arguments");
-            let name_node = args.and_then(|a| a.named_child(0));
-            let name = name_node.and_then(|n| js_string(n, bytes));
-            if let (Some(shape), Some(name)) = (shape, name) {
-                let skip_here = shape.modifiers.iter().any(|m| matches!(*m, "skip" | "todo"))
-                    || shape.base.starts_with('x');
-                let base = shape.base.trim_start_matches(['x', 'f']);
-                match base {
-                    "describe" | "suite" | "context" => {
-                        suite.push(name);
-                        if let Some(args) = args {
-                            js_tests(args, bytes, suite, skipped || skip_here, out);
+/// One step of [`js_tests`]' walk.
+enum JsStep<'t> {
+    /// Look for tests under a node, inside these `describe`s.
+    Walk(Node<'t>, Rc<Vec<String>>, bool),
+    /// A test found, emitted when the walk reaches it in source order.
+    Emit(LiftedTest),
+}
+
+fn js_tests(root: Node, bytes: &[u8], out: &mut Vec<LiftedTest>) {
+    // An explicit stack, not recursion: generated files nest thousands of
+    // levels deep (a long chain of joined strings), past a worker thread's
+    // stack. Children go on in reverse so tests come out in source order.
+    let mut stack = vec![JsStep::Walk(root, Rc::new(Vec::new()), false)];
+    while let Some(step) = stack.pop() {
+        let (node, suite, skipped) = match step {
+            JsStep::Emit(test) => {
+                out.push(test);
+                continue;
+            }
+            JsStep::Walk(node, suite, skipped) => (node, suite, skipped),
+        };
+        let mut cursor = node.walk();
+        let children: Vec<Node> = node.named_children(&mut cursor).collect();
+        for child in children.into_iter().rev() {
+            if child.kind() == "call_expression" {
+                let shape = child
+                    .child_by_field_name("function")
+                    .and_then(|f| js_call_shape(f, bytes));
+                let args = child.child_by_field_name("arguments");
+                let name_node = args.and_then(|a| a.named_child(0));
+                let name = name_node.and_then(|n| js_string(n, bytes));
+                if let (Some(shape), Some(name)) = (shape, name) {
+                    let skip_here = shape.modifiers.iter().any(|m| matches!(*m, "skip" | "todo"))
+                        || shape.base.starts_with('x');
+                    let base = shape.base.trim_start_matches(['x', 'f']);
+                    match base {
+                        "describe" | "suite" | "context" => {
+                            if let Some(args) = args {
+                                let mut inner = (*suite).clone();
+                                inner.push(name);
+                                stack.push(JsStep::Walk(args, Rc::new(inner), skipped || skip_here));
+                            }
+                            continue;
                         }
-                        suite.pop();
-                        continue;
+                        "it" | "test" | "specify" => {
+                            let junit = suite
+                                .iter()
+                                .cloned()
+                                .chain(std::iter::once(name.clone()))
+                                .collect::<Vec<_>>()
+                                .join(" > ");
+                            let planned = skipped || skip_here;
+                            // The identifier is the literal as written: anchors
+                            // find the test block by it.
+                            let raw = name_node.map(|n| {
+                                let t = text(n, bytes);
+                                t[1..t.len().saturating_sub(1)].to_string()
+                            });
+                            let identifier = raw.unwrap_or_else(|| name.clone());
+                            stack.push(JsStep::Emit(make_test(child, bytes, identifier, Some(name), junit, planned)));
+                            continue;
+                        }
+                        _ => {}
                     }
-                    "it" | "test" | "specify" => {
-                        let junit = suite
-                            .iter()
-                            .cloned()
-                            .chain(std::iter::once(name.clone()))
-                            .collect::<Vec<_>>()
-                            .join(" > ");
-                        let planned = skipped || skip_here;
-                        // The identifier is the literal as written: anchors
-                        // find the test block by it.
-                        let raw = name_node.map(|n| {
-                            let t = text(n, bytes);
-                            t[1..t.len().saturating_sub(1)].to_string()
-                        });
-                        let identifier = raw.unwrap_or_else(|| name.clone());
-                        out.push(make_test(child, bytes, identifier, Some(name), junit, planned));
-                        continue;
-                    }
-                    _ => {}
                 }
             }
+            stack.push(JsStep::Walk(child, Rc::clone(&suite), skipped));
         }
-        js_tests(child, bytes, suite, skipped, out);
     }
 }
 
@@ -743,6 +760,22 @@ mod tests {
 
     fn lift(path: &str, src: &str) -> FileLift {
         lift_file(path, src, &mut Parser::new())
+    }
+
+    /// When a JS file nests thousands of expressions deep, such as a long
+    /// chain of joined strings, reads its tests without overflowing a
+    /// worker thread's stack.
+    #[test]
+    fn reads_a_deeply_nested_js_file_on_a_small_stack() {
+        let src = format!("const s = {}'a';\ndescribe(\"pack\", () => {{ it(\"loads\", () => {{}}); }});\n", "'a' + ".repeat(50_000));
+        let tests = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || lift("textures.js", &src).tests)
+            .unwrap()
+            .join()
+            .unwrap();
+        let got: Vec<&str> = tests.iter().map(|t| t.junit_name.as_str()).collect();
+        assert_eq!(got, vec!["pack > loads"]);
     }
 
     /// When a claim's first word is a plain lowercase word it starts with a capital, and when that word looks like code it stays as written, while the JUnit name keeps the report's spelling.
@@ -1017,3 +1050,4 @@ public class DockTests
         assert_eq!(split_concerns("plain"), ("plain".to_string(), vec![]));
     }
 }
+
