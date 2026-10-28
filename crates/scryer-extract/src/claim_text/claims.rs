@@ -77,13 +77,25 @@ pub fn lift_file(rel_path: &str, source: &str, parser: &mut Parser) -> FileLift 
             py_tests(root, bytes, false, &mut lift.tests);
             (lift.module_description, lift.module_body) = py_module_doc(root, bytes);
         }
-        "cs" => cs_tests(root, bytes, &mut lift.tests),
-        _ => {}
+        "cs" => {
+            cs_tests(root, bytes, &mut lift.tests);
+            (lift.module_description, lift.module_body) = head_doc_parts(ext, source);
+        }
+        _ => (lift.module_description, lift.module_body) = head_doc_parts(ext, source),
     }
     // A `[manual]` test is a tool run by hand, not a claim.
     lift.tests.retain(|t| !t.concerns.iter().any(|c| c == MANUAL_TAG));
     lift.tests.sort_by_key(|t| t.line);
     lift
+}
+
+/// The module doc of a language whose file doc is its head comment or, in
+/// Clojure, its namespace docstring.
+/// Javadoc's `@` tags, and all after them, are no part of the prose.
+fn head_doc_parts(ext: &str, source: &str) -> (Option<String>, Option<String>) {
+    let Some(doc) = super::head_doc::head_doc(ext, source) else { return (None, None) };
+    let prose: Vec<String> = doc.lines.into_iter().take_while(|l| !l.starts_with('@')).collect();
+    doc_parts(&prose)
 }
 
 /// The tag that keeps a test out of the claims: an ad-hoc tool, run by hand.
@@ -727,7 +739,7 @@ fn cs_xml_summary(member: Node, bytes: &[u8]) -> Option<String> {
     first_paragraph(&[plain])
 }
 
-fn strip_xml_tags(s: &str) -> String {
+pub(crate) fn strip_xml_tags(s: &str) -> String {
     let mut out = String::new();
     let mut rest = s;
     while let Some(open) = rest.find('<') {
@@ -760,6 +772,46 @@ mod tests {
 
     fn lift(path: &str, src: &str) -> FileLift {
         lift_file(path, src, &mut Parser::new())
+    }
+
+    /// When a C#, Java, Go, C, C++, PHP or Ruby file opens with a comment
+    /// that is not a licence and not on a declaration, reads it as the
+    /// file's module doc.
+    #[test]
+    fn reads_head_comments_as_module_docs() {
+        let desc = |path: &str, src: &str| lift(path, src).module_description;
+        let cs = lift("Rack.cs", "// Moves cargo between racks.\n//\n// Racks before holds.\n\nnamespace Shared;\npublic class Rack {}\n");
+        assert_eq!(cs.module_description.as_deref(), Some("Moves cargo between racks."));
+        assert_eq!(cs.module_body.as_deref(), Some("Racks before holds."));
+        assert_eq!(
+            desc("Cab.cs", "// Copyright 2026 Truckers. All rights reserved.\n\n// The cab's screens.\n\nusing System;\n").as_deref(),
+            Some("The cab's screens.")
+        );
+        assert_eq!(desc("Head.cs", "/// <summary>Racks and holds.</summary>\nusing System;\n").as_deref(), Some("Racks and holds."));
+        assert_eq!(desc("Rack.cs", "/// <summary>A rack.</summary>\npublic class Rack {}\n"), None, "a type's own doc");
+        assert_eq!(desc("cargo.go", "// Package cargo moves cargo.\npackage cargo\n").as_deref(), Some("Package cargo moves cargo."));
+        assert_eq!(
+            desc("package-info.java", "/**\n * Market rules.\n *\n * @author someone\n */\npackage market;\n").as_deref(),
+            Some("Market rules.")
+        );
+        assert_eq!(lift("package-info.java", "/**\n * Market rules.\n *\n * @author someone\n */\npackage market;\n").module_body, None);
+        assert_eq!(desc("ring.c", "/* Ring buffer for samples. */\n#include <stdio.h>\n").as_deref(), Some("Ring buffer for samples."));
+        assert_eq!(desc("ring.hpp", "// Ring buffer for samples.\n#pragma once\n").as_deref(), Some("Ring buffer for samples."));
+        assert_eq!(desc("Router.php", "<?php\n// Routes requests.\n\nnamespace App;\n").as_deref(), Some("Routes requests."));
+        assert_eq!(
+            desc("billing.rb", "# frozen_string_literal: true\n\n# Bills customers.\nmodule Billing\nend\n").as_deref(),
+            Some("Bills customers.")
+        );
+        assert_eq!(desc("invoice.rb", "# An invoice.\nclass Invoice\nend\n"), None, "a class's own doc");
+    }
+
+    /// Reads a Clojure namespace's docstring as its module doc.
+    #[test]
+    fn reads_a_clojure_ns_docstring() {
+        let l = lift("cargo.clj", "(ns space.cargo\n  \"Moves cargo.\n\n  Racks first.\"\n  (:require [clojure.string]))\n");
+        assert_eq!(l.module_description.as_deref(), Some("Moves cargo."));
+        assert_eq!(l.module_body.as_deref(), Some("Racks first."));
+        assert_eq!(lift("bare.clj", "(ns space.bare\n  (:require [clojure.string]))\n").module_description, None);
     }
 
     /// When a JS file nests thousands of expressions deep, such as a long

@@ -130,8 +130,15 @@ fn file_stem(rel: &str) -> &str {
 
 const ENTRY_FILES: &[&str] = &[
     "lib.rs", "main.rs", "mod.rs", "index.ts", "index.tsx", "index.js", "index.jsx", "index.mjs",
-    "__init__.py", "main.py", "Program.cs",
+    "__init__.py", "main.py", "Program.cs", "doc.go", "package-info.java",
 ];
+
+/// The file that speaks for its folder: an entry file, or in a language
+/// without one, the file named after the folder (`Cargo/Cargo.cs`).
+fn is_folder_root(rel: &str) -> bool {
+    let parent = rel.rsplit_once('/').map(|(d, _)| d.rsplit('/').next().unwrap_or(d));
+    ENTRY_FILES.contains(&file_name(rel)) || parent.is_some_and(|p| p == file_stem(rel))
+}
 
 fn is_test_container(c: &ContainerFacts) -> bool {
     let base = c.dir.rsplit('/').next().unwrap_or(&c.dir).to_lowercase();
@@ -503,7 +510,7 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
             let comp = &components[&file_component[f]];
             input.lifts[*f].module_description.is_some()
                 && inner_path(&comp.container_dir, f).1.contains('/')
-                && !ENTRY_FILES.contains(&file_name(f))
+                && !is_folder_root(f)
         })
         .collect();
 
@@ -527,7 +534,7 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
             .filter(|rel| {
                 let name = file_name(rel);
                 let in_dir = rel.strip_prefix(path.as_str()).and_then(|r| r.strip_prefix('/'));
-                in_dir.is_some_and(|r| !r.contains('/') && ENTRY_FILES.contains(&name))
+                in_dir.is_some_and(|r| !r.contains('/') && is_folder_root(rel))
                     || (rel.rsplit_once('.').is_some_and(|(no_ext, _)| no_ext == path) && !ENTRY_FILES.contains(&name))
             })
             .collect();

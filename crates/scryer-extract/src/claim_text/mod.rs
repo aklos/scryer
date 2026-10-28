@@ -3,6 +3,7 @@
 
 pub mod claims;
 pub mod claim_edit;
+pub(crate) mod head_doc;
 
 pub use claims::*;
 pub use claim_edit::*;

@@ -212,7 +212,7 @@ The server's own instructions, worth keeping in the project's CLAUDE.md (or AGEN
 
 ## Tech
 
-Rust core (`scryer-core`, `scryer-extract`, `scryer-mcp`), Tauri 2 shell, React frontend. Import resolution for Rust, TypeScript/JavaScript, Python, Go and Clojure; name-matching heuristics for Java, Ruby, C/C++, C#, PHP. Test lifting for Rust, Vitest/Jest, pytest and .NET.
+Rust core (`scryer-core`, `scryer-extract`, `scryer-mcp`), Tauri 2 shell, React frontend. Import resolution for Rust, TypeScript/JavaScript, Python, Go and Clojure; name-matching heuristics for Java, Ruby, C/C++, C#, PHP. Test lifting for Rust, Vitest/Jest, pytest and .NET. Module docs in every language it parses: `//!` in Rust, a file-head JSDoc, a module docstring, Clojure's `ns` docstring, and elsewhere the comment a file opens with.
 
 ## Building from source
 

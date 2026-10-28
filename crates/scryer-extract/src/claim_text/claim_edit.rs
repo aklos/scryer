@@ -3,6 +3,7 @@
 //! DisplayName or XML summary), and writing a new claim as a todo stub in
 //! the language's own form. Text in, text out; the caller does the I/O.
 
+use super::head_doc;
 use crate::code_map as lang;
 use std::path::Path;
 use tree_sitter::{Node, Parser};
@@ -344,6 +345,28 @@ pub fn add_module_doc(rel_path: &str, source: &str, statements: &[String]) -> Re
                 None => format!("\"\"\"{paras}\"\"\"\n\n{source}"),
             }
         }
+        _ if head_doc::line_marker(ext).is_some() || head_doc::is_clojure(ext) => match head_doc::head_doc(ext, source) {
+            Some(doc) => {
+                let mut lines = doc.lines.clone();
+                for s in &fresh {
+                    lines.push(String::new());
+                    lines.push(s.to_string());
+                }
+                splice(source, doc.start, doc.end, &head_doc::render(&lines, &doc.style))
+            }
+            None => {
+                let at = head_doc::insert_point(ext, source).ok_or("no ns form to hold a namespace docstring")?;
+                let mut lines: Vec<String> = Vec::new();
+                for (i, s) in fresh.iter().enumerate() {
+                    if i > 0 {
+                        lines.push(String::new());
+                    }
+                    lines.push(s.to_string());
+                }
+                let doc = head_doc::render(&lines, &head_doc::new_style(ext));
+                splice(source, at.at, at.at, &format!("{}{doc}{}", at.before, at.after))
+            }
+        },
         _ => return Err(format!("no module doc comments in .{ext} files")),
     };
     Ok(Some(out))
@@ -514,6 +537,12 @@ fn edit_module_doc(rel_path: &str, source: &str, part: DocPart) -> Result<String
             }
             let rebuilt = format!("{}{}{}", &raw[..open + 3], docs.join("\n"), quote);
             Ok(splice(source, s.start_byte(), s.end_byte(), &rebuilt))
+        }
+        _ if head_doc::line_marker(ext).is_some() || head_doc::is_clojure(ext) => {
+            let Some(doc) = head_doc::head_doc(ext, source) else { return fresh() };
+            let mut docs = doc.lines.clone();
+            splice_doc(&mut docs, &part, |s| s.to_string());
+            Ok(splice(source, doc.start, doc.end, &head_doc::render(&docs, &doc.style)))
         }
         _ => Err(format!("no module doc comments in .{ext} files")),
     }
@@ -708,6 +737,39 @@ fn cs_stub(rel_path: &str, source: Option<&str>, claim: &str) -> Result<String, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// When a module doc is written or edited in C#, Go, Ruby or Clojure,
+    /// writes it in the language's own form, keeping a Go package comment on
+    /// its package clause, and it reads back as written.
+    #[test]
+    fn module_docs_round_trip_in_every_language() {
+        let read = |path: &str, src: &str| {
+            let l = crate::claim_text::lift_file(path, src, &mut Parser::new());
+            (l.module_description, l.module_body)
+        };
+        let add = |path: &str, src: &str| add_module_doc(path, src, &["Moves cargo.".into()]).unwrap().unwrap();
+
+        let cs = add("Rack.cs", "namespace Shared;\npublic class Rack {}\n");
+        assert_eq!(cs, "// Moves cargo.\n\nnamespace Shared;\npublic class Rack {}\n");
+        let cs = set_module_summary("Rack.cs", &cs, "Moves cargo between racks.").unwrap();
+        let cs = set_module_body("Rack.cs", &cs, "Racks before holds.").unwrap();
+        assert_eq!(read("Rack.cs", &cs), (Some("Moves cargo between racks.".into()), Some("Racks before holds.".into())));
+        assert!(cs.ends_with("\n\nnamespace Shared;\npublic class Rack {}\n"), "{cs}");
+
+        let go = add("cargo.go", "package cargo\n");
+        assert_eq!(go, "// Moves cargo.\npackage cargo\n", "a Go package comment sits on its clause");
+        assert_eq!(read("cargo.go", &go).0.as_deref(), Some("Moves cargo."));
+
+        let rb = add("billing.rb", "# frozen_string_literal: true\nclass Invoice\nend\n");
+        assert!(rb.starts_with("# frozen_string_literal: true\n# Moves cargo.\n\nclass"), "{rb}");
+        assert_eq!(read("billing.rb", &rb).0.as_deref(), Some("Moves cargo."));
+
+        let clj = add("cargo.clj", "(ns space.cargo\n  (:require [clojure.string]))\n");
+        assert_eq!(clj, "(ns space.cargo\n  \"Moves cargo.\"\n  (:require [clojure.string]))\n");
+        let clj = set_module_body("cargo.clj", &clj, "Racks \"first\".").unwrap();
+        assert_eq!(read("cargo.clj", &clj), (Some("Moves cargo.".into()), Some("Racks \"first\".".into())));
+        assert!(add_module_doc("bare.clj", "(defn f [] 1)\n", &["Moves cargo.".into()]).is_err(), "no ns form to hold it");
+    }
     use crate::claims::lift_file;
 
     fn lifted(path: &str, src: &str) -> Vec<(String, bool)> {
@@ -794,7 +856,7 @@ mod tests {
         assert_eq!(docs("b.ts", &fresh_ts).as_deref(), Some("Counts."));
         let py = add_module_doc("a.py", "\"\"\"Prices.\"\"\"\nx = 1\n", &st(&["Rounds."])).unwrap().unwrap();
         assert_eq!(py, "\"\"\"Prices.\n\nRounds.\n\"\"\"\nx = 1\n");
-        assert!(add_module_doc("A.cs", "class A {}", &st(&["x"])).is_err());
+        assert!(add_module_doc("notes.txt", "x", &st(&["Notes."])).is_err(), "a file no grammar reads has no module doc");
     }
 
     /// When decisions are edited, the module doc after its first paragraph is

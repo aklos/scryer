@@ -333,6 +333,33 @@ mod tests {
         assert_eq!(layerless, BTreeSet::from(["odd"]), "{:?}", tree.style_violations);
     }
 
+    /// Takes a folder component's description and layer from the file named
+    /// after the folder, Go's `doc.go` or Java's `package-info.java`, and
+    /// never splits that file out as a component of its own.
+    #[test]
+    fn a_folder_is_documented_by_its_named_root_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "Shared/Shared.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n");
+        write(d, "Shared/Cargo/Cargo.cs", "// Moves cargo between racks. [features]\n\nnamespace Shared;\n");
+        write(d, "Shared/Cargo/Rack.cs", "// Holds a stack.\n\nnamespace Shared;\npublic class Rack {}\n");
+        write(d, "Shared/Cargo/Hold.cs", "namespace Shared;\npublic class Hold {}\n");
+        write(d, "svc/go.mod", "module example.com/svc\n\ngo 1.22\n");
+        write(d, "svc/billing/doc.go", "// Package billing bills customers.\npackage billing\n");
+        write(d, "svc/billing/bill.go", "package billing\n\nfunc Bill() {}\n");
+        write(d, ".scryer/structure.toml", "[containers.Shared]\nstyle = \"ecs\"\n");
+        let tree = derived_tree_uncached(d).unwrap();
+        let named: Vec<&scryer_core::Node> = tree.planned.nodes.iter().filter(|n| n.kind == Kind::Component).collect();
+        let one = |name: &str| *named.iter().find(|n| n.name == name).unwrap_or_else(|| panic!("no {name} in {named:?}"));
+        assert_eq!(one("Cargo").description.as_deref(), Some("Moves cargo between racks."));
+        assert_eq!(one("Cargo").layer.as_deref(), Some("features"));
+        assert_eq!(one("Rack").description.as_deref(), Some("Holds a stack."), "another documented file is a sub-component");
+        assert_eq!(one("Rack").parent_id.as_deref(), Some(one("Cargo").id.as_str()));
+        assert!(!named.iter().any(|n| n.name == "Cargo" && n.parent_id.as_deref() == Some(one("Cargo").id.as_str())));
+        assert_eq!(one("billing").description.as_deref(), Some("Package billing bills customers."));
+        assert!(!named.iter().any(|n| n.name == "doc"), "doc.go speaks for its folder");
+    }
+
     /// When a top folder is named for one of its container's style layers, makes each folder inside it a component on that layer, in any language, and keeps the files loose in it one component named for the layer.
     #[test]
     fn a_layer_folder_holds_components_not_one() {
