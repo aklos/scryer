@@ -304,6 +304,20 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         context_ids.insert(name, system_id.clone());
     }
 
+    let layers_of = |dir: &str| -> Vec<String> {
+        let dir = s.package_owner(dir).unwrap_or(dir);
+        match input.containers.iter().find(|c| c.dir == dir).and_then(|c| s.container(&c.name, &c.dir)) {
+            Some(k) if !k.layers.is_empty() => k.layers.clone(),
+            Some(k) => k
+                .style
+                .as_deref()
+                .and_then(|st| styles.get(st))
+                .map(|d| d.layer_names().iter().map(|l| l.to_string()).collect())
+                .unwrap_or_default(),
+            None => Vec::new(),
+        }
+    };
+
     let mut container_ids: HashMap<&str, String> = HashMap::new();
     let mut containers_sorted: Vec<&ContainerFacts> = input
         .containers
@@ -345,7 +359,9 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
                 (None, None) => (None, STRUCTURE_FILE.to_string()),
             },
         };
-        n.description = description;
+        // An entry file that is also a component (`Program.cs`) ends its doc
+        // with that component's layer; the container's description leaves it off.
+        n.description = declared_layer(description, &layers_of(&c.dir)).0;
         doc_files.insert(id.clone(), source);
         let glob = if c.dir.is_empty() { "**".to_string() } else { format!("{}/**", c.dir) };
         model.boundaries.insert(id.clone(), vec![Source { pattern: glob, comment: None }]);
@@ -380,19 +396,6 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
 
     // The layers a container's style gives its components, by container dir:
     // a package's are those of the container it is built into.
-    let layers_of = |dir: &str| -> Vec<String> {
-        let dir = s.package_owner(dir).unwrap_or(dir);
-        match input.containers.iter().find(|c| c.dir == dir).and_then(|c| s.container(&c.name, &c.dir)) {
-            Some(k) if !k.layers.is_empty() => k.layers.clone(),
-            Some(k) => k
-                .style
-                .as_deref()
-                .and_then(|st| styles.get(st))
-                .map(|d| d.layer_names().iter().map(|l| l.to_string()).collect())
-                .unwrap_or_default(),
-            None => Vec::new(),
-        }
-    };
     // A package's components are the directories its entry points reach
     // through the import graph: the entries its manifest or page names, and
     // Cargo's conventional targets. An entry's top directory in the package
@@ -560,7 +563,11 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         // one of the style's layers is that layer.
         let (description, declared) = declared_layer(doc, &layers);
         n.description = description;
-        n.layer = declared.or_else(|| layer_folder(&comp.container_dir, path, &layers));
+        // A one-file component that is its container's entry file gave its
+        // description to the container; its doc still declares its layer.
+        let entry = comp.files.iter().next().filter(|f| roots.is_empty() && comp.files.len() == 1 && ENTRY_FILES.contains(&file_name(f)));
+        let entry_layer = || declared_layer(entry.and_then(|f| input.lifts.get(f.as_str())?.module_description.clone()), &layers).1;
+        n.layer = declared.or_else(entry_layer).or_else(|| layer_folder(&comp.container_dir, path, &layers));
         model.boundaries.insert(
             comp.id.clone(),
             comp.patterns.iter().map(|p| Source { pattern: p.clone(), comment: None }).collect(),

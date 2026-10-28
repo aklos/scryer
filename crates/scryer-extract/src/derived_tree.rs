@@ -425,6 +425,25 @@ mod tests {
         assert!(typo.style_violations.iter().any(|v| v.kind == "unmatched" && v.detail.contains("as_layer names Shard")), "{:?}", typo.style_violations);
     }
 
+    /// When a container's entry file is a component of its own, takes that
+    /// component's layer from the file's doc and leaves the tag off the
+    /// container's description.
+    #[test]
+    fn an_entry_file_declares_its_own_components_layer() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "Server/Server.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n");
+        write(d, "Server/Program.cs", "// Runs the server loop. [composition]\n\nusing System;\nConsole.WriteLine(1);\n");
+        write(d, ".scryer/structure.toml", "[containers.Server]\nstyle = \"hexagonal\"\n");
+        let tree = derived_tree_uncached(d).unwrap();
+        let nodes = &tree.planned.nodes;
+        let program = nodes.iter().find(|n| n.kind == Kind::Component && n.name == "Program").expect("a Program component");
+        assert_eq!(program.layer.as_deref(), Some("composition"));
+        let server = nodes.iter().find(|n| n.kind == Kind::Container).unwrap();
+        assert_eq!(server.description.as_deref(), Some("Runs the server loop."));
+        assert!(!tree.style_violations.iter().any(|v| v.kind == "layerless"), "{:?}", tree.style_violations);
+    }
+
     /// Takes a Ruby container's `lib/` as its source root, so each file and
     /// folder in it is a component, a folder's same-named file its root.
     #[test]
