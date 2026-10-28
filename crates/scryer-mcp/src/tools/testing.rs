@@ -27,6 +27,45 @@ use scryer_extract::test_status::{
 /// How many radius tests a response lists by name; the command carries all.
 const TESTS_SHOWN: usize = 12;
 
+/// What stands between `run`'s Rust tests and a JUnit report, for the agent
+/// to tell the developer: plain `cargo test` writes none, so their verdicts
+/// need cargo-nextest and a `junit` profile in `.config/nextest.toml`. `None`
+/// when nothing is missing or no Rust test is in the radius.
+fn cargo_junit_gap(project: &std::path::Path, run: &[RadiusTest], nextest: impl FnOnce() -> bool) -> Option<String> {
+    if !run.iter().any(|t| t.pattern.ends_with(".rs")) {
+        return None;
+    }
+    let profile = std::fs::read_to_string(project.join(".config/nextest.toml"))
+        .is_ok_and(|c| c.contains("[profile.junit.junit]"));
+    let installed = nextest();
+    if profile && installed {
+        return None;
+    }
+    let mut msg = String::from(
+        "\nRust tests can't be recorded yet: `cargo test` writes no JUnit report. Tell the developer \
+         what is missing and, with their go-ahead:",
+    );
+    if !installed {
+        msg.push_str("\n  - install cargo-nextest: cargo install cargo-nextest --locked");
+    }
+    if !profile {
+        msg.push_str("\n  - add to .config/nextest.toml: [profile.junit.junit] path = \"junit.xml\"");
+    }
+    msg.push_str(
+        "\nThen `cargo nextest run --profile junit` writes target/nextest/junit/junit.xml for ingest_test_report.",
+    );
+    Some(msg)
+}
+
+/// cargo-nextest answers in `project`.
+fn nextest_installed(project: &std::path::Path) -> bool {
+    std::process::Command::new("cargo")
+        .args(["nextest", "--version"])
+        .current_dir(project)
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
 fn error(text: impl Into<String>) -> Result<CallToolResult, McpError> {
     Ok(CallToolResult::error(vec![Content::text(text.into())]))
 }
@@ -258,6 +297,10 @@ A survivor is a finding: locate the files it names and strengthen their tests.")
         if hits.len() > TESTS_SHOWN {
             msg.push_str(&format!("\n  … {} more", hits.len() - TESTS_SHOWN));
         }
+        let project = model_ref.project_path();
+        if let Some(gap) = cargo_junit_gap(project, &run, || nextest_installed(project)) {
+            msg.push_str(&gap);
+        }
         Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 
@@ -452,6 +495,21 @@ mod tests {
 
         let sync = radius(&server, &dir, Some(&["crates/notes/src/sync.rs"]));
         assert!(sync.contains("Radius clear"), "nothing imports sync.rs: {sync}");
+    }
+
+    /// When the radius holds Rust tests and cargo-nextest or its junit profile is missing, names what to install or add for the developer; with both in place, or no Rust test, says nothing.
+    #[test]
+    fn a_missing_cargo_junit_reporter_is_flagged() {
+        let dir = tempfile::tempdir().unwrap();
+        let test = |pattern: &str| RadiusTest { pattern: pattern.into(), name: None, claims: Vec::new(), millis: None };
+        let rust = [test("crates/a/src/lib.rs")];
+        let gap = cargo_junit_gap(dir.path(), &rust, || false).unwrap();
+        assert!(gap.contains("cargo install cargo-nextest") && gap.contains("[profile.junit.junit]"), "{gap}");
+        write(dir.path(), ".config/nextest.toml", "[profile.junit.junit]\npath = \"junit.xml\"\n");
+        let gap = cargo_junit_gap(dir.path(), &rust, || false).unwrap();
+        assert!(gap.contains("cargo install") && !gap.contains("add to"), "{gap}");
+        assert_eq!(cargo_junit_gap(dir.path(), &rust, || true), None);
+        assert_eq!(cargo_junit_gap(dir.path(), &[test("src/a.test.ts")], || false), None);
     }
 
     /// With no files named, the radius covers this session's edits; with
