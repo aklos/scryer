@@ -359,6 +359,10 @@ pub fn check_code(
                 continue;
             }
             let inbound_def = def;
+            // Its open layers are everyone's vocabulary: any layer may use them.
+            if inbound_def.is_open(dl) {
+                continue;
+            }
             let Some(def) = governing(&src_comp.id) else { continue };
             // A LIBRARY is imported as a module, not talked to as a system, so
             // the importer's own matrix decides — its application may use the
@@ -404,9 +408,14 @@ pub fn check_code(
                     src_c,
                     format!(
                         "{} `{}` ({sl}) reaches out of container '{}' to `{}` in '{}' — in style \
-                         '{}' only {} talks to the outside",
+                         '{}' only {} talks to the outside{}",
                         e.src_file, e.src_symbol, src_c.name, e.dst_symbol, dst_c.name, def.name,
-                        def.outbound.join(" or ")
+                        def.outbound.join(" or "),
+                        if inbound_def.open.is_empty() {
+                            String::new()
+                        } else {
+                            format!(", though any layer may use its {} layer", inbound_def.open.join(" or "))
+                        }
                     ),
                 ));
             }
@@ -1158,6 +1167,41 @@ mod tests {
         assert_eq!((v.node.as_str(), v.container.as_str()), ("page", "ui"));
         assert!(v.detail.contains("(pages) reaches out of container 'Ui'"), "{}", v.detail);
         assert!(v.detail.contains("only shared or app talks to the outside"), "{}", v.detail);
+    }
+
+    /// An mvvm client beside an ecs sim: a view, the sim's World feature and
+    /// its framework.
+    fn client_and_sim() -> ScryModel {
+        let mut m = ScryModel::new();
+        m.nodes = vec![
+            node(serde_json::json!({ "id": "sys", "kind": "system", "name": "S" })),
+            node(serde_json::json!({ "id": "client", "kind": "container", "name": "Client", "parentId": "sys", "style": "mvvm" })),
+            node(serde_json::json!({ "id": "sim", "kind": "container", "name": "Sim", "parentId": "sys", "style": "ecs" })),
+        ];
+        for (id, parent, layer) in [("view", "client", "view"), ("world", "sim", "features"), ("math", "sim", "framework")] {
+            m.nodes.push(node(serde_json::json!({ "id": id, "kind": "component", "name": id, "parentId": parent, "layer": layer })));
+        }
+        m
+    }
+
+    /// When a link from any layer lands on another container's open layer,
+    /// allows it, and a link onto its other layers still leaves the importer
+    /// against its style, naming the open layer.
+    #[test]
+    fn any_layer_may_use_another_containers_open_layer() {
+        let link = |dst: &str| {
+            let mut m = client_and_sim();
+            m.links.push(Link {
+                id: "l".into(), src: "view".into(), dst: dst.into(),
+                label: String::new(), method: None, kind: Some(LinkKind::Depends),
+            });
+            report(&m, vec![], vec![])
+        };
+        let r = link("math");
+        assert!(r.violations.is_empty(), "{:#?}", r.violations);
+        let r = link("world");
+        assert_eq!(r.forbidden_links, 1, "{:#?}", r.violations);
+        assert!(r.violations[0].detail.contains("or use the framework layer of 'Sim', which any layer may use"), "{}", r.violations[0].detail);
     }
 
     /// When a declared model link breaks its style's legality rules, reports it as a forbidden link charged to the linking component

@@ -129,6 +129,12 @@ pub struct StyleDef {
     /// outside from any other layer is a violation.
     #[serde(default)]
     pub outbound: Vec<String>,
+    /// Layers any layer of any other container may use: vocabulary every part
+    /// of the system speaks (vectors, units, ids, base types). A link onto
+    /// one is exempt from the importer's outbound rule; it must still be an
+    /// inbound layer to be entered at all.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub open: Vec<String>,
     /// File basenames that count as a module's public entry point.
     #[serde(default)]
     pub public_surface: Vec<String>,
@@ -169,6 +175,11 @@ impl StyleDef {
     /// Is an import / link from a `from`-layer node into a `to`-layer node legal?
     pub fn may_depend(&self, from: &str, to: &str) -> bool {
         self.allowed(from).iter().any(|l| l == to)
+    }
+
+    /// Is `layer` one any layer of another container may use?
+    pub fn is_open(&self, layer: &str) -> bool {
+        self.open.iter().any(|l| l == layer)
     }
 
     /// Is `layer` one a cross-container link may enter this container on?
@@ -664,6 +675,7 @@ pub fn hexagonal() -> StyleDef {
         // The wiring may construct another container's entry point; otherwise
         // only the driven adapters talk to the outside.
         outbound: strs(&["infrastructure", "composition"]),
+        open: Vec::new(),
         public_surface: strs(&["index.ts", "index.js", "mod.rs", "lib.rs", "__init__.py"]),
         external_bans: [("domain".to_string(), strs(IO_PACKAGES))].into_iter().collect(),
         path: PathConvention {
@@ -712,6 +724,7 @@ pub fn feature_sliced() -> StyleDef {
         isolation: Isolation::Strict,
         inbound: strs(&["app", "pages"]),
         outbound: strs(&["shared", "app"]),
+        open: Vec::new(),
         public_surface: strs(&["index.ts", "index.tsx", "index.js", "index.jsx"]),
         external_bans: BTreeMap::new(),
         path: PathConvention {
@@ -745,6 +758,7 @@ pub fn core_shell() -> StyleDef {
         isolation: Isolation::Inclusive,
         inbound: strs(&["shell"]),
         outbound: strs(&["shell"]),
+        open: Vec::new(),
         public_surface: strs(&["index.ts", "index.js", "mod.rs", "lib.rs", "__init__.py"]),
         external_bans: [("core".to_string(), strs(IO_PACKAGES))].into_iter().collect(),
         path: PathConvention {
@@ -783,7 +797,7 @@ pub fn ecs() -> StyleDef {
             ("composition", "assembles the world: registers every system and wires the event bus"),
             ("content", "entities declared as data: prototypes and their loading"),
             ("features", "one slice per game feature: its components, events, queries and the system that runs it"),
-            ("framework", "the ECS itself: entity manager, event bus, base component and system types"),
+            ("framework", "the ECS itself and the vocabulary every container may use: entity manager, event bus, base types, vectors and units"),
         ]),
         matrix: matrix(&[
             ("framework", &["framework"]),
@@ -794,6 +808,7 @@ pub fn ecs() -> StyleDef {
         isolation: Isolation::Open,
         inbound: strs(&["composition", "features", "framework"]),
         outbound: strs(&["content", "composition"]),
+        open: strs(&["framework"]),
         public_surface: Vec::new(),
         external_bans: [
             ("framework".to_string(), strs(UI_PACKAGES)),
@@ -870,6 +885,7 @@ pub fn mvvm() -> StyleDef {
         isolation: Isolation::Inclusive,
         inbound: strs(&["composition", "view", "model"]),
         outbound: strs(&["composition", "model", "viewmodel"]),
+        open: Vec::new(),
         public_surface: Vec::new(),
         external_bans: [
             ("viewmodel".to_string(), strs(UI_PACKAGES)),
@@ -915,6 +931,7 @@ pub fn pipeline() -> StyleDef {
         isolation: Isolation::Inclusive,
         inbound: strs(&["marts"]),
         outbound: strs(&["source"]),
+        open: Vec::new(),
         public_surface: Vec::new(),
         external_bans: BTreeMap::new(),
         path: PathConvention {
@@ -1189,18 +1206,26 @@ pub fn style_link_breach<'a>(
                 });
             }
         }
+        // Another container's open layer is everyone's vocabulary.
+        if let (Some(dst_def), Some(dst_layer)) = (dst_style, layer_of(model, dst)) {
+            if dst_def.is_open(dst_layer) {
+                return None;
+            }
+        }
         // Leaving for another container: go out from an outbound layer.
         if def.outbound.is_empty() || def.outbound.iter().any(|l| l == src_layer) {
             return None;
         }
+        let open = dst_style.map(|d| d.open.join(" or ")).filter(|o| !o.is_empty());
         return Some(StyleLinkBreach {
             container: src_c,
             detail: format!(
                 "'{src_name}' ({src_layer}) leaves container '{}' ({}) for '{dst_name}' — links \
-                 out of it leave from {}; route it through a node on that layer",
+                 out of it leave from {}; route it through a node on that layer{}",
                 src_c.name,
                 def.name,
-                def.outbound.join(" or ")
+                def.outbound.join(" or "),
+                open.map(|o| format!(", or use the {o} layer of '{}', which any layer may use", dst_c.name)).unwrap_or_default()
             ),
         });
     }
