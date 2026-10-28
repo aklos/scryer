@@ -388,6 +388,43 @@ mod tests {
         assert!(unmatched[0].contains("Client/Gmae"), "{unmatched:?}");
     }
 
+    /// When structure.toml says a container uses another as one of its layers,
+    /// checks its imports of it against its own matrix, and reports a key
+    /// that names no container.
+    #[test]
+    fn a_container_uses_another_as_one_of_its_layers() {
+        let fixture = |as_layer: &str| {
+            let dir = tempfile::tempdir().unwrap();
+            let d = dir.path();
+            write(d, "Shared/Shared.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n");
+            write(d, "Shared/features/Docking/Docking.cs", "// Docks ships.\n\nnamespace Shared.Docking;\npublic class Dock {}\n");
+            write(d, "Server/Server.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n");
+            write(
+                d,
+                "Server/application/Hosting/Host.cs",
+                "// Hosts the world.\n\nusing Shared.Docking;\nnamespace Server.Hosting;\npublic class Host { Dock dock; }\n",
+            );
+            write(
+                d,
+                ".scryer/structure.toml",
+                &format!("[containers.Server]\nstyle = \"hexagonal\"\n{as_layer}\n[containers.Shared]\nstyle = \"ecs\"\n"),
+            );
+            let tree = derived_tree_uncached(d).unwrap();
+            (dir, tree)
+        };
+        let (_plain_dir, plain) = fixture("");
+        assert!(plain.style_violations.iter().any(|v| v.detail.contains("leaves container 'Server'")), "{:?}", plain.style_violations);
+
+        let (_dir, tree) = fixture("as_layer = { Shared = \"domain\" }\n");
+        let server = tree.planned.nodes.iter().find(|n| n.name == "Server").unwrap();
+        let shared = tree.planned.nodes.iter().find(|n| n.name == "Shared").unwrap();
+        assert_eq!(server.as_layer.get(&shared.id).map(String::as_str), Some("domain"));
+        assert!(tree.style_violations.is_empty(), "{:?}", tree.style_violations);
+
+        let (_typo_dir, typo) = fixture("as_layer = { Shard = \"domain\" }\n");
+        assert!(typo.style_violations.iter().any(|v| v.kind == "unmatched" && v.detail.contains("as_layer names Shard")), "{:?}", typo.style_violations);
+    }
+
     /// Takes a Ruby container's `lib/` as its source root, so each file and
     /// folder in it is a component, a folder's same-named file its root.
     #[test]

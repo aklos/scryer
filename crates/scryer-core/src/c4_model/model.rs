@@ -270,6 +270,13 @@ pub struct Node {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub tooling: Option<bool>,
+    /// The containers this container uses as one of its own layers, by
+    /// container id (`as_layer` in structure.toml): a shared simulation a
+    /// server hosts as its domain. Its imports of them are checked against
+    /// its own matrix, and they are held to what that layer may depend on.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[schemars(skip)]
+    pub as_layer: BTreeMap<String, String>,
     /// The decisions a later reader needs (why this shape, what was
     /// rejected, what must stay true), as markdown: a module doc after its
     /// first paragraph, or `ARCHITECTURE.md` after its first for the system.
@@ -547,6 +554,7 @@ mod tests {
             layer: None,
             exercised_by: Vec::new(),
             tooling: None,
+            as_layer: Default::default(),
             decisions: None,
         }
     }

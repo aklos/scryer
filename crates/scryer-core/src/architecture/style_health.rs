@@ -310,6 +310,21 @@ pub fn check_code(
         styles.get(style::governing_style(model, id)?)
     };
 
+    // Who uses a container as one of their layers: (user, layer, user's style),
+    // the layer a container played that way is held to.
+    let played_by = |used: &str| -> Vec<(&Node, &str, &StyleDef)> {
+        model
+            .nodes
+            .iter()
+            .filter(|n| n.kind == crate::Kind::Container)
+            .filter_map(|n| {
+                let layer = n.as_layer.get(used)?;
+                let def = styles.get(n.style.as_deref()?).filter(|d| d.has_layer(layer))?;
+                Some((n, layer.as_str(), def))
+            })
+            .collect()
+    };
+
     let imports_file: HashSet<(&str, &str)> =
         edges.file_edges.iter().map(|e| (e.src.as_str(), e.dst.as_str())).collect();
 
@@ -363,7 +378,52 @@ pub fn check_code(
             if inbound_def.is_open(dl) {
                 continue;
             }
+            // A container used as another's layer leaves itself only for what
+            // that layer may depend on: a domain reaching I/O through another
+            // container is still the domain doing I/O.
+            for (user, layer, user_def) in played_by(&src_c.id) {
+                let reached = if dst_c.id == user.id {
+                    Some(dl)
+                } else {
+                    style::played_layer(user, dst_c, user_def)
+                };
+                if reached.is_some_and(|r| user_def.may_depend(layer, r)) {
+                    continue;
+                }
+                let allowed = user_def.allowed(layer);
+                out.push(charge(
+                    ViolationKind::LayerViolation,
+                    dst_comp,
+                    src_c,
+                    format!(
+                        "{} `{}` reaches out of container '{}' to `{}` in '{}' — '{}' uses '{}' as \
+                         its {layer}, and in style '{}' {layer} may depend on {}",
+                        e.src_file, e.src_symbol, src_c.name, e.dst_symbol, dst_c.name, user.name,
+                        src_c.name, user_def.name,
+                        if allowed.is_empty() { "nothing".to_string() } else { allowed.join(", ") }
+                    ),
+                ));
+            }
             let Some(def) = governing(&src_comp.id) else { continue };
+            // A container this one uses as one of its layers: its own matrix
+            // decides, as for a module of its own.
+            if let Some(as_layer) = style::played_layer(src_c, dst_c, def) {
+                if !def.may_depend(sl, as_layer) {
+                    let allowed = def.allowed(sl);
+                    out.push(charge(
+                        ViolationKind::LayerViolation,
+                        dst_comp,
+                        src_c,
+                        format!(
+                            "{} `{}` ({sl}) imports `{}` from '{}', which '{}' uses as its {as_layer} \
+                             — in style '{}' {sl} may depend on {}",
+                            e.src_file, e.src_symbol, e.dst_symbol, dst_c.name, src_c.name, def.name,
+                            if allowed.is_empty() { "nothing".to_string() } else { allowed.join(", ") }
+                        ),
+                    ));
+                }
+                continue;
+            }
             // A LIBRARY is imported as a module, not talked to as a system, so
             // the importer's own matrix decides — its application may use the
             // library's application and domain, its presentation may not —
@@ -531,6 +591,27 @@ pub fn check_code(
     // --- banned packages ---------------------------------------------------------
     for imp in &edges.external_imports {
         let Some(comp) = index.component_of_file(&imp.file) else { continue };
+        // A container used as another's layer is held to that layer's bans,
+        // whatever its own components' layers.
+        if let Some(container) = style::container_of(model, &comp.id) {
+            for (user, layer, user_def) in played_by(&container.id) {
+                let Some(bans) = user_def.external_bans.get(layer) else { continue };
+                let Some(ban) = bans.iter().find(|b| ban_matches(&imp.package, b)) else { continue };
+                out.push(StyleViolation {
+                    kind: ViolationKind::ExternalViolation,
+                    node: comp.id.clone(),
+                    other: None,
+                    file: imp.file.clone(),
+                    container: container.id.clone(),
+                    detail: format!(
+                        "{} ('{}') imports `{}` — '{}' uses '{}' as its {layer}, and in style '{}' \
+                         the {layer} layer never depends on {ban}; move the code that needs it out of '{}'",
+                        imp.file, comp.name, imp.package, user.name, container.name, user_def.name,
+                        container.name
+                    ),
+                });
+            }
+        }
         let Some(layer) = comp.layer.as_deref() else { continue };
         let Some(def) = governing(&comp.id) else { continue };
         let Some(bans) = def.external_bans.get(layer) else { continue };
@@ -1202,6 +1283,91 @@ mod tests {
         let r = link("world");
         assert_eq!(r.forbidden_links, 1, "{:#?}", r.violations);
         assert!(r.violations[0].detail.contains("or use the framework layer of 'Sim', which any layer may use"), "{}", r.violations[0].detail);
+    }
+
+    /// A hexagonal server hosting an ecs sim as its domain, beside a
+    /// hexagonal store: the server's presentation and application, the sim's
+    /// composition and framework, the store's application.
+    fn server_hosting_sim() -> ScryModel {
+        let mut m = ScryModel::new();
+        m.nodes = vec![
+            node(serde_json::json!({ "id": "sys", "kind": "system", "name": "S" })),
+            node(serde_json::json!({
+                "id": "server", "kind": "container", "name": "Server", "parentId": "sys",
+                "style": "hexagonal", "asLayer": { "sim": "domain" }
+            })),
+            node(serde_json::json!({ "id": "sim", "kind": "container", "name": "Sim", "parentId": "sys", "style": "ecs" })),
+            node(serde_json::json!({ "id": "store", "kind": "container", "name": "Store", "parentId": "sys", "style": "hexagonal" })),
+        ];
+        for (id, parent, layer, file, sym) in [
+            ("host", "server", "application", "server/application/host.cs", "WorldHost"),
+            ("http", "server", "presentation", "server/presentation/http.cs", "Endpoint"),
+            ("world", "sim", "composition", "sim/composition/world.cs", "Simulation"),
+            ("math", "sim", "framework", "sim/framework/vec.cs", "Vec3d"),
+            ("db", "store", "application", "store/application/db.cs", "Db"),
+        ] {
+            m.nodes.push(node(serde_json::json!({
+                "id": id, "kind": "component", "name": id, "parentId": parent, "layer": layer,
+                "responsibilities": [{ "id": format!("r-{id}"), "statement": "does x" }]
+            })));
+            anchor(&mut m, &format!("r-{id}"), file, sym);
+        }
+        m
+    }
+
+    /// When a container uses another as its domain, judges its imports and
+    /// links into it by its own matrix: its application may drive the domain,
+    /// its presentation may not.
+    #[test]
+    fn a_container_used_as_a_layer_is_checked_against_the_users_matrix() {
+        let m = server_hosting_sim();
+        let host = ("host", "WorldHost", "server/application/host.cs");
+        let http = ("http", "Endpoint", "server/presentation/http.cs");
+        let world = ("world", "Simulation", "sim/composition/world.cs");
+        let r = report(&m, vec![edge(host, world)], vec![]);
+        assert!(r.violations.is_empty(), "{:#?}", r.violations);
+        let r = report(&m, vec![edge(http, world)], vec![]);
+        assert_eq!(r.layer_violations, 1, "{:#?}", r.violations);
+        assert!(r.violations[0].detail.contains("which 'Server' uses as its domain — in style 'hexagonal' presentation may depend on presentation, application"), "{}", r.violations[0].detail);
+
+        let link = |src: &str| {
+            let mut m = server_hosting_sim();
+            m.links.push(Link {
+                id: "l".into(), src: src.into(), dst: "world".into(),
+                label: String::new(), method: None, kind: Some(LinkKind::Depends),
+            });
+            report(&m, vec![], vec![])
+        };
+        assert!(link("host").violations.is_empty(), "{:#?}", link("host").violations);
+        assert_eq!(link("http").forbidden_links, 1, "{:#?}", link("http").violations);
+    }
+
+    /// If a container used as another's domain imports an I/O package, then
+    /// reports it against the domain's bans, naming who uses it so.
+    #[test]
+    fn a_container_used_as_a_domain_may_not_do_io() {
+        let m = server_hosting_sim();
+        let r = report(&m, vec![], vec![("sim/framework/vec.cs", "System.IO"), ("sim/framework/vec.cs", "System.Numerics")]);
+        assert_eq!(r.external_violations, 1, "{:#?}", r.violations);
+        let v = &r.violations[0];
+        assert_eq!((v.node.as_str(), v.container.as_str()), ("math", "sim"));
+        assert!(v.detail.contains("'Server' uses 'Sim' as its domain, and in style 'hexagonal' the domain layer never depends on System.IO"), "{}", v.detail);
+    }
+
+    /// If a container used as another's domain reaches a container outside
+    /// that domain, then reports it as the domain leaving itself.
+    #[test]
+    fn a_container_used_as_a_domain_may_not_reach_outside_it() {
+        let m = server_hosting_sim();
+        let world = ("world", "Simulation", "sim/composition/world.cs");
+        let r = report(&m, vec![edge(world, ("db", "Db", "store/application/db.cs"))], vec![]);
+        assert!(
+            r.violations.iter().any(|v| v.detail.contains("'Server' uses 'Sim' as its domain, and in style 'hexagonal' domain may depend on domain")),
+            "{:#?}",
+            r.violations
+        );
+        let r = report(&m, vec![edge(world, ("host", "WorldHost", "server/application/host.cs"))], vec![]);
+        assert_eq!(r.layer_violations, 1, "{:#?}", r.violations);
     }
 
     /// When a declared model link breaks its style's legality rules, reports it as a forbidden link charged to the linking component

@@ -868,6 +868,26 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         .collect();
     absorb_packages(&mut model, &mut claims, &absorbed);
 
+    // A container another uses as one of its layers.
+    let container_id = |key: &str| {
+        let id = container_ids
+            .get(key)
+            .or_else(|| containers_sorted.iter().find(|c| c.name == key).and_then(|c| container_ids.get(c.dir.as_str())))?;
+        Some(absorbed.get(id).unwrap_or(id).clone())
+    };
+    for (key, k) in s.containers.iter().filter(|(_, k)| !k.as_layer.is_empty()) {
+        let Some(id) = container_id(key) else { continue };
+        let as_layer: BTreeMap<String, String> = k
+            .as_layer
+            .iter()
+            .filter_map(|(other, layer)| Some((container_id(other)?, layer.clone())))
+            .filter(|(other, _)| *other != id)
+            .collect();
+        if let Some(n) = model.nodes.iter_mut().find(|n| n.id == id) {
+            n.as_layer = as_layer;
+        }
+    }
+
     scryer_core::concerns::register_concerns(&mut model);
     let planned_ids: HashSet<&str> = claims.iter().filter(|c| c.planned).map(|c| c.id.as_str()).collect();
     let mut committed = model.clone();
@@ -1208,6 +1228,7 @@ fn node(id: &str, kind: Kind, name: &str, parent: Option<&str>) -> Node {
         layer: None,
         exercised_by: Vec::new(),
         tooling: None,
+        as_layer: Default::default(),
         decisions: None,
     }
 }

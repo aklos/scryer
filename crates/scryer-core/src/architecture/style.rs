@@ -340,6 +340,12 @@ pub fn layer_of<'a>(model: &'a ScryModel, node_id: &str) -> Option<&'a str> {
     layer_component(model, node_id)?.layer.as_deref()
 }
 
+/// The layer of `importer`'s style that container `used` plays for it
+/// (`as_layer` in structure.toml), when the style has that layer.
+pub fn played_layer<'a>(importer: &'a Node, used: &Node, def: &StyleDef) -> Option<&'a str> {
+    importer.as_layer.get(&used.id).map(String::as_str).filter(|l| def.has_layer(l))
+}
+
 /// The container `node_id` sits in (itself when it is a container).
 pub fn container_of<'a>(model: &'a ScryModel, node_id: &str) -> Option<&'a Node> {
     let mut cur = model.nodes.iter().find(|n| n.id == node_id);
@@ -634,6 +640,8 @@ const IO_PACKAGES: &[&str] = &[
     "prisma", "@prisma/client", "typeorm", "sequelize", "mongoose", "pg", "mysql2",
     "django", "flask", "fastapi", "sqlalchemy", "requests", "httpx",
     "net/http", "database/sql", "gorm.io/gorm",
+    "System.IO", "System.Net", "System.Data", "Microsoft.EntityFrameworkCore", "Microsoft.AspNetCore",
+    "java.net", "java.sql", "java.nio.file", "jakarta.persistence", "javax.persistence",
 ];
 
 /// Hexagonal's layers for code other containers build on — a shared model, an
@@ -1180,8 +1188,32 @@ pub fn style_link_breach<'a>(
                 });
             }
         }
+        // Another container's open layer is everyone's vocabulary.
+        if let (Some(dst_def), Some(dst_layer)) = (dst_style, layer_of(model, dst)) {
+            if dst_def.is_open(dst_layer) {
+                return None;
+            }
+        }
         let src_layer = layer_of(model, src)?;
         let def = styles.get(governing_style(model, src)?)?;
+        // A container this one uses as one of its layers: its own matrix decides.
+        if let Some(as_layer) = played_layer(src_c, dst_c, def) {
+            if def.may_depend(src_layer, as_layer) {
+                return None;
+            }
+            let allowed = def.allowed(src_layer);
+            return Some(StyleLinkBreach {
+                container: src_c,
+                detail: format!(
+                    "'{src_name}' ({src_layer}) → '{dst_name}' in '{}', which '{}' uses as its \
+                     {as_layer} — in style '{}' {src_layer} may depend on {}",
+                    dst_c.name,
+                    src_c.name,
+                    def.name,
+                    if allowed.is_empty() { "nothing".to_string() } else { allowed.join(", ") }
+                ),
+            });
+        }
         // A library is imported as a module: the source's own matrix decides,
         // the way it would for a module of its own container. See StyleDef.
         if let (Some(dst_def), Some(dst_layer)) = (dst_style, layer_of(model, dst)) {
@@ -1204,12 +1236,6 @@ pub fn style_link_breach<'a>(
                         if allowed.is_empty() { "nothing".to_string() } else { allowed.join(", ") }
                     ),
                 });
-            }
-        }
-        // Another container's open layer is everyone's vocabulary.
-        if let (Some(dst_def), Some(dst_layer)) = (dst_style, layer_of(model, dst)) {
-            if dst_def.is_open(dst_layer) {
-                return None;
             }
         }
         // Leaving for another container: go out from an outbound layer.

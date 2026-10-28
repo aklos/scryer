@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 /// Bumped whenever derivation changes, so a cache from an older binary is
 /// never mistaken for current.
-const DERIVE_VERSION: u32 = 29;
+const DERIVE_VERSION: u32 = 30;
 
 thread_local! {
     static PARSER: RefCell<tree_sitter::Parser> = RefCell::new(tree_sitter::Parser::new());
@@ -263,6 +263,17 @@ fn unmatched_entries(
             detail: format!("[containers.\"{key}\"] packages names {p}, which holds no package: name the package's directory, or remove it"),
         })
     });
-    containers.chain(components).chain(packages).collect()
+    let as_layer = structure.containers.iter().flat_map(|(key, k)| {
+        k.as_layer
+            .keys()
+            .filter(|o| !containers_found.iter().any(|c| &c.dir == *o || &c.name == *o))
+            .map(move |o| DerivedViolation {
+                node_id: system.id.clone(),
+                file: ".scryer/structure.toml".to_string(),
+                kind: "unmatched".to_string(),
+                detail: format!("[containers.\"{key}\"] as_layer names {o}, which is no container: name its directory or name, or remove it"),
+            })
+    });
+    containers.chain(components).chain(packages).chain(as_layer).collect()
 }
 

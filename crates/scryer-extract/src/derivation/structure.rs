@@ -123,6 +123,12 @@ pub struct ContainerConfig {
     /// become one container: their components sit in it, on its layers.
     #[serde(default)]
     pub packages: Vec<String>,
+    /// Other containers this one uses as one of its own layers, by key
+    /// (directory or name) → layer: `{ "src/Shared" = "domain" }` for a
+    /// server hosting a shared simulation as its domain. What the other
+    /// container really is to this one, never a way to clear a finding.
+    #[serde(default)]
+    pub as_layer: BTreeMap<String, String>,
     /// Dev tooling (a demo, a harness, a viewer): on the map, but no product.
     /// It needs no style, and it may import any layer of what it builds on;
     /// its own cycles still count. A declaration, never detected.

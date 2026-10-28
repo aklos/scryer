@@ -85,7 +85,7 @@ public function testPostsSettledCapture(): void { $this->markTestIncomplete('tod
 
 Make the todos pass and turn each into a real test: drop `#[ignore]` / `.todo` / `skip`, keep the sentence. If the behaviour you built differs from the sentence, change the sentence; it must stay true.
 
-**Where code goes.** A container may declare an architecture style in `.scryer/structure.toml` (hexagonal, feature-sliced, core-shell, library, …) with layers. Respect what the file's layer may import. When a file breaks its container's style, **fix it by moving code** to the layer it belongs in. Never change the style, the layers or `structure.toml` to make a finding go away, unless the user asks. A container declared `tooling = true` (demos, harnesses, dev apps) is not held to style rules; orient says so.
+**Where code goes.** A container may declare an architecture style in `.scryer/structure.toml` (hexagonal, feature-sliced, core-shell, library, …) with layers. Respect what the file's layer may import. When a file breaks its container's style, **fix it by moving code** to the layer it belongs in. Never change the style, the layers or `structure.toml` to make a finding go away, unless the user asks. A container declared `tooling = true` (demos, harnesses, dev apps) is not held to style rules; orient says so. One declared `as_layer = { "src/Shared" = "domain" }` uses that container as its domain: its imports of it follow its own matrix, and the other container is held to the domain's rules.
 
 **How to organise it.** Scryer draws each module or directory as a component, so how you organise code is what the reader sees:
 
