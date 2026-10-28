@@ -500,8 +500,8 @@ function RespDiffRow({
       onContextMenu={(e) => openMenu(e, [copyIdItem(resp.id, copyId)])}
       className={`${RESP_ROW} rounded py-[1.5px] [&:not(:first-child)]:mt-2.5`}
     >
-      {/* Colour on a claim row is its state's alone (the marker beside):
-          what changed since the last commit reads in plain marks. */}
+      {/* The marker carries the claim's state; a reworded claim's words
+          diff in red and green beside it. */}
       {/* A todo claim's marker already says it is new. */}
       {kind === "unchanged" || kind === "added" ? <span /> : <ChangeGlyph kind={CHANGE_OF[kind]} plain />}
       <ClaimMarker
@@ -513,9 +513,9 @@ function RespDiffRow({
         <span className={contentColor}>
           {resp.statement ? (
             provenAs ? (
-              <WordDiffText from={stripMarkup(provenAs)} to={stripMarkup(resp.statement)} plain />
+              <WordDiffText from={stripMarkup(provenAs)} to={stripMarkup(resp.statement)} />
             ) : kind === "reworded" && prev ? (
-              <WordDiffText from={stripMarkup(prev.statement)} to={stripMarkup(resp.statement)} plain />
+              <WordDiffText from={stripMarkup(prev.statement)} to={stripMarkup(resp.statement)} />
             ) : kind === "added" ? (
               <StatementText text={resp.statement} />
             ) : deleted ? (
