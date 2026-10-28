@@ -252,6 +252,18 @@ pub struct CsScope {
     /// Lines holding `using` / `namespace` directives: their identifiers
     /// name namespaces, not types, and never resolve.
     pub directive_lines: Vec<u32>,
+    /// Names written with a namespace in front (`Scene.RockSurface`,
+    /// `System.Text.Json`): the qualifier is resolved against each namespace
+    /// the file sees, the way C# looks it up.
+    pub qualified: Vec<CsQualified>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CsQualified {
+    /// The dotted segments before the name (`Scene`, `SpaceTruckers.Client.Scene`).
+    pub qualifier: String,
+    pub name: String,
+    pub line: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1410,7 +1422,39 @@ pub fn collect_cs_scope(root: Node, bytes: &[u8]) -> CsScope {
     let mut scope = CsScope::default();
     let eof = root.end_position().row as u32 + 1;
     cs_walk(root, bytes, "", eof, &mut scope);
+    // Every dotted chain of plain names, cut before its last segment; the
+    // chains nested in it give the shorter cuts.
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        if matches!(n.kind(), "member_access_expression" | "qualified_name") {
+            if let Some(mut chain) = cs_chain(n, bytes).filter(|c| c.len() >= 2) {
+                let name = chain.pop().unwrap_or_default();
+                scope.qualified.push(CsQualified {
+                    qualifier: chain.join("."),
+                    name,
+                    line: n.start_position().row as u32 + 1,
+                });
+            }
+        }
+        stack.extend(named_children(n));
+    }
     scope
+}
+
+/// A dotted chain of plain names (`A.B.C`, generic arguments dropped), or
+/// `None` when any link is an expression (`this.A`, `f().B`).
+fn cs_chain(node: Node, bytes: &[u8]) -> Option<Vec<String>> {
+    match node.kind() {
+        "identifier" => Some(vec![node.utf8_text(bytes).ok()?.to_string()]),
+        "generic_name" => cs_chain(named_children(node).into_iter().find(|c| c.kind() == "identifier")?, bytes),
+        "member_access_expression" | "qualified_name" => {
+            let head = node.child_by_field_name("expression").or_else(|| node.child_by_field_name("qualifier"))?;
+            let mut chain = cs_chain(head, bytes)?;
+            chain.extend(cs_chain(node.child_by_field_name("name")?, bytes)?);
+            Some(chain)
+        }
+        _ => None,
+    }
 }
 
 fn cs_walk(node: Node, bytes: &[u8], ns: &str, eof: u32, scope: &mut CsScope) {

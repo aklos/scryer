@@ -1090,6 +1090,24 @@ fn build_edges(
             }
         }
 
+        // C#: a name behind a namespace qualifier (`Scene.RockSurface`).
+        for q in f.parse.cs.iter().flat_map(|cs| cs.qualified.iter().map(move |q| (cs, q))) {
+            let (cs, q) = q;
+            if cs.directive_lines.contains(&q.line) {
+                continue;
+            }
+            if let Some((dst_key, dst_file)) = cs_index.resolve_qualified(cs, container_dir, &q.qualifier, &q.name, q.line) {
+                if dst_file != file {
+                    file_edges.insert((file.to_string(), dst_file.to_string()));
+                    if let Some(src) = enclosing(file, q.line) {
+                        if src != dst_key {
+                            sym_edges.insert((src.to_string(), dst_key.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+
         for ident in &f.parse.idents {
             // Imported locals take precedence over every bare-name scope: the
             // binding is a per-file lexical fact, so it even overrides the
@@ -1715,6 +1733,60 @@ impl<'a> CsIndex<'a> {
                 _ => None,
             };
         }
+        let mut hits: Vec<(&str, &str)> = self
+            .visible(cs, container_dir, line)
+            .iter()
+            .filter_map(|ns| self.types.get(ns)?.get(name))
+            .flatten()
+            .copied()
+            .collect();
+        hits.sort();
+        hits.dedup();
+        match hits.as_slice() {
+            [one] => Some(*one),
+            _ => None,
+        }
+    }
+
+    /// The one type `qualifier.name` can mean at `line`: the qualifier read
+    /// as a namespace under each one the file sees (`Scene.RockSurface` from
+    /// `SpaceTruckers.Client.Cab` is `SpaceTruckers.Client.Scene`'s), or
+    /// behind a `using` alias.
+    fn resolve_qualified(
+        &self,
+        cs: &CsScope,
+        container_dir: Option<&str>,
+        qualifier: &str,
+        name: &str,
+        line: u32,
+    ) -> Option<(&'a str, &'a str)> {
+        let (head, rest) = qualifier.split_once('.').map_or((qualifier, None), |(h, r)| (h, Some(r)));
+        let aliased = cs.usings.iter().find(|u| u.alias.as_deref() == Some(head) && !u.is_static);
+        let candidates: Vec<String> = match aliased {
+            Some(u) => vec![rest.map_or(u.target.clone(), |r| format!("{}.{r}", u.target))],
+            None => self
+                .visible(cs, container_dir, line)
+                .iter()
+                .map(|ns| if ns.is_empty() { qualifier.to_string() } else { format!("{ns}.{qualifier}") })
+                .collect(),
+        };
+        let mut hits: Vec<(&str, &str)> = candidates
+            .iter()
+            .filter_map(|ns| self.types.get(ns.as_str())?.get(name))
+            .flatten()
+            .copied()
+            .collect();
+        hits.sort();
+        hits.dedup();
+        match hits.as_slice() {
+            [one] => Some(*one),
+            _ => None,
+        }
+    }
+
+    /// The namespaces a name at `line` is looked up in: the innermost, each
+    /// enclosing one, the global one, then what `using`s open.
+    fn visible<'s>(&'s self, cs: &'s CsScope, container_dir: Option<&str>, line: u32) -> Vec<&'s str> {
         let mut visible: Vec<&str> = Vec::new();
         // The innermost namespace at this line, then each enclosing one, then
         // the global namespace.
@@ -1739,18 +1811,7 @@ impl<'a> CsIndex<'a> {
         if let Some(globals) = container_dir.and_then(|d| self.global_usings.get(d)) {
             visible.extend(globals.iter().copied());
         }
-        let mut hits: Vec<(&str, &str)> = visible
-            .iter()
-            .filter_map(|ns| self.types.get(ns)?.get(name))
-            .flatten()
-            .copied()
-            .collect();
-        hits.sort();
-        hits.dedup();
-        match hits.as_slice() {
-            [one] => Some(*one),
-            _ => None,
-        }
+        visible
     }
 }
 
@@ -2811,6 +2872,29 @@ fn add_one(x: u32) -> u32 {
             edge_names(&ctx),
             vec![("Dock".to_string(), "Hull".to_string()), ("Mine".to_string(), "Rock".to_string())]
         );
+    }
+
+    /// When a C# name is written behind a namespace (`Scene.RockSurface`),
+    /// resolves the qualifier under each namespace the file sees, in
+    /// expressions and types alike, fully qualified or through an alias.
+    #[test]
+    fn a_csharp_name_behind_a_namespace_resolves() {
+        let files = vec![
+            cs_file(
+                "App/Scene/Rocks.cs",
+                "namespace Game.Client.Scene;\npublic class RockSurface { public static int Of() => 1; }\npublic class ScanLook {}\npublic class Paint {}\npublic class Murk {}\n",
+            ),
+            cs_file(
+                "App/Cab/Feed.cs",
+                "using Sc = Game.Client.Scene;\nnamespace Game.Client.Cab;\npublic class Feed\n{\n    public Scene.ScanLook Look;\n    public int Strike(object rock) => Scene.RockSurface.Of() + rock.GetHashCode();\n    public Game.Client.Scene.Paint Coat;\n    public Sc.Murk Fog;\n}\n",
+            ),
+        ];
+        let ctx = build_context("proj", &[container("App", "App")], &files, &[]);
+        let edges = edge_names(&ctx);
+        for dst in ["RockSurface", "ScanLook", "Paint", "Murk"] {
+            assert!(edges.iter().any(|(_, d)| d == dst), "no edge to {dst}: {edges:?}");
+        }
+        assert!(ctx.file_edges.iter().any(|e| e.src == "App/Cab/Feed.cs" && e.dst == "App/Scene/Rocks.cs"));
     }
 
     /// The edge cache records each file's outermost types with how much they
