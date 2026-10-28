@@ -186,18 +186,33 @@ fn property(m: &Member) -> SchemaProperty {
 }
 
 /// The component a product file belongs to: the first directory under the
-/// source root, or the file's own module when it sits at the root.
+/// source root, or the file's own module when it sits at the root. A first
+/// directory named for one of the container's `layers` is a layer, not a
+/// component: each directory inside it is a component, and the files loose
+/// in it stay one component named for the layer.
 /// Returns (component path, display name).
-fn component_of(container_dir: &str, rel: &str) -> (String, String) {
+fn component_of(container_dir: &str, rel: &str, layers: &[String]) -> (String, String) {
     let (root, inner) = inner_path(container_dir, rel);
     let join = |seg: &str| if root.is_empty() { seg.to_string() } else { format!("{root}/{seg}") };
     match inner.split_once('/') {
+        Some((layer, rest)) if layers.iter().any(|l| l == layer) && rest.contains('/') => {
+            let dir = rest.split('/').next().unwrap_or(rest);
+            (join(&format!("{layer}/{dir}")), dir.to_string())
+        }
         Some((dir, _)) => (join(dir), dir.to_string()),
         None => {
             let stem = file_stem(inner);
             (join(stem), stem.to_string())
         }
     }
+}
+
+/// The layer folder a component path sits in, when its first directory under
+/// the source root is named for one of `layers`.
+fn layer_folder(container_dir: &str, path: &str, layers: &[String]) -> Option<String> {
+    let (_, inner) = inner_path(container_dir, path);
+    let first = inner.split('/').next()?;
+    layers.iter().find(|l| *l == first).cloned()
 }
 
 struct Component {
@@ -351,6 +366,19 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         edges_from.entry(e.src.as_str()).or_default().push(e.dst.as_str());
     }
 
+    // The layers a container's style gives its components, by container dir.
+    let layers_of = |dir: &str| -> Vec<String> {
+        match input.containers.iter().find(|c| c.dir == dir).and_then(|c| s.container(&c.name, &c.dir)) {
+            Some(k) if !k.layers.is_empty() => k.layers.clone(),
+            Some(k) => k
+                .style
+                .as_deref()
+                .and_then(|st| styles.get(st))
+                .map(|d| d.layer_names().iter().map(|l| l.to_string()).collect())
+                .unwrap_or_default(),
+            None => Vec::new(),
+        }
+    };
     // A package's components are the directories its entry points reach
     // through the import graph: the entries its manifest or page names, and
     // Cargo's conventional targets. An entry's top directory in the package
@@ -395,7 +423,8 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
                 }
             }
         }
-        let paths = reached.iter().filter(|f| owned(f)).map(|f| component_of(&c.dir, f).0).collect();
+        let layers = layers_of(&c.dir);
+        let paths = reached.iter().filter(|f| owned(f)).map(|f| component_of(&c.dir, f, &layers).0).collect();
         product_paths.insert(c.dir.as_str(), paths);
     }
 
@@ -410,7 +439,7 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         }
         let Some(c) = owner(rel) else { continue };
         let Some(container_id) = container_ids.get(c.dir.as_str()) else { continue };
-        let (path, name) = component_of(&c.dir, rel);
+        let (path, name) = component_of(&c.dir, rel, &layers_of(&c.dir));
         let unreached = product_paths.get(c.dir.as_str()).is_some_and(|paths| !paths.contains(&path));
         if unreached || is_tool_config(&c.dir, rel) {
             tooling.entry(container_id.clone()).or_default().push(rel.clone());
@@ -457,7 +486,7 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
             (ClaimLevel::Container, Some(dir)) => Home::Container(dir),
             (ClaimLevel::Component, Some(dir)) if crate_root(rel) => Home::Container(dir),
             (ClaimLevel::Component, Some(dir)) => {
-                unit_home(rel, &dir, &components, &file_component, &edges_from)
+                unit_home(rel, &dir, &layers_of(&dir), &components, &file_component, &edges_from)
                     .unwrap_or_else(|| Home::TestStem(dir, tested_stem(file_name(rel))))
             }
         };
@@ -478,19 +507,6 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         })
         .collect();
 
-    // The layers a container's style gives its components, by container dir.
-    let layers_of = |dir: &str| -> Vec<String> {
-        match input.containers.iter().find(|c| c.dir == dir).and_then(|c| s.container(&c.name, &c.dir)) {
-            Some(k) if !k.layers.is_empty() => k.layers.clone(),
-            Some(k) => k
-                .style
-                .as_deref()
-                .and_then(|st| styles.get(st))
-                .map(|d| d.layer_names().iter().map(|l| l.to_string()).collect())
-                .unwrap_or_default(),
-            None => Vec::new(),
-        }
-    };
     for (path, comp) in components.iter_mut() {
         comp.id = stable_id("node", &format!("component:{path}"), &mut taken);
         let container = &container_ids[comp.container_dir.as_str()];
@@ -509,11 +525,10 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
             .files
             .iter()
             .filter(|rel| {
-                let (_, inner) = inner_path(&comp.container_dir, rel);
                 let name = file_name(rel);
-                let depth = inner.matches('/').count();
-                (depth == 1 && ENTRY_FILES.contains(&name))
-                    || (depth == 0 && !ENTRY_FILES.contains(&name))
+                let in_dir = rel.strip_prefix(path.as_str()).and_then(|r| r.strip_prefix('/'));
+                in_dir.is_some_and(|r| !r.contains('/') && ENTRY_FILES.contains(&name))
+                    || (rel.rsplit_once('.').is_some_and(|(no_ext, _)| no_ext == path) && !ENTRY_FILES.contains(&name))
             })
             .collect();
         let doc_file = roots.iter().find(|rel| input.lifts[**rel].module_description.is_some()).or(roots.first());
@@ -531,7 +546,7 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         // one of the style's layers is that layer.
         let (description, declared) = declared_layer(doc, &layers);
         n.description = description;
-        n.layer = declared.or_else(|| layers.contains(&comp.name).then(|| comp.name.clone()));
+        n.layer = declared.or_else(|| layer_folder(&comp.container_dir, path, &layers));
         model.boundaries.insert(
             comp.id.clone(),
             comp.patterns.iter().map(|p| Source { pattern: p.clone(), comment: None }).collect(),
@@ -1028,6 +1043,7 @@ enum Home {
 fn unit_home(
     rel: &str,
     container_dir: &str,
+    layers: &[String],
     components: &BTreeMap<String, Component>,
     file_component: &HashMap<&str, String>,
     edges_from: &HashMap<&str, Vec<&str>>,
@@ -1048,7 +1064,7 @@ fn unit_home(
         return Some(Home::File(f.to_string()));
     }
     // A colocated test file sits in its component's directory.
-    let (own_path, _) = component_of(container_dir, rel);
+    let (own_path, _) = component_of(container_dir, rel, layers);
     if inner_path(container_dir, rel).1.contains('/') && components.contains_key(&own_path) {
         return Some(Home::Component(own_path));
     }

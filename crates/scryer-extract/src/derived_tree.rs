@@ -333,6 +333,37 @@ mod tests {
         assert_eq!(layerless, BTreeSet::from(["odd"]), "{:?}", tree.style_violations);
     }
 
+    /// When a top folder is named for one of its container's style layers, makes each folder inside it a component on that layer, in any language, and keeps the files loose in it one component named for the layer.
+    #[test]
+    fn a_layer_folder_holds_components_not_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "Shared/Shared.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n");
+        write(d, "Shared/features/Cargo/CargoSystem.cs", "namespace Shared;\npublic class CargoSystem { Rack r; }\n");
+        write(d, "Shared/features/Cargo/Rack.cs", "namespace Shared;\npublic class Rack {}\n");
+        write(d, "Shared/features/Combat/CombatSystem.cs", "namespace Shared;\npublic class CombatSystem {}\n");
+        write(d, "Shared/features/Glue.cs", "namespace Shared;\npublic class Glue {}\n");
+        write(d, "Shared/framework/EventBus.cs", "namespace Shared;\npublic class EventBus {}\n");
+        write(d, ".scryer/structure.toml", "[containers.Shared]\nstyle = \"ecs\"\n");
+        let tree = derived_tree_uncached(d).unwrap();
+        let components: BTreeMap<&str, Option<&str>> = tree
+            .planned
+            .nodes
+            .iter()
+            .filter(|n| n.kind == Kind::Component)
+            .map(|n| (n.name.as_str(), n.layer.as_deref()))
+            .collect();
+        assert_eq!(
+            components,
+            BTreeMap::from([
+                ("Cargo", Some("features")),
+                ("Combat", Some("features")),
+                ("features", Some("features")),
+                ("framework", Some("framework")),
+            ]),
+        );
+    }
+
     /// When a component imports another of its own layer, links them as siblings that use each other, which its style allows.
     #[test]
     fn an_import_between_two_components_of_one_layer_is_a_use() {
