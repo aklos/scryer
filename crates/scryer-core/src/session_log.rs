@@ -28,8 +28,11 @@ pub enum SessionEvent {
     /// The read overlay for `file` was served with this payload hash.
     Overlay { file: String, hash: u64 },
     /// The task the agent oriented on, in its own words — the session's
-    /// title. Only the first is kept.
+    /// title. The latest is kept.
     Task { text: String },
+    /// The branch checked out where the session works, noted as it begins
+    /// a turn and as it stops whenever it changed. The latest is kept.
+    Branch { name: String },
     /// A shell command is about to run: files modified after `ns` (unix
     /// nanoseconds) and before it finishes are the session's edits. `tool` is
     /// the harness's tool-call id, so concurrent commands pair up.
@@ -120,8 +123,10 @@ pub struct SessionLog {
     pub shell_starts: Vec<(Option<String>, u64)>,
     /// Shell commands finished, `(tool-call id, unix ns)`, in end order.
     pub shell_ends: Vec<(Option<String>, u64)>,
-    /// The first task the agent oriented on.
+    /// The latest task the agent oriented on.
     pub task: Option<String>,
+    /// The branch it last worked on.
+    pub branch: Option<String>,
     /// The todo tests last recorded (at start or the last stop), as
     /// [`test_key`]s; `None` until the first record.
     pub planned_seen: Option<Vec<String>>,
@@ -182,11 +187,8 @@ impl SessionLog {
             }
             SessionEvent::ShellStart { tool, ns } => self.shell_starts.push((tool.clone(), *ns)),
             SessionEvent::ShellEnd { tool, ns } => self.shell_ends.push((tool.clone(), *ns)),
-            SessionEvent::Task { text } => {
-                if self.task.is_none() {
-                    self.task = Some(text.clone());
-                }
-            }
+            SessionEvent::Task { text } => self.task = Some(text.clone()),
+            SessionEvent::Branch { name } => self.branch = Some(name.clone()),
         }
     }
 
@@ -309,6 +311,20 @@ mod tests {
         assert!(log.overlay_is_repeat("a.rs", 2));
         assert!(!log.overlay_is_repeat("a.rs", 1), "a changed payload re-fires");
         assert!(!log.overlay_is_repeat("b.rs", 2), "per file");
+    }
+
+    /// When the session orients on a new task, is titled by it.
+    #[test]
+    fn the_latest_task_titles_the_session() {
+        let task = |t: &str| entry(SessionEvent::Task { text: t.into() });
+        assert_eq!(SessionLog::from_events(&[task("Rename a node"), task("Sessions as tables")]).task.as_deref(), Some("Sessions as tables"));
+    }
+
+    /// When the session's branch changes, keeps the one it last worked on.
+    #[test]
+    fn the_latest_branch_is_the_sessions() {
+        let branch = |b: &str| entry(SessionEvent::Branch { name: b.into() });
+        assert_eq!(SessionLog::from_events(&[branch("main"), branch("feature")]).branch.as_deref(), Some("feature"));
     }
 
     /// When a stub appeared since the last record in a file the session touched, counts it as the session's, and with no record yet, every stub in a touched file.

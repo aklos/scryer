@@ -57,7 +57,7 @@ pub fn reaches(tree: &DerivedTree, files: &BTreeSet<&str>, c: &DerivedClaim) -> 
 #[serde(rename_all = "camelCase")]
 pub struct LandingSession {
     pub session: String,
-    /// The task the session oriented on, else the display name of the first
+    /// The task the session last oriented on, else the display name of the first
     /// component it touched; empty when it has neither.
     pub title: String,
     /// The title is the task the agent named when it oriented.
@@ -73,6 +73,11 @@ pub struct LandingSession {
     pub new_dark_files: Vec<String>,
     /// Components whose files the session touched.
     pub components: Vec<String>,
+    /// The branch the session last worked on, as its log noted it; `None`
+    /// for a session from before branches were noted, or one that moved to
+    /// a nested worktree, which the page names by that worktree's branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
     /// The checkout the session worked in (its path), when the landing
     /// spans several worktrees.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -245,7 +250,8 @@ pub fn merge_worktrees(since: u64, parts: Vec<(LandingWorktree, Landing)>) -> La
 /// Take out of `sessions` the ones that worked in a nested worktree: every
 /// file they read, edited or stubbed sits under `prefix` (that worktree's
 /// path relative to this checkout, with a trailing `/`). Those paths are
-/// rewritten relative to the worktree, so its own tree can read them.
+/// rewritten relative to the worktree, so its own tree can read them, and
+/// the branches noted here, this checkout's, are dropped.
 pub fn take_prefixed(
     sessions: &mut Vec<(String, Vec<SessionEntry>)>,
     prefix: &str,
@@ -276,6 +282,7 @@ pub fn take_prefixed(
         .map(|(id, entries)| {
             let entries = entries
                 .into_iter()
+                .filter(|e| !matches!(e.event, SessionEvent::Branch { .. }))
                 .map(|mut e| {
                     if let Some(file) = file_of(&mut e.event) {
                         *file = file[prefix.len()..].to_string();
@@ -345,6 +352,7 @@ pub fn landing(
             surviving_mutants: 0,
             new_dark_files: touched.iter().filter(|f| dark.contains(*f)).map(|f| f.to_string()).collect(),
             components: Vec::new(),
+            branch: log.branch.clone(),
             worktree: None,
             live: false,
             steps: Vec::new(),
@@ -494,6 +502,7 @@ mod tests {
                 "aaaaaaaa-1".to_string(),
                 vec![
                     SessionEntry { at: 100, event: SessionEvent::Task { text: "Queue offline saves".into() } },
+                    SessionEntry { at: 100, event: SessionEvent::Branch { name: "offline".into() } },
                     touch(110, "src/a.rs"),
                     SessionEntry { at: 150, event: SessionEvent::Stub { file: "src/a.rs".into(), test: "stub".into() } },
                     touch(200, "src/a.rs"),
@@ -507,6 +516,7 @@ mod tests {
         let a = &l.sessions[1];
         assert_eq!(a.title, "Queue offline saves");
         assert!(a.titled_by_task);
+        assert_eq!(a.branch.as_deref(), Some("offline"));
         let ids = |rows: &[LandingClaim]| rows.iter().map(|r| r.resp_id.clone()).collect::<Vec<_>>();
         assert_eq!(ids(&a.newly_proven), vec!["green"]);
         assert_eq!(ids(&a.newly_planned), vec!["stub"]);
@@ -706,6 +716,7 @@ mod tests {
             surviving_mutants: 0,
             new_dark_files: Vec::new(),
             components: vec![comp.into()],
+            branch: None,
             worktree: None,
             live: false,
             steps: Vec::new(),
@@ -733,11 +744,13 @@ mod tests {
 
     /// When a session read or touched only files under a nested worktree's
     /// prefix, it moves to that worktree with those paths made relative to
-    /// it; a session that touched anything else stays.
+    /// it and this checkout's branch dropped; a session that touched anything
+    /// else stays.
     #[test]
     fn sessions_in_a_nested_worktree_move_to_it() {
+        let branch = SessionEntry { at: 0, event: SessionEvent::Branch { name: "main".into() } };
         let mut sessions = vec![
-            ("in".to_string(), vec![touch(1, ".claude/worktrees/x/src/a.rs"), touch(2, ".claude/worktrees/x/src/b.rs")]),
+            ("in".to_string(), vec![branch, touch(1, ".claude/worktrees/x/src/a.rs"), touch(2, ".claude/worktrees/x/src/b.rs")]),
             ("mixed".to_string(), vec![touch(1, ".claude/worktrees/x/src/a.rs"), touch(2, "src/c.rs")]),
             ("read".to_string(), vec![SessionEntry { at: 1, event: SessionEvent::Overlay { file: ".claude/worktrees/x/src/a.rs".into(), hash: 7 } }]),
             ("none".to_string(), vec![SessionEntry { at: 1, event: SessionEvent::Task { text: "t".into() } }]),

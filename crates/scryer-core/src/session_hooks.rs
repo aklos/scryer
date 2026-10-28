@@ -123,22 +123,34 @@ pub fn overlay(
     Ok(Some(payload))
 }
 
-/// Record the task the agent oriented on — the first one titles the session's
-/// change, so later ones are not kept.
+/// Record the task the agent oriented on — the latest one titles the
+/// session, so a session that moves on to new work is named for it.
 pub fn record_task(r: &ModelRef, session: &str, task: &str) -> Result<(), String> {
     let task = task.trim();
-    if task.is_empty() || session_log(r, session).task.is_some() {
+    if task.is_empty() || session_log(r, session).task.as_deref() == Some(task) {
         return Ok(());
     }
     session_store::append(r, session, SessionEvent::Task { text: task.to_string() })
 }
 
-/// The task the session first oriented on, if any.
+/// The task the session last oriented on, if any.
 pub fn session_task(r: &ModelRef, session: &str) -> Option<String> {
     session_log(r, session).task
 }
 
-/// The session is starting: the first time, record the todo tests already in
+/// Note the branch checked out in the project when it is not the one the
+/// session last worked on, so an ended session keeps the branch it was on
+/// after the checkout moves.
+fn record_branch(r: &ModelRef, session: &str, log: &SessionLog) -> Result<(), String> {
+    match crate::probe_tree::current_branch(r.project_path()) {
+        Some(name) if log.branch.as_deref() != Some(name.as_str()) => {
+            session_store::append(r, session, SessionEvent::Branch { name })
+        }
+        _ => Ok(()),
+    }
+}
+
+/// A turn is starting: note the branch, and the first time, record the todo tests already in
 /// the project (`(file, junit_name)`) and the claims already proven (derived
 /// claim ids), computed only then, so its stops can tell the stubs it wrote
 /// from ones that were there and the landing what it proved from what was.
@@ -148,6 +160,7 @@ pub fn begin(
     snapshot: impl FnOnce() -> (Vec<(String, String)>, Vec<String>),
 ) -> Result<(), String> {
     let log = session_log(r, session);
+    record_branch(r, session, &log)?;
     if log.planned_seen.is_some() && log.proven_at_start.is_some() {
         return Ok(());
     }
@@ -182,10 +195,11 @@ pub fn stop(
     planned: Option<&[(String, String)]>,
     reached: Vec<String>,
 ) -> Result<(), String> {
+    let log = session_log(r, session);
+    record_branch(r, session, &log)?;
     let Some(planned) = planned else {
         return session_store::append(r, session, SessionEvent::Stop);
     };
-    let log = session_log(r, session);
     let theirs: HashSet<(String, String)> = session_store::list(r)
         .into_iter()
         .filter(|(id, _)| id != session)

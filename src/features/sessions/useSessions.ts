@@ -38,6 +38,8 @@ export interface LoggedSession {
   titledByTask?: boolean;
   startedAt: number;
   endedAt: number;
+  /** The branch it last worked on; absent for an old session. */
+  branch?: string;
   newlyProven: SessionClaim[];
   newlyPlanned: SessionClaim[];
   stillPlanned: SessionClaim[];

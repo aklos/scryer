@@ -578,7 +578,7 @@ impl ScryerServer {
                  about to do. For the whole tree use read_model.",
             )]));
         }
-        // The first task this session orients on titles it.
+        // The latest task this session orients on titles it.
         if let (Some(task), Some(sid)) = (task, self.session_id(&model_ref)) {
             let _ = scryer_core::session::record_task(&model_ref, &sid, task);
         }

@@ -5,9 +5,12 @@
  * a style's or a layer's own.
  */
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { docsUrl, GLOSSARY, type TermId } from "./glossary";
+
+/** The card's width, `w-72`. */
+const CARD_WIDTH = 288;
 
 export function Term({
   id,
@@ -25,18 +28,25 @@ export function Term({
   className?: string;
 }) {
   const url = docsUrl(id);
+  // A term near the window's right edge opens its card leftward, so the
+  // card stays on screen.
+  const [leftward, setLeftward] = useState(false);
   return (
-    <span className={`group/term relative inline-block ${className}`}>
+    <span
+      className={`group/term relative inline-block ${className}`}
+      onMouseEnter={(e) => setLeftward(e.currentTarget.getBoundingClientRect().left + CARD_WIDTH + 8 > window.innerWidth)}
+    >
       <span className="cursor-help underline decoration-[var(--text-ghost)] decoration-dotted underline-offset-[3px]">
         {children ?? GLOSSARY[id].label}
       </span>
       {/* The padding bridges the gap to the card so the pointer can reach
-          its link without the card closing. */}
+          its link without the card closing. Hidden, the card takes no width,
+          so it never widens the page. */}
       <span
         role="tooltip"
-        className={`pointer-events-none invisible absolute left-0 z-50 w-72 opacity-0 transition-opacity delay-300 group-hover/term:pointer-events-auto group-hover/term:visible group-hover/term:opacity-100 ${
-          above ? "bottom-full pb-1.5" : "top-full pt-1.5"
-        }`}
+        className={`pointer-events-none invisible absolute z-50 w-72 max-w-0 overflow-hidden opacity-0 transition-opacity delay-300 group-hover/term:pointer-events-auto group-hover/term:visible group-hover/term:max-w-[calc(100vw-16px)] group-hover/term:overflow-visible group-hover/term:opacity-100 ${
+          leftward ? "right-0" : "left-0"
+        } ${above ? "bottom-full pb-1.5" : "top-full pt-1.5"}`}
       >
         <span className="flex flex-col gap-1 whitespace-normal rounded border border-[var(--border-strong)] bg-[var(--surface-raised)] px-2.5 py-2 text-left font-sans text-xs font-normal leading-snug text-[var(--text-secondary)] shadow-lg">
           {detail && <span className="text-[var(--text)]">{detail}</span>}

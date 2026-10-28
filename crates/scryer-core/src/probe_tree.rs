@@ -95,6 +95,13 @@ pub fn worktree_path(project: &Path) -> PathBuf {
     probes_root().join(slug_for(project))
 }
 
+/// The branch checked out in `dir`; `None` for a detached HEAD or outside
+/// a git repository.
+pub fn current_branch(dir: &Path) -> Option<String> {
+    let out = git(dir, &["branch", "--show-current"]).ok()?;
+    Some(out.trim().to_string()).filter(|b| !b.is_empty())
+}
+
 /// The project's live git worktrees as `(path, branch)`, its main checkout
 /// first: every one whose directory still exists, leaving out scryer's own
 /// probe trees. The branch is `None` for a detached HEAD. Empty when the

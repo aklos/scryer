@@ -1,15 +1,15 @@
 /**
  * Sessions — the coding agents working here, and the ones that did lately.
- * Each session is one line: what it is on (the task it oriented on), where
- * it is working now or when it ended, and the claims it moved — proven,
- * written as todo, now failing. A line opens to those claims, each opening
- * its node page. A live session can be followed: the wiki and the map then
- * go where it edits. Read from the session logs and the derived status
+ * Each section is a table, a session per row: what it is on (the task it
+ * oriented on), the claims it moved — proven, failing, written as todo — a
+ * column each, and when it started or ended. A row opens to those claims,
+ * each opening its node page. A live session can be followed: the wiki and
+ * the map then go where it edits. Read from the session logs and the derived status
  * (`get_landing`); read-only.
  */
 
 import { useMemo, useState } from "react";
-import { Bot, Eye } from "lucide-react";
+import { Bot, ChevronRight, Eye } from "lucide-react";
 import { jumpTo, PageSection } from "../../shared/ui/pagekit";
 import { respElementId } from "../../widgets/source-section/SourceSection";
 import { SpecialBody, SpecialHeader } from "../../widgets/special-page-shell/shell";
@@ -17,7 +17,6 @@ import { CLAIM_LABEL, CLAIM_TONE } from "../../entities/model/claimState";
 import type { ScryModel } from "../../entities/model/viewmodel";
 import { useAgentIntegration } from "../../features/agent-integration/useAgentIntegration";
 import {
-  followTarget,
   RECENT_SECS,
   sessionCounts,
   sessionTitle,
@@ -25,7 +24,6 @@ import {
   type LoggedSession,
   type SessionClaim,
 } from "../../features/sessions/useSessions";
-import { FoldRow } from "./FoldRow";
 
 const TONE: Record<string, string> = CLAIM_TONE;
 
@@ -61,9 +59,9 @@ export function LandingPage({
   const { data, error } = useSessions(projectPath, showAll ? 0 : recent);
 
   const names = useMemo(() => new Map(model.nodes.map((n) => [n.id, n.name])), [model]);
-  const several = (data?.worktrees?.length ?? 0) > 1;
+  // The branch the session worked on, else its checkout's branch now.
   const branchOf = (s: LoggedSession) =>
-    data?.worktrees?.find((w) => w.path === s.worktree)?.branch ?? data?.branch ?? "detached";
+    s.branch ?? data?.worktrees?.find((w) => w.path === s.worktree)?.branch ?? data?.branch ?? "detached";
 
   // Open the claim's page and flash the claim once it renders.
   const openClaim = (c: Pick<SessionClaim, "respId" | "nodeId">) => {
@@ -71,18 +69,21 @@ export function LandingPage({
     window.setTimeout(() => jumpTo(respElementId(c.respId)), 250);
   };
 
+  // A branch column only when sessions are on more than one branch.
+  const several = new Set((data?.sessions ?? []).map(branchOf)).size > 1 || (data?.worktrees?.length ?? 0) > 1;
   const live = (data?.sessions ?? []).filter((s) => s.live);
   // An ended session shows only when it moved a claim.
   const ended = (data?.sessions ?? []).filter((s) => !s.live && sessionCounts(s).length > 0);
 
-  const row = (s: LoggedSession) => (
-    <SessionRow
-      key={s.session}
-      s={s}
-      title={sessionTitle(s, branchOf(s))}
-      branch={several ? branchOf(s) : undefined}
+  const table = (sessions: LoggedSession[], isLive: boolean) => (
+    <SessionTable
+      sessions={sessions}
+      live={isLive}
+      followable={live.length > 0}
+      titleOf={(s) => sessionTitle(s, branchOf(s))}
+      branchOf={several ? branchOf : undefined}
       names={names}
-      following={following === s.session}
+      following={following}
       onFollow={onFollow}
       onOpenClaim={openClaim}
     />
@@ -113,12 +114,12 @@ export function LandingPage({
             {data && live.length === 0 ? (
               <p className="py-1 text-sm text-[var(--text-muted)]">Nothing running. Start an agent and it shows up here.</p>
             ) : (
-              <ul className="flex flex-col">{live.map(row)}</ul>
+              live.length > 0 && table(live, true)
             )}
           </PageSection>
           {data && (ended.length > 0 || !showAll) && (
             <PageSection title="Earlier" count={ended.length}>
-              <ul className="flex flex-col">{ended.map(row)}</ul>
+              {ended.length > 0 && table(ended, false)}
               <button
                 type="button"
                 onClick={() => setShowAll((v) => !v)}
@@ -134,10 +135,100 @@ export function LandingPage({
   );
 }
 
-function SessionRow({
+/** The claim counts a session row shows, one column each. */
+const COUNTS = [
+  { state: "proven", label: "Proven", of: (s: LoggedSession) => s.newlyProven.length },
+  { state: "failing", label: "Failing", of: (s: LoggedSession) => failingOf(s).length },
+  { state: "planned", label: "Todo", of: (s: LoggedSession) => s.newlyPlanned.length },
+] as const;
+
+const failingOf = (s: LoggedSession) => s.newlyStaleOrFailing.filter((c) => c.state === "failing");
+
+const HEAD = "px-2 pb-1 text-left text-[11px] font-medium text-[var(--text-ghost)]";
+// Fixed widths for every column but the task's, so both sections' columns line up.
+const W_MARK = "w-5";
+const W_BRANCH = "w-20";
+const W_COUNT = "w-14";
+const W_WHEN = "w-20";
+const W_FOLLOW = "w-24";
+const CELL = "px-2 py-1 align-baseline";
+
+/** One section's sessions, a row each; a row opens to the claims it moved. */
+function SessionTable({
+  sessions,
+  live,
+  followable,
+  titleOf,
+  branchOf,
+  names,
+  following,
+  onFollow,
+  onOpenClaim,
+}: {
+  sessions: LoggedSession[];
+  live: boolean;
+  /** A session on the page is live: both sections keep a column for Follow. */
+  followable: boolean;
+  titleOf: (s: LoggedSession) => string;
+  /** The worktree's branch, when the project has several. */
+  branchOf?: (s: LoggedSession) => string;
+  names: Map<string, string>;
+  following: string | null;
+  onFollow: (session: string | null) => void;
+  onOpenClaim: (c: SessionClaim) => void;
+}) {
+  const columns = 4 + (branchOf ? 1 : 0) + COUNTS.length + (followable ? 1 : 0);
+  return (
+    <table className="w-full table-fixed border-collapse text-sm">
+      <colgroup>
+        <col className={W_MARK} />
+        <col className={W_MARK} />
+        <col />
+        {branchOf && <col className={W_BRANCH} />}
+        {COUNTS.map((c) => (
+          <col key={c.state} className={W_COUNT} />
+        ))}
+        <col className={W_WHEN} />
+        {followable && <col className={W_FOLLOW} />}
+      </colgroup>
+      <thead>
+        <tr className="border-b border-[var(--border)]">
+          <th className={HEAD} colSpan={2} />
+          <th className={HEAD}>Task</th>
+          {branchOf && <th className={HEAD}>Branch</th>}
+          {COUNTS.map((c) => (
+            <th key={c.state} className={`${HEAD} text-right`}>
+              {c.label}
+            </th>
+          ))}
+          <th className={`${HEAD} text-right`}>{live ? "Started" : "Ended"}</th>
+          {followable && <th className={HEAD} />}
+        </tr>
+      </thead>
+      {sessions.map((s) => (
+        <SessionRows
+          key={s.session}
+          s={s}
+          title={titleOf(s)}
+          branch={branchOf?.(s)}
+          columns={columns}
+          followable={followable}
+          names={names}
+          following={following === s.session}
+          onFollow={onFollow}
+          onOpenClaim={onOpenClaim}
+        />
+      ))}
+    </table>
+  );
+}
+
+function SessionRows({
   s,
   title,
   branch,
+  columns,
+  followable,
   names,
   following,
   onFollow,
@@ -145,71 +236,117 @@ function SessionRow({
 }: {
   s: LoggedSession;
   title: string;
-  /** The worktree's branch, when the project has several. */
   branch?: string;
+  columns: number;
+  followable: boolean;
   names: Map<string, string>;
   following: boolean;
   onFollow: (session: string | null) => void;
   onOpenClaim: (c: SessionClaim) => void;
 }) {
-  const failing = s.newlyStaleOrFailing.filter((c) => c.state === "failing");
-  const claims = [...failing, ...s.newlyProven, ...s.newlyPlanned];
-  const here = followTarget(s);
-  const where = s.live ? (here ? `in ${names.get(here) ?? here}` : "starting") : `ended ${ago(s.endedAt)}`;
+  const [open, setOpen] = useState(false);
+  const claims = [...failingOf(s), ...s.newlyProven, ...s.newlyPlanned];
+  const folds = claims.length > 0;
+  const when = ago(s.live ? s.startedAt : s.endedAt);
   return (
-    <FoldRow
-      aside={
-        s.live && (
+    <tbody>
+      <tr
+        onClick={folds ? () => setOpen((v) => !v) : undefined}
+        className={`border-b border-[var(--border-subtle)] ${folds ? "cursor-pointer hover:bg-[var(--surface-hover)]" : ""}`}
+      >
+        <td className="py-1 pl-1 align-middle">
           <button
             type="button"
-            aria-pressed={following}
-            onClick={() => onFollow(following ? null : s.session)}
-            title={following ? "Stop following this session" : "Follow this session: the wiki and map go where it edits"}
-            className={`flex shrink-0 items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium ${
-              following
-                ? "bg-violet-600 text-white dark:bg-violet-500"
-                : "text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
-            }`}
+            aria-expanded={folds ? open : undefined}
+            aria-label={open ? "Hide claims" : "Show claims"}
+            disabled={!folds}
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen((v) => !v);
+            }}
+            className="flex items-center"
           >
-            <Eye className="h-3.5 w-3.5" />
-            {following ? "Following" : "Follow"}
+            <ChevronRight
+              className={`h-3.5 w-3.5 text-[var(--text-ghost)] transition-transform ${open ? "rotate-90" : ""} ${folds ? "" : "invisible"}`}
+            />
           </button>
-        )
-      }
-      summary={
-        <span className="flex min-w-0 flex-1 items-baseline gap-2">
+        </td>
+        <td className="py-1 pl-1 align-middle">
           {s.live ? (
-            <span className="h-2 w-2 shrink-0 self-center animate-pulse rounded-full bg-violet-600 dark:bg-violet-500" />
+            <span className="block h-2 w-2 animate-pulse rounded-full bg-violet-600 dark:bg-violet-500" />
           ) : (
-            <Bot className="h-3.5 w-3.5 shrink-0 self-center text-[var(--text-ghost)]" />
+            <Bot className="h-3.5 w-3.5 text-[var(--text-ghost)]" />
           )}
-          <span className="min-w-0 flex-1 truncate text-[var(--text)]" title={`Agent session ${s.session.slice(0, 8)}`}>
-            {title}
-          </span>
-          {branch && <span className="shrink-0 font-mono text-xs text-[var(--text-tertiary)]">{branch}</span>}
-          <span className="shrink-0 text-xs text-[var(--text-muted)]">{sessionCounts(s).join(" · ")}</span>
-          <span className="w-28 shrink-0 truncate text-right text-xs text-[var(--text-ghost)]">{where}</span>
-        </span>
-      }
-    >
-      {claims.length > 0 && (
-        <ul className="flex flex-col">
-          {claims.map((c) => (
-            <li key={c.respId}>
+        </td>
+        <td className={`${CELL} truncate text-[var(--text)]`} title={`${title} — agent session ${s.session.slice(0, 8)}`}>
+          {title}
+        </td>
+        {branch !== undefined && (
+          <td className={`${CELL} truncate font-mono text-xs text-[var(--text-tertiary)]`}>{branch}</td>
+        )}
+        {COUNTS.map((c) => {
+          const n = c.of(s);
+          return (
+            <td key={c.state} className={`${CELL} text-right text-xs tabular-nums ${n > 0 ? TONE[c.state] : ""}`}>
+              {n > 0 ? n : ""}
+            </td>
+          );
+        })}
+        <td className={`${CELL} truncate text-right text-xs text-[var(--text-ghost)]`}>{when}</td>
+        {followable && (
+          <td className="py-1 pl-2 align-middle">
+            {s.live && (
               <button
                 type="button"
-                onClick={() => onOpenClaim(c)}
-                className="flex w-full items-baseline gap-2 rounded px-1 py-0.5 text-left text-sm hover:bg-[var(--surface-hover)]"
-                title={`${c.file}:${c.line}`}
+                aria-pressed={following}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onFollow(following ? null : s.session);
+                }}
+                title={following ? "Stop following this session" : "Follow this session: the wiki and map go where it edits"}
+                className={`flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-0.5 text-xs font-medium ${
+                  following
+                    ? "bg-violet-600 text-white dark:bg-violet-500"
+                    : "text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+                }`}
               >
-                <span className={`w-14 shrink-0 text-xs ${TONE[c.state] ?? ""}`}>{CLAIM_LABEL[c.state]}</span>
-                <span className="min-w-0 flex-1 truncate text-[var(--text)]">{c.statement}</span>
-                <span className="shrink-0 text-xs text-[var(--text-ghost)]">{names.get(c.nodeId) ?? ""}</span>
+                <Eye className="h-3.5 w-3.5" />
+                {following ? "Following" : "Follow"}
               </button>
-            </li>
-          ))}
-        </ul>
+            )}
+          </td>
+        )}
+      </tr>
+      {folds && open && (
+        <tr>
+          <td colSpan={columns} className="pb-2 pl-10 pt-0.5">
+            <table className="w-full border-collapse text-sm">
+              <tbody>
+                {claims.map((c) => (
+                  <tr
+                    key={c.respId}
+                    tabIndex={0}
+                    onClick={() => onOpenClaim(c)}
+                    onKeyDown={(e) => e.key === "Enter" && onOpenClaim(c)}
+                    title={`${c.file}:${c.line}`}
+                    className="cursor-pointer hover:bg-[var(--surface-hover)] focus-visible:outline focus-visible:outline-1 focus-visible:outline-[var(--accent)]"
+                  >
+                    <td className={`w-0 whitespace-nowrap py-0.5 pl-1 pr-3 align-baseline text-xs ${TONE[c.state] ?? ""}`}>
+                      {CLAIM_LABEL[c.state]}
+                    </td>
+                    <td className="w-full max-w-0 truncate py-0.5 align-baseline text-[var(--text)]">
+                      {c.statement}
+                    </td>
+                    <td className="whitespace-nowrap py-0.5 pl-3 pr-1 text-right align-baseline text-xs text-[var(--text-ghost)]">
+                      {names.get(c.nodeId) ?? ""}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </td>
+        </tr>
       )}
-    </FoldRow>
+    </tbody>
   );
 }
