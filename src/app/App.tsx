@@ -98,7 +98,7 @@ function AppBody() {
 }
 
 function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage }) {
-  const { committed, projectPath, reloadFromDisk, externalGeneration, openProject, closeProject } = storage;
+  const { committed, projectPath, showEdit, externalGeneration, openProject, closeProject } = storage;
   const agent = useAgentSession();
   const { toast } = useToast();
   // One preview sidecar per open project; node pages derive their Preview
@@ -371,15 +371,15 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
         ? makeDerivedEditor({
             projectPath,
             model,
-            onWritten: () => {
-              void reloadFromDisk();
-              refreshHealth();
-              refreshTests();
-            },
+            onWrite: (write, apply) =>
+              void showEdit(apply, write).then(() => {
+                refreshHealth();
+                refreshTests();
+              }),
             onError: (m) => toast(m),
           })
         : undefined,
-    [projectPath, model, reloadFromDisk, refreshHealth, refreshTests, toast],
+    [projectPath, model, showEdit, refreshHealth, refreshTests, toast],
   );
   const pageEditor = writing ? undefined : editor;
 

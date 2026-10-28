@@ -78,6 +78,9 @@ export interface ModelStorage {
   closeProject: () => void;
   /** Re-read both layers; true when either changed. */
   reloadFromDisk: () => Promise<boolean>;
+  /** Show an edit over both layers until the re-read after `write` lands,
+   *  so the page never flashes back to the old text meanwhile. */
+  showEdit: (apply: (m: ScryModel) => ScryModel, write: Promise<unknown>) => Promise<void>;
   /** Drop a recent project from localStorage. */
   forgetRecent: (path: string) => void;
 }
@@ -91,6 +94,8 @@ export function useModelStorage(): ModelStorage {
   const [error, setError] = useState<string | null>(null);
   const [externalGeneration, setExternalGeneration] = useState(0);
   const [recentProjects, setRecentProjects] = useState<string[]>(() => readRecent());
+  // Edits written but not yet re-read, applied in order over the disk layers.
+  const [shown, setShown] = useState<readonly { apply: (m: ScryModel) => ScryModel }[]>([]);
 
   // The bytes last applied per layer: an unchanged re-read must not re-render.
   const plannedRaw = useRef<string | null>(null);
@@ -143,6 +148,18 @@ export function useModelStorage(): ModelStorage {
     };
   }, [modelRef, reloadFromDisk]);
 
+  const showEdit = useCallback(
+    async (apply: (m: ScryModel) => ScryModel, write: Promise<unknown>) => {
+      const edit = { apply };
+      setShown((s) => [...s, edit]);
+      await write.catch(() => {});
+      await reloadFromDisk();
+      // A failed write re-read the old text, so dropping the edit reverts it.
+      setShown((s) => s.filter((e) => e !== edit));
+    },
+    [reloadFromDisk],
+  );
+
   const openProject = useCallback(async (path: string, opts?: { remember?: boolean }) => {
     setStatus("loading");
     setError(null);
@@ -180,6 +197,7 @@ export function useModelStorage(): ModelStorage {
     setError(null);
     plannedRaw.current = null;
     committedRaw.current = null;
+    setShown([]);
   }, []);
 
   const forgetRecent = useCallback((path: string) => {
@@ -188,17 +206,23 @@ export function useModelStorage(): ModelStorage {
     setRecentProjects(next);
   }, []);
 
+  const shownModel = useMemo(() => model && shown.reduce((m, e) => e.apply(m), model), [model, shown]);
+  const shownCommitted = useMemo(
+    () => committed && shown.reduce((m, e) => e.apply(m), committed),
+    [committed, shown],
+  );
+
   const planDiff = useMemo<ModelDiff>(
-    () => (committed && model ? computePlanDiff(committed, model) : EMPTY_DIFF),
-    [committed, model],
+    () => (shownCommitted && shownModel ? computePlanDiff(shownCommitted, shownModel) : EMPTY_DIFF),
+    [shownCommitted, shownModel],
   );
 
   return {
     status,
     projectPath,
     modelRef,
-    model,
-    committed,
+    model: shownModel,
+    committed: shownCommitted,
     planDiff,
     error,
     recentProjects,
@@ -206,6 +230,7 @@ export function useModelStorage(): ModelStorage {
     openProject,
     closeProject,
     reloadFromDisk,
+    showEdit,
     forgetRecent,
   };
 }

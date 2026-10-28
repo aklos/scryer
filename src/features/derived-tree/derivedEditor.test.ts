@@ -14,7 +14,7 @@ describe("derivedEditor", () => {
       nodes: [node("sys", "system"), node("dev", "person"), node("app", "container"), node("ui", "component"), node("f", "symbol")],
     } as ScryModel;
     const onError = vi.fn();
-    const editor = makeDerivedEditor({ projectPath: "/p", model, onWritten: () => {}, onError });
+    const editor = makeDerivedEditor({ projectPath: "/p", model, onWrite: () => {}, onError });
     for (const id of ["sys", "dev", "app", "ui", "f"]) editor.updateNode(id, { name: `${id} renamed` });
     const renamed = invoke.mock.calls.filter(([cmd]) => cmd === "rename_node").map(([, args]) => args?.nodeId);
     expect(renamed).toEqual(["sys", "dev", "app", "ui"]);
@@ -27,10 +27,22 @@ describe("derivedEditor decisions", () => {
     invoke.mockClear();
     const model = { nodes: [node("app", "container"), node("dev", "person")] } as ScryModel;
     const onError = vi.fn();
-    const editor = makeDerivedEditor({ projectPath: "/p", model, onWritten: () => {}, onError });
+    const editor = makeDerivedEditor({ projectPath: "/p", model, onWrite: () => {}, onError });
     editor.updateNode("app", { decisions: "- Chose a grid." });
     editor.updateNode("dev", { decisions: "x" });
     expect(invoke.mock.calls.filter(([cmd]) => cmd === "edit_node_decisions").map(([, a]) => a?.nodeId)).toEqual(["app"]);
     expect(onError).toHaveBeenCalledOnce();
+  });
+});
+
+describe("derivedEditor pending edits", () => {
+  it("When a node is renamed, shows the new name until the write is re-read", () => {
+    const model = { nodes: [node("sys", "system")] } as ScryModel;
+    const onWrite = vi.fn<(write: Promise<unknown>, apply: (m: ScryModel) => ScryModel) => void>();
+    const editor = makeDerivedEditor({ projectPath: "/p", model, onWrite, onError: () => {} });
+    editor.updateNode("sys", { name: "Scryer" });
+    expect(onWrite).toHaveBeenCalledOnce();
+    const apply = onWrite.mock.calls[0]![1];
+    expect(apply(model).nodes[0]!.name).toBe("Scryer");
   });
 });

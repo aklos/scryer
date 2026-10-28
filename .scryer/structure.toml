@@ -2,7 +2,7 @@
 # derived from packaging and tests; this file says only what the code cannot.
 
 [system]
-name = "scryer"
+name = "Scryer"
 persons = ["developer", "agent"]
 externals = ["claude code", "codex", "copilot cli"]
 
