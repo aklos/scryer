@@ -128,12 +128,17 @@ pub fn setup_on(project: &Path, detected: &[Tool], binary: &str) -> Result<Setup
     if let Some(text) = gitignore {
         files::write_text(&project.join(d::GITIGNORE), &text)?;
     }
+    match std::fs::remove_file(project.join(d::SETUP_OFF)) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(format!("{}: {e}", d::SETUP_OFF)),
+        _ => {}
+    }
     Ok(setup_status(project, detected))
 }
 
 /// Take out every scryer entry, for every tool, detected or not, and nothing
 /// else. A file left empty by it is removed. `.scryer/.gitignore` stays: it
-/// keeps scryer's own files out of commits whether or not agents use it.
+/// keeps scryer's own files out of commits whether or not agents use it. It
+/// leaves [`d::SETUP_OFF`], so [`setup_nudge`] goes quiet here.
 pub fn setup_off(project: &Path, detected: &[Tool]) -> Result<SetupStatus, String> {
     let mut docs = Docs::new(project);
     for tool in Tool::ALL {
@@ -142,7 +147,52 @@ pub fn setup_off(project: &Path, detected: &[Tool]) -> Result<SetupStatus, Strin
         }
     }
     docs.save()?;
+    ensure_scryer_dir(project)?;
+    files::write_text(&project.join(d::SETUP_OFF), "")?;
     Ok(setup_status(project, detected))
+}
+
+/// Create `project`'s `.scryer/`, giving it the `.gitignore` `setup on`
+/// writes when it has none, so the caches and session logs a first tool call
+/// or app open writes stay out of commits. A `.gitignore` already there,
+/// scryer's or the developer's, is left as it is.
+pub fn ensure_scryer_dir(project: &Path) -> Result<(), String> {
+    let path = project.join(d::GITIGNORE);
+    if files::read_text(&path)?.is_none() {
+        files::write_text(&path, &d::gitignore_text())?;
+    }
+    Ok(())
+}
+
+/// What a connected agent should pass on when a `detected` tool lacks
+/// scryer's skill or hooks, so a server installed from an MCP list alone still
+/// leads to the full loop. `None` when every detected tool has both, or when
+/// setup was switched off here.
+pub fn setup_nudge(project: &Path, detected: &[Tool]) -> Option<String> {
+    if project.join(d::SETUP_OFF).is_file() {
+        return None;
+    }
+    let gaps: Vec<String> = setup_status(project, detected)
+        .tools
+        .iter()
+        .filter(|t| t.detected)
+        .filter_map(|t| {
+            let lacks: Vec<&str> = t
+                .entries
+                .iter()
+                .filter(|e| matches!(e.part, Part::Skill | Part::Hooks) && !e.state.settled())
+                .map(|e| e.part.label())
+                .collect();
+            (!lacks.is_empty()).then(|| format!("{} lacks scryer's {}", t.name, lacks.join(" and ")))
+        })
+        .collect();
+    (!gaps.is_empty()).then(|| {
+        format!(
+            "agent integration is incomplete here: {}. With the developer's go-ahead, run `scryer-mcp setup on`; \
+             it writes them into this project's agent config, and `setup off` takes them out and ends this note",
+            gaps.join("; ")
+        )
+    })
 }
 
 /// The readout `scryer-mcp setup` prints: the state, then per tool, per file.
@@ -612,5 +662,78 @@ mod tests {
         assert!(text.contains("Copilot CLI (not on PATH)") && text.contains(".github/hooks/scryer.json"), "{text}");
         let v = serde_json::to_value(setup_status(p, &[Tool::ClaudeCode])).unwrap();
         assert_eq!(v["tools"][0]["entries"][0], serde_json::json!({ "part": "mcpServer", "file": ".mcp.json", "state": "installed" }));
+    }
+
+    /// If a detected tool lacks scryer's skill or hooks, then the nudge names the tool, what it lacks, and `scryer-mcp setup on`.
+    #[test]
+    fn nudges_for_a_missing_skill_or_hooks() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        let note = setup_nudge(p, &[Tool::ClaudeCode]).unwrap();
+        assert!(note.contains("Claude Code lacks scryer's hooks and skill"), "{note}");
+        assert!(note.contains("`scryer-mcp setup on`"), "{note}");
+        assert!(!note.contains("Codex"), "an undetected tool is not named: {note}");
+
+        files::write_text(&p.join(d::CLAUDE_SKILL), d::skill_text()).unwrap();
+        let note = setup_nudge(p, &[Tool::ClaudeCode]).unwrap();
+        assert!(note.contains("Claude Code lacks scryer's hooks."), "{note}");
+    }
+
+    /// While every detected tool has scryer's skill and hooks, gives no nudge.
+    #[test]
+    fn no_nudge_once_set_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        let bin = fake_binary(p);
+        setup_on(p, &[Tool::ClaudeCode], &bin).unwrap();
+        assert_eq!(setup_nudge(p, &[Tool::ClaudeCode]), None);
+        assert!(setup_nudge(p, &[Tool::ClaudeCode, Tool::Codex]).unwrap().contains("Codex lacks"));
+    }
+
+    /// While setup is switched off here, gives no nudge.
+    #[test]
+    fn no_nudge_after_setup_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        let bin = fake_binary(p);
+        setup_on(p, &Tool::ALL, &bin).unwrap();
+        setup_off(p, &Tool::ALL).unwrap();
+        assert_eq!(setup_nudge(p, &Tool::ALL), None);
+
+        let bare = tempfile::tempdir().unwrap();
+        setup_off(bare.path(), &[Tool::ClaudeCode]).unwrap();
+        assert_eq!(setup_nudge(bare.path(), &[Tool::ClaudeCode]), None, "off before any .scryer/ existed");
+    }
+
+    /// When scryer first writes into a project, gives `.scryer/` the gitignore that keeps its caches out of commits.
+    #[test]
+    fn a_new_scryer_dir_gets_its_gitignore() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        ensure_scryer_dir(p).unwrap();
+        assert_eq!(read(p, d::GITIGNORE).unwrap(), d::gitignore_text());
+    }
+
+    /// If `.scryer/` already has a gitignore, then leaves it as it is.
+    #[test]
+    fn an_existing_gitignore_is_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        files::write_text(&p.join(d::GITIGNORE), "mine\n").unwrap();
+        ensure_scryer_dir(p).unwrap();
+        assert_eq!(read(p, d::GITIGNORE).unwrap(), "mine\n");
+    }
+
+    /// When setup is switched back on, nudges again for what goes missing later.
+    #[test]
+    fn setup_on_lifts_the_opt_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        let bin = fake_binary(p);
+        setup_on(p, &[Tool::ClaudeCode], &bin).unwrap();
+        setup_off(p, &[Tool::ClaudeCode]).unwrap();
+        setup_on(p, &[Tool::ClaudeCode], &bin).unwrap();
+        std::fs::remove_file(p.join(d::CLAUDE_SKILL)).unwrap();
+        assert!(setup_nudge(p, &[Tool::ClaudeCode]).unwrap().contains("lacks scryer's skill"));
     }
 }

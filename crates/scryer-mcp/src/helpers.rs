@@ -139,6 +139,11 @@ pub(crate) fn resolve_model_ref(req_project: Option<&str>) -> Result<ModelRef, M
             McpError::internal_error(format!("cannot read cwd: {}", e), None)
         })?,
     };
+    // The first call into a fresh project writes caches under `.scryer/`;
+    // give it its .gitignore first. Never creates the project itself.
+    if path.is_dir() {
+        let _ = scryer_core::agent_setup::ensure_scryer_dir(&path);
+    }
     Ok(ModelRef::ProjectLocal(path))
 }
 

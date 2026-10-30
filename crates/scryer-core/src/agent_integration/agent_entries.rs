@@ -137,6 +137,10 @@ pub const AGENTS_SKILL: &str = ".agents/skills/scryer/SKILL.md";
 
 /// The server-wide allow entry: Claude Code reads a bare `mcp__<server>` as
 /// "auto-approve every tool from that server".
+/// Left by `setup off` so a connected agent stops nudging toward `setup on`;
+/// `on` removes it. Under `.scryer/`, so the `.gitignore` keeps it to this
+/// machine, like the Claude Code settings it stands in for.
+pub const SETUP_OFF: &str = ".scryer/setup-off";
 pub const MCP_ALLOW: &str = "mcp__scryer";
 
 /// `(event, matcher, timeout seconds)`.

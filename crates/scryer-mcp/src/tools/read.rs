@@ -638,9 +638,12 @@ impl ScryerServer {
         }
 
         let mut payload = serde_json::json!({ "files": files_out, "matches": matches_out });
-        // Keys serialize sorted, so this one leads and the cap's clip never
-        // reaches it.
+        // Keys serialize sorted, so these lead and the cap's clip never
+        // reaches them.
         let project = model_ref.project_path();
+        if let Some(note) = scryer_core::agent_setup::setup_nudge(project, self.detected()) {
+            payload["agentSetup"] = serde_json::json!(note);
+        }
         if let Some(open) = scryer_extract::claim_files::migration_open_items(project).filter(|n| *n > 0) {
             payload["authoredModel"] = serde_json::json!(format!(
                 "a migration from the old authored model is unfinished: {} lists {open} open item(s) to judge \
@@ -769,6 +772,29 @@ mod tests {
         let text = text_of(&orient(&dir, Some("persist text"), &files));
         assert!(text.starts_with(r#"{"authoredModel":"#), "{text}");
         assert!(text.contains("scryer-mcp migrate"), "{text}");
+    }
+
+    /// If a detected tool lacks scryer's skill or hooks, then orient names `scryer-mcp setup on` ahead of anything its cap could shed.
+    #[test]
+    fn orient_nudges_toward_setup() {
+        let dir = project();
+        assert!(json_of(&orient(&dir, Some("persist text"), &[])).get("agentSetup").is_none());
+        let server = ScryerServer::with_detected(&[scryer_core::agent_integration::Tool::ClaudeCode]);
+        let files: Vec<&str> = vec!["crates/notes/src/draft.rs"; 10];
+        let text = text_of(&orient_as(&server, &dir, Some("persist text"), &files));
+        assert!(text.starts_with(r#"{"agentSetup":"#), "{text}");
+        assert!(text.contains("Claude Code lacks scryer's hooks and skill") && text.contains("scryer-mcp setup on"), "{text}");
+    }
+
+    /// When a tool first runs in a project without `.scryer/`, gives it the gitignore that keeps scryer's caches out of commits.
+    #[test]
+    fn a_first_call_gives_scryer_dir_its_gitignore() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "Cargo.toml", "[package]\nname = \"fresh\"\nversion = \"0.1.0\"\n");
+        write(dir.path(), "src/lib.rs", "//! Adds numbers.\npub fn add() {}\n");
+        assert!(!orient(&dir, Some("add numbers"), &["src/lib.rs"]).is_error.unwrap_or(false));
+        let ignore = std::fs::read_to_string(dir.path().join(".scryer/.gitignore")).unwrap();
+        assert_eq!(ignore, scryer_core::agent_integration::gitignore_text());
     }
 
     /// While a migration checklist has open items, orient names it as the

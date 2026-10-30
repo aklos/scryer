@@ -33,7 +33,7 @@ pub(crate) fn watch_project(
     state.project = None;
 
     let scryer_core::ModelRef::ProjectLocal(ref project_path) = model_ref;
-    let _ = std::fs::create_dir_all(&target_dir);
+    let _ = scryer_core::agent_setup::ensure_scryer_dir(project_path);
     let handle = app.clone();
     let ref_string = ref_str.clone();
     // Passive test-report ingestion: the same watcher also covers the

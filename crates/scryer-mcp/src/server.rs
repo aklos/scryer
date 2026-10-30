@@ -3,16 +3,17 @@
 //! construction — and the connect-time instructions. The session it serves is
 //! the one its harness process last bound, else the one named in the env.
 
-use crate::instructions::INSTRUCTIONS;
+use crate::instructions::instructions_for;
 use rmcp::{
     handler::server::{router::tool::ToolRouter, tool::ToolCallContext},
     model::{
-        CallToolRequestParams, CallToolResult, InitializeRequestParams, InitializeResult,
-        ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
+        CallToolRequestParams, CallToolResult, Implementation, InitializeRequestParams,
+        InitializeResult, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
     },
     service::{RequestContext, RoleServer},
     ErrorData as McpError, ServerHandler,
 };
+use scryer_core::agent_integration::Tool as AgentTool;
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
@@ -24,6 +25,9 @@ pub struct ScryerServer {
     /// A session id pinned in-process (tests); otherwise the harness's own
     /// (see [`ScryerServer::session_id`]).
     session_override: Arc<Mutex<Option<String>>>,
+    /// The agent CLIs on PATH, read once: whose skill and hooks a missing
+    /// setup is nudged for. None in tests, unless a test names them.
+    detected: Vec<AgentTool>,
 }
 
 impl ScryerServer {
@@ -45,7 +49,19 @@ impl ScryerServer {
             tool_router,
             tools,
             session_override: Arc::new(Mutex::new(None)),
+            detected: if cfg!(test) { Vec::new() } else { scryer_core::agent_setup::detect_tools() },
         }
+    }
+
+    /// A server that takes `detected` for the agent CLIs on PATH.
+    #[cfg(test)]
+    pub(crate) fn with_detected(detected: &[AgentTool]) -> Self {
+        Self { detected: detected.to_vec(), ..Self::new() }
+    }
+
+    /// The agent CLIs this server nudges setup for (see [`Self::detected`]).
+    pub(crate) fn detected(&self) -> &[AgentTool] {
+        &self.detected
     }
 
     /// The advertised tools (slimmed schemas) — what `tools/list` returns.
@@ -147,9 +163,16 @@ impl ServerHandler for ScryerServer {
     }
 
     fn get_info(&self) -> ServerInfo {
-        // Always-loaded context: one paragraph, the loop and the claim grammar.
+        // Always-loaded context: one paragraph, the loop and the claim grammar,
+        // and the setup nudge when the working project needs one.
+        let project = std::env::current_dir().ok().map(crate::cli::working_project);
         ServerInfo {
-            instructions: Some(INSTRUCTIONS.into()),
+            server_info: Implementation {
+                name: "scryer".into(),
+                version: env!("CARGO_PKG_VERSION").into(),
+                ..Default::default()
+            },
+            instructions: Some(instructions_for(project.as_deref(), &self.detected)),
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             ..Default::default()
         }
@@ -173,6 +196,7 @@ mod surface {
     //! small, and serves no rule bodies: what an agent needs is inlined where
     //! it acts.
     use super::*;
+    use crate::instructions::INSTRUCTIONS;
 
     fn descriptions() -> Vec<(String, String)> {
         ScryerServer::new()
@@ -285,5 +309,26 @@ mod surface {
             }
         }
         assert!(total <= 5_000, "schemas total {total} chars (budget 5000)");
+    }
+
+    /// Names itself scryer, with its version, to the client.
+    #[test]
+    fn the_server_names_itself() {
+        let info = ScryerServer::new().get_info().server_info;
+        assert_eq!((info.name.as_str(), info.version.as_str()), ("scryer", env!("CARGO_PKG_VERSION")));
+    }
+
+    /// If the working project lacks scryer's skill or hooks for a detected tool, then the connect-time instructions end with the setup nudge.
+    #[test]
+    fn the_instructions_carry_the_setup_nudge() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        assert_eq!(crate::cli::working_project(p.to_path_buf()), p, "no .scryer/ yet: the directory itself");
+        assert_eq!(instructions_for(Some(p), &[]), INSTRUCTIONS);
+        assert_eq!(instructions_for(None, &[AgentTool::ClaudeCode]), INSTRUCTIONS);
+        let text = instructions_for(Some(p), &[AgentTool::ClaudeCode]);
+        assert!(text.starts_with(INSTRUCTIONS), "{text}");
+        assert!(text.ends_with("ends this note."), "{text}");
+        assert!(text.contains("Claude Code lacks scryer's") && text.contains("`scryer-mcp setup on`"), "{text}");
     }
 }

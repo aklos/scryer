@@ -100,6 +100,13 @@ pub(crate) fn find_project(start: &Path) -> Option<PathBuf> {
     None
 }
 
+/// The project a command run in `cwd` works on: the nearest directory holding
+/// `.scryer/` at or above it, else `cwd` itself — a project scryer has not
+/// written into yet.
+pub(crate) fn working_project(cwd: PathBuf) -> PathBuf {
+    find_project(&cwd).unwrap_or(cwd)
+}
+
 fn derived_status(project: &Path) -> Result<(DerivedTree, DerivedStatus), String> {
     scryer_extract::test_status::derived_status(&ModelRef::ProjectLocal(project.to_path_buf()))
 }
@@ -435,8 +442,7 @@ pub(crate) fn check_report(tree: &DerivedTree, status: &DerivedStatus, gates: &G
 /// `on` registers this very binary.
 pub(crate) fn run_setup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     use scryer_core::agent_setup;
-    let cwd = std::env::current_dir()?;
-    let project = find_project(&cwd).unwrap_or(cwd);
+    let project = working_project(std::env::current_dir()?);
     let detected = agent_setup::detect_tools();
     let status = match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         [] => agent_setup::setup_status(&project, &detected),

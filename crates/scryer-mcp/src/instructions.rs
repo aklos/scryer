@@ -24,3 +24,13 @@ it is done. A `.scryer/migration.md` is an unfinished move from an old authored 
 it means working through its checklist as the skill says. Every \
 tool takes an optional absolute `project`, defaulting to the working directory. The `scryer` skill, \
 when installed, has the full loop with examples.";
+
+/// The instructions for a server working in `project`: [`INSTRUCTIONS`], and
+/// when a `detected` agent CLI there lacks scryer's skill or hooks, the setup
+/// nudge after them — for clients that never call `orient`.
+pub(crate) fn instructions_for(project: Option<&std::path::Path>, detected: &[scryer_core::agent_integration::Tool]) -> String {
+    match project.and_then(|p| scryer_core::agent_setup::setup_nudge(p, detected)) {
+        Some(note) => format!("{INSTRUCTIONS} Note: {note}."),
+        None => INSTRUCTIONS.to_string(),
+    }
+}

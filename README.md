@@ -151,7 +151,7 @@ scryer-mcp setup off    # remove exactly scryer's entries, nothing else
 - **Codex** — the scryer server in `.codex/config.toml`; session hooks in `.codex/hooks.json`
 - **Copilot CLI** — the scryer server in `.mcp.json` (the file Claude Code reads); session hooks in `.github/hooks/scryer.json`
 
-and `.scryer/.gitignore`, so only what a teammate needs is committed. Both commands are idempotent. Everything else in those files is left alone, and a status line of your own is never replaced. An entry from an earlier scryer, or one naming a binary that has moved, reads as off with a note; `on` rewrites it.
+and `.scryer/.gitignore`, so only what a teammate needs is committed (the first tool call into a project writes that `.gitignore` too, with or without setup). While a detected agent CLI lacks the skill or hooks, `orient` and the connect-time instructions say so and name `setup on`; `setup off` ends that note on this machine. Both commands are idempotent. Everything else in those files is left alone, and a status line of your own is never replaced. An entry from an earlier scryer, or one naming a binary that has moved, reads as off with a note; `on` rewrites it.
 
 ### Manual setup
 
