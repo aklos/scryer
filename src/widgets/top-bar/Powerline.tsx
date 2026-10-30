@@ -54,8 +54,7 @@ export function Powerline({ model, agent, health, launch, onOpenSpecial, onOpenS
   return (
     <div className={`pl ${busy ? "working" : ""}`}>
       {/* Agent launch — which subagent a fill will run with (model + effort);
-          click to open the settings panel. Drift / plan-ahead used to live here,
-          but the tree's Changes/Drift lenses already own those (count + where). */}
+          click to open the settings panel. */}
       <button
         type="button"
         onClick={onOpenSettings}

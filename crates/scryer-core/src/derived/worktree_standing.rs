@@ -128,6 +128,7 @@ mod tests {
             identifier: id.into(),
             description: id.into(),
             concerns: Vec::new(),
+            decisions: None,
             junit_name: id.into(),
             planned: false,
         };

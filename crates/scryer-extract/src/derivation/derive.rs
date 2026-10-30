@@ -191,9 +191,6 @@ fn property(m: &Member) -> SchemaProperty {
         label: if m.optional { format!("{}?", m.name) } else { m.name.clone() },
         description: m.doc.clone().unwrap_or_default(),
         ty: m.ty.clone(),
-        vagrant: None,
-        stale: None,
-        last_touched_at: None,
     }
 }
 
@@ -702,11 +699,7 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
                 id: id.clone(),
                 statement: t.description.clone(),
                 concern,
-                vagrant: None,
-                stale: None,
-                stale_proposal: None,
-                directives: Vec::new(),
-                last_touched_at: None,
+                decisions: t.decisions.clone(),
             });
             model.test_map.insert(
                 id.clone(),
@@ -733,6 +726,7 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
                 identifier: t.identifier.clone(),
                 description: t.description.clone(),
                 concerns: t.concerns.clone(),
+                decisions: t.decisions.clone(),
                 junit_name: t.junit_name.clone(),
                 planned: t.planned,
             });
@@ -1223,14 +1217,10 @@ fn node(id: &str, kind: Kind, name: &str, parent: Option<&str>) -> Node {
         external: None,
         technology: None,
         description: None,
-        vagrant: None,
-        stale: None,
         responsibilities: Vec::new(),
         properties: Vec::new(),
         icon: None,
-        notes: None,
         position: None,
-        directives: Vec::new(),
         style: None,
         layer: None,
         exercised_by: Vec::new(),

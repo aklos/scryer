@@ -61,7 +61,7 @@ Inside a session scryer drives and never blocks: MCP tools, session hooks and a 
 
 **Several agents, one spec.** Each session's touched files and todo stubs are recorded. An agent orienting on a file sees that another session edited it, that a todo there belongs to someone else, or that their test radius overlaps. Awareness, not locks: coordination happens through the repo.
 
-**Decisions live with the code.** A node's description is its module's doc comment, and that is where an architectural decision goes: what was decided and why, beside the code it governs, read by every agent that orients there. No separate ADR files to drift.
+**Decisions live with the code.** A node's description is its module's doc comment, and that is where an architectural decision goes: what was decided and why, beside the code it governs, read by every agent that orients there. A decision about one behaviour goes in its test's doc, after the claim. No separate ADR files to drift.
 
 **Comments are issues on the code.** You or an agent can open a comment thread on any node, from the rail beside its page or with the `comment` tool: a question, a request, a decision to respect. An agent working on that code sees the open threads in `orient` and when it reads a file there, replies, and closes a thread only by explicitly marking it addressed, saying what it did. Threads are committed under `.scryer/comments/`, one file per event, so they travel with the branch, merge without conflicts, and show from every worktree at once.
 

@@ -412,7 +412,6 @@ describe("styled scene", () => {
         { id: "l2", src: "p", dst: "e", label: "", kind: "depends" },
         { id: "l3", src: "a", dst: "e", label: "", kind: "depends" },
       ],
-      groups: [],
     } as unknown as ScryModel;
     const scene = await buildDiagramScene(model, "ui", null);
     expect(scene.mode).toBe("styled");
@@ -438,7 +437,6 @@ describe("styled scene", () => {
       links: [
         { id: "l1", src: "a", dst: "e", label: "", kind: "depends" },
       ],
-      groups: [],
     } as unknown as ScryModel;
     // The CLI imports app: a ghost, wired to app.
     const report = {
@@ -466,7 +464,6 @@ describe("styled scene", () => {
         { id: "x", kind: "component", name: "examples", parentId: "lib", tooling: true },
       ],
       links: [{ id: "l1", src: "x", dst: "d", label: "", kind: "depends" }],
-      groups: [],
     } as unknown as ScryModel;
     const scene = await buildDiagramScene(model, "lib", null);
     const at = (id: string) => scene.nodes.find((n) => n.id === id)!;

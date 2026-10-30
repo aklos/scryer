@@ -6,6 +6,12 @@
 //! de-snaked stands in. A todo or skipped test is a planned claim. The module
 //! doc (`//!`, a file-head JSDoc, a module docstring) is the description of
 //! the node the file belongs to and carries no status.
+//!
+//! A doc's first paragraph is what it describes and the rest is its
+//! decisions, at every level: a module's after its description, a test's
+//! after its claim. A test whose claim is a string or an attribute
+//! (`it("…")`, `DisplayName`, TestDox) has no doc to split, so the comment
+//! above it is all decisions, and a .NET test's are its `<remarks>`.
 
 use crate::code_map as lang;
 use std::collections::BTreeSet;
@@ -27,6 +33,9 @@ pub struct LiftedTest {
     pub junit_name: String,
     /// A todo/skip stub, or a body that only says "not yet".
     pub planned: bool,
+    /// Why the behaviour is this one, as markdown: the test's doc after its
+    /// claim.
+    pub decisions: Option<String>,
     /// The description was written, not de-snaked from the identifier.
     pub documented: bool,
     /// Every identifier the test's code names (three characters or longer),
@@ -197,12 +206,18 @@ fn line_of(node: Node) -> (u32, u32) {
 fn doc_parts(lines: &[String]) -> (Option<String>, Option<String>) {
     let start = lines.iter().position(|l| !l.trim().is_empty()).unwrap_or(lines.len());
     let end = lines[start..].iter().position(|l| l.trim().is_empty()).map_or(lines.len(), |n| start + n);
-    let rest: Vec<&str> = lines[end..].iter().map(|l| l.trim_end()).collect();
+    (first_paragraph(lines), markdown_block(&lines[end..]))
+}
+
+/// Lines as one markdown block: blank lines trimmed off both ends, the
+/// common indent dropped.
+fn markdown_block(lines: &[String]) -> Option<String> {
+    let rest: Vec<&str> = lines.iter().map(|l| l.trim_end()).collect();
     let a = rest.iter().position(|l| !l.is_empty()).unwrap_or(rest.len());
     let b = rest.iter().rposition(|l| !l.is_empty()).map_or(a, |i| i + 1);
     let indent = rest[a..b].iter().filter(|l| !l.is_empty()).map(|l| l.len() - l.trim_start().len()).min().unwrap_or(0);
     let body = rest[a..b].iter().map(|l| l.get(indent..).unwrap_or("")).collect::<Vec<_>>().join("\n");
-    (first_paragraph(lines), (!body.is_empty()).then_some(body))
+    (!body.is_empty()).then_some(body)
 }
 
 fn first_paragraph(lines: &[String]) -> Option<String> {
@@ -216,11 +231,21 @@ fn first_paragraph(lines: &[String]) -> Option<String> {
     (!joined.is_empty()).then_some(joined)
 }
 
+/// The claim and decisions of a test whose doc may stand beside a written
+/// name: with one, the whole doc is decisions; without, the doc splits.
+fn claim_and_decisions(written: Option<String>, doc: &[String]) -> (Option<String>, Option<String>) {
+    match written {
+        Some(name) => (Some(name), markdown_block(doc)),
+        None => doc_parts(doc),
+    }
+}
+
 fn make_test(
     node: Node,
     bytes: &[u8],
     identifier: String,
     doc: Option<String>,
+    decisions: Option<String>,
     junit_name: String,
     planned: bool,
 ) -> LiftedTest {
@@ -230,7 +255,7 @@ fn make_test(
     let raw = doc.unwrap_or_else(|| de_snake(&identifier));
     let (description, concerns) = split_concerns(&raw);
     let description = sentence_case(&description);
-    LiftedTest { line, end_line, identifier, description, concerns, junit_name, planned, documented, names }
+    LiftedTest { line, end_line, identifier, description, concerns, junit_name, planned, decisions, documented, names }
 }
 
 /// The identifiers a test's code spells, three characters or longer, the
@@ -315,8 +340,8 @@ fn rust_tests(node: Node, bytes: &[u8], lift: &mut FileLift) {
                     .unwrap_or_default();
                 let ignored = attrs.iter().any(|a| rust_attr_path(a) == "ignore");
                 let planned = ignored || rust_body_is_todo(child, bytes);
-                let doc = first_paragraph(&docs);
-                lift.tests.push(make_test(child, bytes, name.clone(), doc, name, planned));
+                let (doc, decisions) = doc_parts(&docs);
+                lift.tests.push(make_test(child, bytes, name.clone(), doc, decisions, name, planned));
             }
             "mod_item" => {
                 let (attrs, _) = rust_preamble(child, bytes);
@@ -503,7 +528,8 @@ fn js_tests(root: Node, bytes: &[u8], out: &mut Vec<LiftedTest>) {
                                 t[1..t.len().saturating_sub(1)].to_string()
                             });
                             let identifier = raw.unwrap_or_else(|| name.clone());
-                            stack.push(SuiteStep::Emit(make_test(child, bytes, identifier, Some(name), junit, planned)));
+                            let decisions = markdown_block(&comment_above(child, bytes, &["comment"]));
+                            stack.push(SuiteStep::Emit(make_test(child, bytes, identifier, Some(name), decisions, junit, planned)));
                             continue;
                         }
                         _ => {}
@@ -596,14 +622,15 @@ fn go_tests(root: Node, bytes: &[u8], out: &mut Vec<LiftedTest>) {
         if !name.starts_with("Test") || !params.contains("testing.T") {
             continue;
         }
-        let doc = first_paragraph(&comment_above(f, bytes, &["comment"])).map(|d| {
+        let (doc, decisions) = doc_parts(&comment_above(f, bytes, &["comment"]));
+        let doc = doc.map(|d| {
             d.strip_prefix(name.as_str()).map(str::trim_start).filter(|r| !r.is_empty()).map_or(d.clone(), str::to_string)
         });
         let planned = f
             .child_by_field_name("body")
             .and_then(first_statement)
             .is_some_and(|s| text(s, bytes).split_once('.').is_some_and(|(_, call)| call.starts_with("Skip")));
-        out.push(make_test(f, bytes, name.clone(), doc, name, planned));
+        out.push(make_test(f, bytes, name.clone(), doc, decisions, name, planned));
     }
 }
 
@@ -637,13 +664,10 @@ fn java_tests(root: Node, bytes: &[u8], out: &mut Vec<LiftedTest>) {
             .and_then(|(_, a)| a.child_by_field_name("arguments"))
             .and_then(|args| args.named_child(0))
             .and_then(|lit| quoted(lit, bytes));
-        let javadoc = || {
-            let lines: Vec<String> =
-                comment_above(m, bytes, &["block_comment", "line_comment"]).into_iter().take_while(|l| !l.starts_with('@')).collect();
-            first_paragraph(&lines)
-        };
-        let doc = display.or_else(javadoc);
-        out.push(make_test(m, bytes, name.clone(), doc, name, has(&["Disabled", "Ignore"])));
+        let javadoc: Vec<String> =
+            comment_above(m, bytes, &["block_comment", "line_comment"]).into_iter().take_while(|l| !l.starts_with('@')).collect();
+        let (doc, decisions) = claim_and_decisions(display, &javadoc);
+        out.push(make_test(m, bytes, name.clone(), doc, decisions, name, has(&["Disabled", "Ignore"])));
     }
 }
 
@@ -676,12 +700,10 @@ fn kotlin_tests(root: Node, bytes: &[u8], out: &mut Vec<LiftedTest>) {
         }
         let Some(name) = f.child_by_field_name("name").map(|n| text(n, bytes).trim_matches('`').to_string()) else { continue };
         let display = annotations.iter().find(|(n, _)| n == "DisplayName").and_then(|(_, arg)| *arg).and_then(|lit| quoted(lit, bytes));
-        let kdoc = || {
-            let lines: Vec<String> = comment_above(f, bytes, &["block_comment", "line_comment"]).into_iter().take_while(|l| !l.starts_with('@')).collect();
-            first_paragraph(&lines)
-        };
-        let doc = display.or_else(kdoc);
-        out.push(make_test(f, bytes, name.clone(), doc, name, has(&["Disabled", "Ignore"])));
+        let kdoc: Vec<String> =
+            comment_above(f, bytes, &["block_comment", "line_comment"]).into_iter().take_while(|l| !l.starts_with('@')).collect();
+        let (doc, decisions) = claim_and_decisions(display, &kdoc);
+        out.push(make_test(f, bytes, name.clone(), doc, decisions, name, has(&["Disabled", "Ignore"])));
     }
 }
 
@@ -710,9 +732,9 @@ fn rb_tests(root: Node, bytes: &[u8], out: &mut Vec<LiftedTest>) {
             if child.kind() == "method" {
                 let name = child.child_by_field_name("name").map(|n| text(n, bytes).to_string()).unwrap_or_default();
                 if name.starts_with("test_") {
-                    let doc = first_paragraph(&comment_above(child, bytes, &["comment"]));
+                    let (doc, decisions) = doc_parts(&comment_above(child, bytes, &["comment"]));
                     let planned = skipped || skips(Some(child));
-                    stack.push(SuiteStep::Emit(make_test(child, bytes, name.clone(), doc, name, planned)));
+                    stack.push(SuiteStep::Emit(make_test(child, bytes, name.clone(), doc, decisions, name, planned)));
                     continue;
                 }
             }
@@ -721,6 +743,7 @@ fn rb_tests(root: Node, bytes: &[u8], out: &mut Vec<LiftedTest>) {
                 let arg = child.child_by_field_name("arguments").and_then(|a| a.named_child(0));
                 let label = arg.and_then(|a| if a.kind() == "string" { quoted(a, bytes) } else { None });
                 let block = child.child_by_field_name("block");
+                let decisions = || markdown_block(&comment_above(child, bytes, &["comment"]));
                 match method {
                     "describe" | "context" | "feature" | "xdescribe" | "xcontext" | "fdescribe" | "fcontext" => {
                         let name = label.or_else(|| arg.map(|a| text(a, bytes).to_string()));
@@ -735,7 +758,7 @@ fn rb_tests(root: Node, bytes: &[u8], out: &mut Vec<LiftedTest>) {
                         if let Some(label) = label.filter(|_| !suite.is_empty()) {
                             let planned = skipped || block.is_none() || matches!(method, "xit" | "xspecify" | "pending" | "skip");
                             let junit = suite.iter().cloned().chain(std::iter::once(label.clone())).collect::<Vec<_>>().join(" ");
-                            stack.push(SuiteStep::Emit(make_test(child, bytes, label.clone(), Some(label), junit, planned)));
+                            stack.push(SuiteStep::Emit(make_test(child, bytes, label.clone(), Some(label), decisions(), junit, planned)));
                             continue;
                         }
                     }
@@ -743,7 +766,7 @@ fn rb_tests(root: Node, bytes: &[u8], out: &mut Vec<LiftedTest>) {
                         if let Some(label) = label {
                             let identifier = format!("test_{}", label.split_whitespace().collect::<Vec<_>>().join("_"));
                             let planned = skipped || block.is_none() || skips(block);
-                            stack.push(SuiteStep::Emit(make_test(child, bytes, identifier.clone(), Some(label), identifier, planned)));
+                            stack.push(SuiteStep::Emit(make_test(child, bytes, identifier.clone(), Some(label), decisions(), identifier, planned)));
                             continue;
                         }
                     }
@@ -788,7 +811,8 @@ fn php_tests(root: Node, bytes: &[u8], out: &mut Vec<LiftedTest>) {
             .child_by_field_name("body")
             .and_then(first_statement)
             .is_some_and(|s| ["markTestIncomplete", "markTestSkipped"].iter().any(|c| text(s, bytes).contains(c)));
-        out.push(make_test(m, bytes, name.clone(), testdox, name, planned));
+        let prose: Vec<String> = docblock.into_iter().filter(|l| !l.starts_with('@')).collect();
+        out.push(make_test(m, bytes, name.clone(), testdox, markdown_block(&prose), name, planned));
     }
 }
 
@@ -902,12 +926,13 @@ fn py_tests(node: Node, bytes: &[u8], in_test_class: bool, out: &mut Vec<LiftedT
                     path.ends_with("mark.skip") || path == "unittest.skip" || path == "skip"
                 });
                 let body = def.child_by_field_name("body");
-                let doc = body
+                let lines = body
                     .and_then(|b| py_docstring(b, bytes))
                     .map(|d| d.lines().map(str::to_string).collect::<Vec<_>>())
-                    .and_then(|lines| first_paragraph(&lines));
+                    .unwrap_or_default();
+                let (doc, decisions) = doc_parts(&lines);
                 let stub = body.is_some_and(|b| py_body_is_stub(b, bytes));
-                out.push(make_test(child, bytes, name.clone(), doc, name, skipped || stub));
+                out.push(make_test(child, bytes, name.clone(), doc, decisions, name, skipped || stub));
             }
             "class_definition" if name.starts_with("Test") => {
                 if let Some(body) = def.child_by_field_name("body") {
@@ -996,14 +1021,18 @@ fn cs_tests(node: Node, bytes: &[u8], out: &mut Vec<LiftedTest>) {
             let stmts: Vec<Node> = b.named_children(&mut bc).filter(|n| n.kind() != "comment").collect();
             matches!(stmts.as_slice(), [only] if text(*only, bytes).contains("NotImplementedException"))
         });
-        let doc = cs_named_arg(*test_attr, bytes, "DisplayName").or_else(|| cs_xml_summary(child, bytes));
-        out.push(make_test(child, bytes, name.clone(), doc, name, skipped || stub));
+        let xml = cs_xml_doc(child, bytes);
+        let display = cs_named_arg(*test_attr, bytes, "DisplayName");
+        let summary = cs_xml_summary(&xml);
+        // A summary the display name stands in for explains the claim instead.
+        let decisions = cs_xml_tag(&xml, "remarks").or_else(|| display.as_ref().and(summary.clone()));
+        let doc = display.or(summary);
+        out.push(make_test(child, bytes, name.clone(), doc, decisions, name, skipped || stub));
     }
 }
 
-/// The `<summary>` of the `///` XML doc directly above a member, tags
-/// reduced to their text (`<paramref name="km"/>` → `km`).
-fn cs_xml_summary(member: Node, bytes: &[u8]) -> Option<String> {
+/// The `///` XML doc directly above a member, its lines joined.
+fn cs_xml_doc(member: Node, bytes: &[u8]) -> String {
     let mut lines = Vec::new();
     let mut prev = member.prev_sibling();
     while let Some(p) = prev {
@@ -1015,13 +1044,21 @@ fn cs_xml_summary(member: Node, bytes: &[u8]) -> Option<String> {
         prev = p.prev_sibling();
     }
     lines.reverse();
-    let xml = lines.join(" ");
-    let body = match (xml.find("<summary>"), xml.find("</summary>")) {
-        (Some(a), Some(b)) if b > a => &xml[a + "<summary>".len()..b],
-        _ => xml.as_str(),
-    };
-    let plain = strip_xml_tags(body);
-    first_paragraph(&[plain])
+    lines.join(" ")
+}
+
+/// An XML doc's `<summary>` (else all of it), tags reduced to their text
+/// (`<paramref name="km"/>` → `km`).
+fn cs_xml_summary(xml: &str) -> Option<String> {
+    cs_xml_tag(xml, "summary").or_else(|| first_paragraph(&[strip_xml_tags(xml)]))
+}
+
+/// The text inside one top-level tag of an XML doc, tags reduced to text.
+fn cs_xml_tag(xml: &str, tag: &str) -> Option<String> {
+    let (open, close) = (format!("<{tag}>"), format!("</{tag}>"));
+    let a = xml.find(&open)? + open.len();
+    let b = a + xml[a..].find(&close)?;
+    first_paragraph(&[strip_xml_tags(&xml[a..b])])
 }
 
 pub(crate) fn strip_xml_tags(s: &str) -> String {
@@ -1308,6 +1345,68 @@ mod tests {
         let py = lift("route.py", "\"\"\"Routes edges.\n\nWhy a grid.\n\"\"\"\n");
         assert_eq!(py.module_body.as_deref(), Some("Why a grid."));
         assert_eq!(lift("one.rs", "//! Only a summary.\nfn a() {}\n").module_body, None);
+    }
+
+    /// Lifts a test doc's first paragraph as its claim and the rest after it
+    /// as its decisions, dedented, markdown kept.
+    #[test]
+    fn lifts_a_test_docs_decisions_after_its_claim() {
+        let first = |path: &str, src: &str| {
+            let t = lift(path, src).tests.into_iter().next().unwrap_or_else(|| panic!("{path}: no test"));
+            (t.description, t.decisions)
+        };
+        let why = |claim: &str, d: Option<&str>| (claim.to_string(), d.map(str::to_string));
+        let rs = "#[cfg(test)]\nmod tests {\n    /// Rejects a stale token.\n    ///\n    /// Not refreshed: a refresh hides a revoked session.\n    ///\n    ///   - 401, never 403\n    #[test]\n    fn rejects() {}\n\n    /// Accepts a fresh token.\n    #[test]\n    fn accepts() {}\n}\n";
+        assert_eq!(
+            first("src/auth.rs", rs),
+            why("Rejects a stale token.", Some("Not refreshed: a refresh hides a revoked session.\n\n  - 401, never 403"))
+        );
+        assert_eq!(lift("src/auth.rs", rs).tests[1].decisions, None, "a doc that is only its claim");
+        let py = "def test_rejects():\n    \"\"\"Rejects a stale token.\n\n    Not refreshed.\n    \"\"\"\n";
+        assert_eq!(first("test_auth.py", py), why("Rejects a stale token.", Some("Not refreshed.")));
+        let go = "package auth\n\n// TestRejects rejects a stale token.\n//\n// Not refreshed.\nfunc TestRejects(t *testing.T) {}\n";
+        assert_eq!(first("auth_test.go", go), why("Rejects a stale token.", Some("Not refreshed.")));
+        let java = "class AuthTest {\n  /**\n   * Rejects a stale token.\n   *\n   * Not refreshed.\n   * @see Session\n   */\n  @Test\n  void rejects() {}\n}\n";
+        assert_eq!(first("AuthTest.java", java), why("Rejects a stale token.", Some("Not refreshed.")));
+        let rb = "class AuthTest < Minitest::Test\n  # Rejects a stale token.\n  #\n  # Not refreshed.\n  def test_rejects\n  end\nend\n";
+        assert_eq!(first("auth_test.rb", rb), why("Rejects a stale token.", Some("Not refreshed.")));
+    }
+
+    /// When a test's claim is written as its string or attribute, reads the
+    /// comment above the test as its decisions.
+    #[test]
+    fn reads_the_comment_above_a_named_test_as_its_decisions() {
+        let decisions = |path: &str, src: &str| -> Vec<Option<String>> {
+            lift(path, src).tests.into_iter().map(|t| t.decisions).collect()
+        };
+        let not_refreshed = || Some("Not refreshed: a refresh hides a revoked session.".to_string());
+        let ts = "describe(\"auth\", () => {\n  // Not refreshed: a refresh hides\n  // a revoked session.\n  it(\"rejects a stale token\", () => {});\n  it(\"accepts a fresh token\", () => {});\n});\n";
+        assert_eq!(
+            decisions("auth.test.ts", ts),
+            vec![Some("Not refreshed: a refresh hides\na revoked session.".to_string()), None]
+        );
+        let rspec = "RSpec.describe Auth do\n  # Not refreshed: a refresh hides a revoked session.\n  it \"rejects a stale token\" do\n  end\nend\n";
+        assert_eq!(decisions("auth_spec.rb", rspec), vec![not_refreshed()]);
+        let java = "class AuthTest {\n  /** Not refreshed: a refresh hides a revoked session. */\n  @Test\n  @DisplayName(\"Rejects a stale token\")\n  void rejects() {}\n}\n";
+        assert_eq!(decisions("AuthTest.java", java), vec![not_refreshed()]);
+        let php = "<?php\nclass AuthTest extends TestCase {\n  /**\n   * @testdox Rejects a stale token\n   * Not refreshed: a refresh hides a revoked session.\n   */\n  public function testRejects(): void {}\n}\n";
+        assert_eq!(decisions("AuthTest.php", php), vec![not_refreshed()]);
+    }
+
+    /// Reads a .NET test's XML `<remarks>` as its decisions.
+    #[test]
+    fn reads_a_dotnet_tests_remarks_as_its_decisions() {
+        let src = "public class AuthTests {\n    /// <summary>Rejects a stale token</summary>\n    /// <remarks>Not refreshed: a refresh hides\n    /// a revoked session.</remarks>\n    [Fact]\n    public void Rejects() {}\n\n    /// <summary>Not refreshed.</summary>\n    [Fact(DisplayName = \"Rejects a revoked token\")]\n    public void Revoked() {}\n}\n";
+        let rows: Vec<(String, Option<String>)> =
+            lift("AuthTests.cs", src).tests.into_iter().map(|t| (t.description, t.decisions)).collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("Rejects a stale token".into(), Some("Not refreshed: a refresh hides a revoked session.".into())),
+                ("Rejects a revoked token".into(), Some("Not refreshed.".into())),
+            ],
+            "a summary the display name stands in for explains it instead"
+        );
     }
 
     /// When a Rust test fn carries a `///` doc, the doc's first paragraph is

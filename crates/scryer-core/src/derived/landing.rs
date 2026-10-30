@@ -433,6 +433,7 @@ mod tests {
             identifier: id.into(),
             description: format!("claim {id}"),
             concerns: Vec::new(),
+            decisions: None,
             junit_name: id.into(),
             planned,
         }

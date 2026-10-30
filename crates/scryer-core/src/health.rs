@@ -6,13 +6,13 @@
 //! agents can act on:
 //!
 //! - **Discharge is computed, not declared.** A claim hosted on a structural
-//!   node (a node with children, or a group) is discharged through its subtree
+//!   node (a node with children) is discharged through its subtree
 //!   and never expected to carry its own source anchor. Only leaf-hosted claims
 //!   are anchorable, and only those can be "unmapped". Persons and external
 //!   systems are out-of-system, so their claims are never anchorable either.
 //! - **Coverage rolls up.** Every node reports its own counts and its subtree's
-//!   (claims, testable/tested/untested, vagrant and stale flags, anchorable vs
-//!   anchored, the most recent truth-bearing edit), so any altitude can answer
+//!   (claims, testable/tested/untested, anchorable vs anchored), so any
+//!   altitude can answer
 //!   "how much of what I claim reads through to code?".
 //! - **Darkness is per boundary.** Given the project's modelable source files,
 //!   each boundary-owning node reports which of its files no anchor in its
@@ -31,7 +31,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HealthCounts {
-    /// Responsibility statements in scope (nodes' own + groups parented here).
+    /// Responsibility statements in scope.
     pub responsibilities: u32,
     /// Data-shape properties in scope.
     pub properties: u32,
@@ -57,13 +57,6 @@ pub struct HealthCounts {
     pub testable: u32,
     /// Of the testable claims, how many have NO test attached.
     pub untested: u32,
-    /// Responsibilities or properties carrying the vagrant flag (undescribed behaviour
-    /// awaiting adopt/reject).
-    pub vagrant: u32,
-    /// Responsibilities or properties a drift review flagged stale (the code
-    /// no longer discharges them; awaiting a verdict). NOT stale test verdicts
-    /// — those are the test-status count.
-    pub drift_stale: u32,
     /// Claims that are EXPECTED to read through to code: any committed content
     /// hosted on a leaf (childless, non-external) node. A claim on a structural
     /// node is discharged through the subtree instead and never counts here.
@@ -73,18 +66,9 @@ pub struct HealthCounts {
     /// `anchorable - anchored` — blind spots: the lens claims code it cannot
     /// show.
     pub unmapped: u32,
-    /// Unix seconds of the most recent truth-bearing edit in scope.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_touched_at: Option<u64>,
 }
 
 impl HealthCounts {
-    fn touch(&mut self, at: Option<u64>) {
-        if let Some(t) = at {
-            self.last_touched_at = Some(self.last_touched_at.map_or(t, |c| c.max(t)));
-        }
-    }
-
     /// Count one claim's test facts: a testable claim is tested or untested;
     /// a test on any other claim counts apart.
     fn count_test(&mut self, testable: bool, has_test: bool) {
@@ -105,8 +89,6 @@ impl HealthCounts {
     fn merge(&mut self, other: &HealthCounts) {
         self.responsibilities += other.responsibilities;
         self.properties += other.properties;
-        self.vagrant += other.vagrant;
-        self.drift_stale += other.drift_stale;
         self.anchorable += other.anchorable;
         self.anchored += other.anchored;
         self.unmapped += other.unmapped;
@@ -114,7 +96,6 @@ impl HealthCounts {
         self.tested_other += other.tested_other;
         self.testable += other.testable;
         self.untested += other.untested;
-        self.touch(other.last_touched_at);
     }
 }
 
@@ -135,7 +116,7 @@ pub struct BoundaryCoverage {
 pub struct NodeHealth {
     /// The node's own responsibilities/properties only.
     pub own: HealthCounts,
-    /// The node plus everything below it (descendant nodes and groups).
+    /// The node plus everything below it.
     pub subtree: HealthCounts,
     /// Present only for boundary-owning nodes when a file inventory was given.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -147,7 +128,7 @@ pub struct NodeHealth {
 pub struct ModelHealth {
     /// Per-node health, keyed by node id (stable order for serialization).
     pub nodes: BTreeMap<String, NodeHealth>,
-    /// Whole-model rollup (every node and group, wherever parented).
+    /// Whole-model rollup (every node, wherever parented).
     pub totals: HealthCounts,
     /// Architecture nodes wired to nothing — no relationship link names them as
     /// source or target — so they float edgeless in every diagram and are easy
@@ -218,16 +199,9 @@ pub fn compute_health(
 
         for resp in &node.responsibilities {
             h.responsibilities += 1;
-            if resp.vagrant == Some(true) {
-                h.vagrant += 1;
-            }
-            if resp.stale == Some(true) {
-                h.drift_stale += 1;
-            }
             let has_test = model.test_map.get(&resp.id).is_some_and(|locs| !locs.is_empty());
             let testable = code_backed && crate::claim_grammar::classify(&resp.statement).testable();
             h.count_test(testable, has_test);
-            h.touch(resp.last_touched_at);
             if anchorable_node {
                 h.anchorable += 1;
                 if model
@@ -244,16 +218,7 @@ pub fn compute_health(
 
         // A data shape is one declaration: if the node declares any property,
         // the shape's definition must anchor — one claim for the whole node.
-        for prop in &node.properties {
-            h.properties += 1;
-            if prop.vagrant == Some(true) {
-                h.vagrant += 1;
-            }
-            if prop.stale == Some(true) {
-                h.drift_stale += 1;
-            }
-            h.touch(prop.last_touched_at);
-        }
+        h.properties += node.properties.len() as u32;
         if anchorable_node && !node.properties.is_empty() {
             h.anchorable += 1;
             if model
@@ -270,48 +235,6 @@ pub fn compute_health(
         own.insert(node.id.as_str(), h);
     }
 
-    // --- group responsibilities attach to the level they organize ---------------
-    // A group's responsibilities are always structural (discharged by members),
-    // so they roll into the parent node's subtree counts and never anchor.
-    let mut group_extra: HashMap<&str, HealthCounts> = HashMap::new();
-    let mut unparented_groups = HealthCounts::default();
-    for group in &model.groups {
-        let mut h = HealthCounts::default();
-        for resp in &group.responsibilities {
-            h.responsibilities += 1;
-            if resp.vagrant == Some(true) {
-                h.vagrant += 1;
-            }
-            if resp.stale == Some(true) {
-                h.drift_stale += 1;
-            }
-            let has_test = model.test_map.get(&resp.id).is_some_and(|locs| !locs.is_empty());
-            // A group organizes code-backed members, so its claims classify
-            // like a node's: a When/While/If claim can back onto a test.
-            let testable = crate::claim_grammar::classify(&resp.statement).testable();
-            h.count_test(testable, has_test);
-            h.touch(resp.last_touched_at);
-        }
-        if h == HealthCounts::default() {
-            continue;
-        }
-        let parent = group
-            .parent_node_id
-            .as_deref()
-            .or_else(|| {
-                group
-                    .member_ids
-                    .first()
-                    .and_then(|m| node_by_id.get(m.as_str()))
-                    .and_then(|n| n.parent_id.as_deref())
-            })
-            .filter(|p| node_by_id.contains_key(p));
-        match parent {
-            Some(p) => group_extra.entry(p).or_default().merge(&h),
-            None => unparented_groups.merge(&h),
-        }
-    }
-
     // --- subtree rollup (post-order) --------------------------------------------
     let mut subtree: HashMap<&str, HealthCounts> = HashMap::new();
     let roots: Vec<&str> = model
@@ -326,7 +249,7 @@ pub fn compute_health(
         .collect();
     let mut visited: HashSet<&str> = HashSet::new();
     for root in &roots {
-        accumulate(root, &children, &own, &group_extra, &mut subtree, &mut visited);
+        accumulate(root, &children, &own, &mut subtree, &mut visited);
     }
     // Defensive: nodes trapped in a parent cycle never get visited above. Each
     // unvisited node seeds its own accumulation AND joins the totals — they
@@ -340,14 +263,13 @@ pub fn compute_health(
                 node.id.as_str(),
                 &children,
                 &own,
-                &group_extra,
                 &mut subtree,
                 &mut visited,
             );
         }
     }
 
-    let mut totals = unparented_groups;
+    let mut totals = HealthCounts::default();
     for root in roots.iter().chain(cycle_roots.iter()) {
         if let Some(h) = subtree.get(root) {
             totals.merge(h);
@@ -405,7 +327,6 @@ fn accumulate<'a>(
     id: &'a str,
     children: &HashMap<&'a str, Vec<&'a str>>,
     own: &HashMap<&'a str, HealthCounts>,
-    group_extra: &HashMap<&'a str, HealthCounts>,
     subtree: &mut HashMap<&'a str, HealthCounts>,
     visited: &mut HashSet<&'a str>,
 ) {
@@ -413,12 +334,9 @@ fn accumulate<'a>(
         return;
     }
     let mut h = own.get(id).cloned().unwrap_or_default();
-    if let Some(extra) = group_extra.get(id) {
-        h.merge(extra);
-    }
     if let Some(kids) = children.get(id) {
         for kid in kids {
-            accumulate(kid, children, own, group_extra, subtree, visited);
+            accumulate(kid, children, own, subtree, visited);
             if let Some(kh) = subtree.get(kid) {
                 let kh = kh.clone();
                 h.merge(&kh);
@@ -732,8 +650,6 @@ mod tests {
             id: id.into(),
             kind,
             name: id.into(),
-            vagrant: None,
-            stale: None,
             parent_id: parent.map(Into::into),
             external: None,
             technology: None,
@@ -741,9 +657,7 @@ mod tests {
             responsibilities: Vec::new(),
             properties: Vec::new(),
             icon: None,
-            notes: None,
             position: None,
-            directives: Vec::new(),
         }
     }
 
@@ -752,11 +666,7 @@ mod tests {
             concern: None,
             id: id.into(),
             statement: format!("does {id}"),
-            vagrant: None,
-            stale: None,
-            stale_proposal: None,
-            directives: Vec::new(),
-            last_touched_at: Some(100),
+            decisions: None,
         }
     }
 
@@ -982,9 +892,6 @@ mod tests {
             label: "field".into(),
             description: String::new(),
             ty: None,
-            vagrant: None,
-            stale: None,
-            last_touched_at: Some(50),
         });
         m.nodes.push(shape);
 
@@ -1021,47 +928,6 @@ mod tests {
         assert_eq!(b.total_files, 2, "web/app.ts is outside the boundary");
         assert_eq!(b.anchored_files, 1);
         assert_eq!(b.dark_files, vec!["api/src/dark.rs".to_string()]);
-    }
-
-    /// Group responsibilities roll into the level they organize, never anchor.
-    #[test]
-    fn group_responsibilities_roll_into_parent_subtree() {
-        let mut m = ScryModel::new();
-        m.nodes.push(node("sys", Kind::System, None));
-        m.nodes.push(node("c1", Kind::Container, Some("sys")));
-        m.groups.push(crate::c4_model::Group {
-            id: "g1".into(),
-            name: "Edge".into(),
-            description: None,
-            member_ids: vec!["c1".into()],
-            parent_group_id: None,
-            parent_node_id: None,
-            responsibilities: vec![resp("r-g")],
-            icon: None,
-        });
-
-        let h = compute_health(&m, None, None);
-        assert_eq!(h.nodes["sys"].subtree.responsibilities, 1);
-        assert_eq!(h.nodes["sys"].subtree.anchorable, 0, "group claims are structural");
-        assert_eq!(h.totals.responsibilities, 1);
-    }
-
-    #[test]
-    fn vagrant_and_freshness_roll_up() {
-        let mut m = ScryModel::new();
-        m.nodes.push(node("sys", Kind::System, None));
-        let mut leaf = node("leaf", Kind::Symbol, Some("sys"));
-        let mut r = resp("r1");
-        r.vagrant = Some(true);
-        r.last_touched_at = Some(999);
-        leaf.responsibilities.push(r);
-        m.nodes.push(leaf);
-        m.source_map.insert("r1".into(), vec![loc("src/x.ts")]);
-
-        let h = compute_health(&m, None, None);
-        assert_eq!(h.nodes["sys"].subtree.vagrant, 1);
-        assert_eq!(h.nodes["sys"].subtree.last_touched_at, Some(999));
-        assert_eq!(h.totals.vagrant, 1);
     }
 
     fn boundary(pattern: &str) -> Vec<crate::Source> {

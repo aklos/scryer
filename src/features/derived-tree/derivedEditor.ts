@@ -6,22 +6,14 @@
  * from (a module doc's first paragraph, a manifest, `ARCHITECTURE.md`,
  * `structure.toml`), decisions are the module doc after it, and renaming
  * any node above code level sets its readable name in `structure.toml`.
- * Everything structural (create, move, delete) is the code's job, so those
- * intents do nothing here.
+ * Everything structural (create, move, delete) is the code's job.
  */
 
 import { invoke } from "@tauri-apps/api/core";
 import type { Editor } from "../../entities/model/editor";
-import {
-  updateNode,
-  updateResponsibility,
-  type Node,
-  type ScryModel,
-} from "../../entities/model/viewmodel";
+import { updateNode, type Node, type ScryModel } from "../../entities/model/viewmodel";
 import { stripMarkup } from "../../entities/model/markup";
 
-const noop = () => {};
-const none = () => "";
 const same = (m: ScryModel) => m;
 
 export function makeDerivedEditor({
@@ -85,38 +77,5 @@ export function makeDerivedEditor({
       if (writes.length > 0)
         onWrite(Promise.all(writes), Object.keys(shown).length > 0 ? (m) => updateNode(m, nodeId, shown) : same);
     },
-    updateResponsibility: (host, hostId, respId, patch) => {
-      const { statement } = patch;
-      if (statement !== undefined)
-        onWrite(editClaim(respId, statement), (m) => updateResponsibility(m, host, hostId, respId, { statement }));
-    },
-    deleteNode: noop,
-    addNode: none,
-    moveNode: noop,
-    addLink: none,
-    updateLink: noop,
-    deleteLink: noop,
-    updateGroup: noop,
-    deleteGroup: noop,
-    addGroup: none,
-    setNodeGroup: noop,
-    addResponsibility: none,
-    removeResponsibility: noop,
-    renameConcern: noop,
-    adoptResponsibility: noop,
-    rejectResponsibility: noop,
-    dropResponsibility: noop,
-    reimplementResponsibility: noop,
-    rewordResponsibility: noop,
-    dropNode: noop,
-    reimplementNode: noop,
-    moveResponsibility: noop,
-    addProperty: noop,
-    updateProperty: noop,
-    removeProperty: noop,
-    adoptProperty: noop,
-    rejectProperty: noop,
-    dropProperty: noop,
-    reimplementProperty: noop,
   };
 }

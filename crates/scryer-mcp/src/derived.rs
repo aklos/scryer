@@ -401,6 +401,7 @@ mod tests {
             identifier: "t".into(),
             description: "does it".into(),
             concerns: Vec::new(),
+            decisions: None,
             junit_name: format!("{file}::t"),
             planned,
         }

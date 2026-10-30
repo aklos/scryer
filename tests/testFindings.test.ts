@@ -22,7 +22,7 @@ const node = (id: string, parentId: string | undefined, over: Partial<Node> = {}
   ...over,
 });
 const model = (nodes: Node[], testMap: ScryModel["testMap"] = {}): ScryModel =>
-  ({ nodes, groups: [], links: [], testMap }) as unknown as ScryModel;
+  ({ nodes, links: [], testMap }) as unknown as ScryModel;
 const verdict = (over: Partial<ClaimTestStatus>): ClaimTestStatus => ({
   respId: "r",
   outcome: "passed",

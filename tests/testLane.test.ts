@@ -16,7 +16,7 @@ import {
   type ClaimTestStatus,
   type ClaimProbeStatus,
 } from "../src/entities/model/health";
-import type { Node, Group, Responsibility } from "../src/entities/model/viewmodel";
+import type { Node, Responsibility } from "../src/entities/model/viewmodel";
 
 const verdict = (over: Partial<ClaimTestStatus>): ClaimTestStatus => ({
   respId: "r1",
@@ -55,7 +55,7 @@ describe("subtreeTestTone", () => {
     parentId,
     responsibilities: resps.map(resp),
   });
-  // root ── mid ── leaf, plus a group under mid and an unrelated sibling.
+  // root ── mid ── leaf, plus an unrelated sibling.
   const model = {
     nodes: [
       node("root", undefined, []),
@@ -63,17 +63,14 @@ describe("subtreeTestTone", () => {
       node("leaf", "mid", ["r-leaf"]),
       node("outside", undefined, ["r-out"]),
     ],
-    groups: [
-      { id: "g1", name: "g", memberIds: [], parentNodeId: "mid", responsibilities: [resp("r-group")] } as Group,
-    ],
   };
 
-  it("rolls a failing verdict up from any depth, groups included", () => {
+  it("rolls a failing verdict up from any depth", () => {
     expect(
       subtreeTestTone(model, "root", { "r-leaf": verdict({ outcome: "failed" }) }),
     ).toBe("failing");
     expect(
-      subtreeTestTone(model, "root", { "r-group": verdict({ outcome: "errored" }) }),
+      subtreeTestTone(model, "root", { "r-mid": verdict({ outcome: "errored" }) }),
     ).toBe("failing");
   });
 

@@ -2,7 +2,7 @@
  * The open project's tree, read from its code. One project open at a time.
  * The backend derives the C4 tree from packaging and tests and serves it in
  * two layers: `committed` (implemented claims) and `planned` (plus the todo
- * stubs), so `planDiff(committed, planned)` is the work still planned.
+ * stubs).
  *
  * Responsibilities:
  *  - load both layers (`read_planned` / `read_model`)
@@ -19,7 +19,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { ScryModel } from "../../entities/model/viewmodel";
-import { EMPTY_DIFF, planDiff as computePlanDiff, type ModelDiff } from "../../entities/model/planDiff";
 
 const RECENT_KEY = "scryer:recent-projects";
 const RECENT_CAP = 8;
@@ -63,8 +62,6 @@ export interface ModelStorage {
   model: ScryModel | null;
   /** The committed layer: implemented claims only. */
   committed: ScryModel | null;
-  /** `diff(committed, planned)` — the todo stubs, as planned marks. */
-  planDiff: ModelDiff;
   error: string | null;
   recentProjects: string[];
   /** Bumped each time a re-read changed the tree — the signal for consumers
@@ -212,18 +209,12 @@ export function useModelStorage(): ModelStorage {
     [committed, shown],
   );
 
-  const planDiff = useMemo<ModelDiff>(
-    () => (shownCommitted && shownModel ? computePlanDiff(shownCommitted, shownModel) : EMPTY_DIFF),
-    [shownCommitted, shownModel],
-  );
-
   return {
     status,
     projectPath,
     modelRef,
     model: shownModel,
     committed: shownCommitted,
-    planDiff,
     error,
     recentProjects,
     externalGeneration,

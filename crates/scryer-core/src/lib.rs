@@ -16,7 +16,7 @@ pub mod product_code;
 pub mod session_hooks;
 pub mod session_log;
 pub mod c4_model;
-pub use c4_model::{model, ids, concerns, seed, model_ref};
+pub use c4_model::{model, concerns, model_ref};
 pub mod derived;
 pub use derived::{c4_tree, derived_status, landing, worktree_standing};
 pub mod architecture;
@@ -45,7 +45,6 @@ pub use agent_settings::{AgentSettings, SubagentSettings};
 pub use model::*;
 pub use model_ref::*;
 pub use dependency_graph as build_edges_derive;
-pub use ids::*;
 
 /// Comment threads: their shape, and reading and writing them across the
 /// project's worktrees.

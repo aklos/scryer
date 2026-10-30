@@ -84,11 +84,6 @@ pub fn register_concerns(model: &mut ScryModel) {
             visit(&mut r.concern);
         }
     }
-    for g in &mut model.groups {
-        for r in &mut g.responsibilities {
-            visit(&mut r.concern);
-        }
-    }
 
     for slug in used {
         if model.concerns.iter().any(|c| c.slug == slug) {
@@ -104,42 +99,6 @@ pub fn register_concerns(model: &mut ScryModel) {
     model.concerns.sort_by(|a, b| a.slug.cmp(&b.slug));
 }
 
-/// Metadata write-through, plan → committed. A concern tag has no build
-/// semantics, so a retag must not wait for a fold that will never come (`diff`
-/// deliberately ignores `concern`, so a tag-only change creates no work item).
-/// Instead, every plan write syncs the tag onto the committed copy of any
-/// claim that exists there (matched by id), and copies the registry wholesale
-/// — the plan is the authoring surface for curation (renames, descriptions,
-/// icons). Returns whether `committed` changed and needs writing.
-pub fn sync_concern_metadata(committed: &mut ScryModel, planned: &ScryModel) -> bool {
-    let mut changed = false;
-    let planned_by_id: std::collections::HashMap<&str, Option<&str>> = planned
-        .nodes
-        .iter()
-        .flat_map(|n| n.responsibilities.iter())
-        .chain(planned.groups.iter().flat_map(|g| g.responsibilities.iter()))
-        .map(|r| (r.id.as_str(), r.concern.as_deref()))
-        .collect();
-    let committed_resps = committed
-        .nodes
-        .iter_mut()
-        .flat_map(|n| n.responsibilities.iter_mut())
-        .chain(committed.groups.iter_mut().flat_map(|g| g.responsibilities.iter_mut()));
-    for r in committed_resps {
-        if let Some(&tag) = planned_by_id.get(r.id.as_str()) {
-            if r.concern.as_deref() != tag {
-                r.concern = tag.map(Into::into);
-                changed = true;
-            }
-        }
-    }
-    if committed.concerns != planned.concerns {
-        committed.concerns = planned.concerns.clone();
-        changed = true;
-    }
-    changed
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,11 +109,7 @@ mod tests {
             id: id.into(),
             statement: "does a thing".into(),
             concern: concern.map(Into::into),
-            vagrant: None,
-            stale: None,
-            stale_proposal: None,
-            directives: Vec::new(),
-            last_touched_at: None,
+            decisions: None,
         }
     }
 
@@ -174,14 +129,10 @@ mod tests {
             external: None,
             technology: None,
             description: None,
-            vagrant: None,
-            stale: None,
             responsibilities: resps,
             properties: Vec::new(),
             icon: None,
-            notes: None,
             position: None,
-            directives: Vec::new(),
         });
         m
     }
@@ -219,26 +170,6 @@ mod tests {
             m.concerns.iter().map(|c| c.slug.as_str()).collect::<Vec<_>>(),
             vec!["auth", "session-windows"]
         );
-    }
-
-    #[test]
-    fn sync_writes_tags_and_registry_through_to_committed() {
-        // Committed holds the built claim untagged; the plan retagged it and
-        // minted the registry entry. Sync carries both across — and leaves the
-        // plan-only claim (unknown to committed) alone.
-        let mut committed = model_with(vec![resp("r1", None), resp("r2", Some("auth"))]);
-        let mut planned = model_with(vec![resp("r1", Some("auth")), resp("r2", None)]);
-        planned.nodes[0].responsibilities.push(resp("r3", Some("persistence")));
-        register_concerns(&mut planned);
-
-        assert!(sync_concern_metadata(&mut committed, &planned));
-        let rs = &committed.nodes[0].responsibilities;
-        assert_eq!(rs[0].concern.as_deref(), Some("auth")); // tagged through
-        assert_eq!(rs[1].concern, None); // untagged through
-        assert_eq!(committed.concerns, planned.concerns); // registry copied
-
-        // Idempotent: a second sync finds nothing to do.
-        assert!(!sync_concern_metadata(&mut committed, &planned));
     }
 
     #[test]

@@ -97,7 +97,6 @@ fn overview_payload(model: &ScryModel) -> serde_json::Value {
         "view": "overview",
         "nodeCount": model.nodes.len(),
         "linkCount": model.links.len(),
-        "groupCount": model.groups.len(),
         // The concern registry — the tree's cross-cutting vocabulary, from
         // the trailing [tags] on test descriptions.
         "concerns": model.concerns,
@@ -543,6 +542,7 @@ impl ScryerServer {
                     "test": c.junit_name,
                     "at": format!("{}:{}", c.file, c.line),
                     "concerns": c.concerns,
+                    "decisions": c.decisions,
                 })
             })
             .collect();
@@ -824,6 +824,24 @@ mod tests {
         let count = |layer| read(Some(draft.clone()), layer)["node"]["responsibilities"].as_array().unwrap().len();
         assert_eq!(count(Layer::Plan), 2);
         assert_eq!(count(Layer::Committed), 1);
+    }
+
+    /// When a claim's test carries decisions, locate lists them with the claim.
+    #[test]
+    fn locate_lists_a_claims_decisions() {
+        let dir = project();
+        write(
+            dir.path(),
+            "crates/notes/tests/roundtrip.rs",
+            "/// Saves and reloads a draft unchanged\n///\n/// Byte for byte: a normalised draft reads as an edit.\n#[test]\nfn roundtrip() {}\n",
+        );
+        let server = ScryerServer::new();
+        let it = json_of(
+            &server
+                .locate(Parameters(LocateRequest { project: project_arg(&dir), file: "crates/notes/tests/roundtrip.rs".into() }))
+                .unwrap(),
+        );
+        assert_eq!(it["claims"][0]["decisions"], "Byte for byte: a normalised draft reads as an edit.", "{it}");
     }
 
     /// search_model finds a node by its claims' words.

@@ -22,7 +22,6 @@ const model = {
     { id: "l-bad", src: "dom", dst: "infra", label: "", kind: "depends" },
     { id: "l-ok", src: "app", dst: "dom", label: "", kind: "depends" },
   ],
-  groups: [],
 } as unknown as ScryModel;
 
 const forbidden: StyleViolation = {

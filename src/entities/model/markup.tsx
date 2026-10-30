@@ -286,17 +286,14 @@ export function MarkupMirror({ text }: { text: string }) {
 
 /** The calm rows' anchor lift above the secondary body. Light mode reaches
  *  `--text` (a real jump from secondary); dark mode's `--text` sits nearly ON
- *  secondary, so anchors take the same two-shade lift the diff tints get
- *  (`DIFF_ANCHOR`, hue-300 → hue-100) in the theme's own slate hue. */
+ *  secondary, so anchors take a two-shade lift in the theme's own slate hue. */
 export const ANCHOR_CALM = "text-[var(--text)] dark:text-slate-100";
 
 /**
  * A claim statement with its markers rendered. `anchor` carries the bold
  * segments' color — a tone one step up from the row's body, so the anchors
- * pop within the row's own hue: {@link ANCHOR_CALM} on calm secondary rows,
- * `DIFF_ANCHOR.add`/`.delete` inside diff tints. Rows that already shout
- * (vagrant bright, relocated muted) omit it and take weight only, so the
- * markup never fights the row's own signal.
+ * pop within the row's own hue: {@link ANCHOR_CALM} on calm secondary rows.
+ * Rows that already carry their own signal omit it and take weight only.
  */
 export function StatementText({ text, anchor }: { text: string; anchor?: string }) {
   return (

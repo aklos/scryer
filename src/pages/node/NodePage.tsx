@@ -1,6 +1,6 @@
 /**
- * The main panel: a read-first wiki page for the selected node or group
- * (groups render through GroupPage), following Wikipedia's anatomy:
+ * The main panel: a read-first wiki page for the selected node, following
+ * Wikipedia's anatomy:
  *
  *  - header: breadcrumb trail, title, page-level actions
  *  - type line under the title: kind, technology, style and layer, the
@@ -60,9 +60,8 @@ import {
   Ambox,
   NOTICE_ACTION,
 } from "../../widgets/node-page-sections/PageHeader";
-import { GroupPageBody } from "./GroupPage";
 import { DescriptionSection } from "../../widgets/node-page-sections/DescriptionSection";
-import { plannedRespHosts, ResponsibilitiesSection } from "../../widgets/node-page-sections/ResponsibilitiesSection";
+import { ResponsibilitiesSection } from "../../widgets/node-page-sections/ResponsibilitiesSection";
 import { PropertiesSection } from "../../widgets/node-page-sections/PropertiesSection";
 import { PreviewSection } from "../../widgets/node-page-sections/PreviewSection";
 import { ExercisedBySection } from "../../widgets/node-page-sections/ExercisedBySection";
@@ -76,15 +75,6 @@ export function NodePage(props: PageProps) {
   const { model, selected } = props;
   if (selected.kind === "special") return null; // routed by App, never here
   // Key the page on the selection so edit toggles reset when you navigate away.
-  if (selected.kind === "group") {
-    const group = model.groups.find((g) => g.id === selected.id);
-    if (!group) return <Gone />;
-    return (
-      <PageMenuProvider>
-        <GroupPageBody key={group.id} {...props} group={group} />
-      </PageMenuProvider>
-    );
-  }
   const node = model.nodes.find((n) => n.id === selected.id);
   if (!node) return <Gone />;
   return (
@@ -456,14 +446,11 @@ function NodePageBody(props: PageProps & { node: Node }) {
                   when a test is placed on it directly. */}
               {!dataShape && !(node.kind === "symbol" && resps.length === 0) && (
                 <ResponsibilitiesSection
-                  host="node"
-                  hostId={node.id}
+                  nodeId={node.id}
                   resps={resps}
                   prevResps={committedResps}
-                  plannedHosts={plannedRespHosts(model)}
                   concerns={model.concerns ?? []}
                   testMap={testMap}
-                  notes={model.notes}
                   testStates={testStates}
                   claimStatuses={claimStatuses}
                   testVerdicts={props.testVerdicts}
@@ -502,9 +489,6 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 <PropertiesSection
                   node={node}
                   prevProps={committed?.nodes.find((n) => n.id === node.id)?.properties ?? []}
-                  editor={undefined}
-                  editing={ed.isEditing("properties")}
-                  onToggle={() => ed.toggle("properties")}
                 />
               )}
 
@@ -514,9 +498,6 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 node={node}
                 report={report}
                 // Links come from imports and structure.toml, not from here.
-                editor={undefined}
-                editing={ed.isEditing("connections")}
-                onToggle={() => ed.toggle("connections")}
                 onSelectNode={onSelectNode}
               />
 

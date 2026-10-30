@@ -19,7 +19,6 @@ export interface PageProps {
   projectPath: string | null;
   editor: Editor | undefined;
   onSelectNode: (id: string) => void;
-  onSelectGroup: (id: string) => void;
   /** B5 repair path: agent writes realistic fixture props after a failed
    *  deterministic render. */
   onFixture?: (nodeId: string, renderStatus: string, renderError: string | null) => void;

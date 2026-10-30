@@ -1,5 +1,5 @@
 /**
- * The node page's claims: a node's or group's claims grouped by concern, each
+ * The node page's claims: a node's claims grouped by concern, each
  * a diff row against the committed tree — its marker, statement (word-diffed
  * when reworded), and the test that states it, with its
  * recorded verdict and probe result. Edit mode is a list form, committed on
@@ -12,93 +12,46 @@ import {
   CheckCheck,
   Circle,
   CircleDashed,
-  CornerDownRight,
   Crosshair,
   type LucideIcon,
   Tag,
   Triangle,
   X,
 } from "lucide-react";
-import type { ConcernDef, ScryModel, Responsibility, SourceLocation } from "../../entities/model/viewmodel";
+import type { ConcernDef, Responsibility, SourceLocation } from "../../entities/model/viewmodel";
 import { STANDARD_CONCERNS } from "../../entities/model/viewmodel";
 import { lookupIcon } from "../../features/search/IconPicker";
 import type { Editor } from "../../entities/model/editor";
 import type { AnchorState, ClaimProbeStatus, ClaimTestStatus } from "../../entities/model/health";
 import { claimMark, claimMarkLabel, probeTitle, type ClaimMark } from "../../entities/model/health";
-import { FLAG_COLORS } from "../../shared/ui/statusColors";
-import {
-  buildElementDiff,
-  CHANGE_OF,
-  ChangeGlyph,
-  type ElementDiff,
-  VerdictBar,
-  DRIFT_RULE,
-  DRIFT_HINT,
-} from "../../entities/model/diffkit";
+import { buildElementDiff, CHANGE_OF, ChangeGlyph, type ElementDiff } from "../../entities/model/diffkit";
 import { ClaimTests, respElementId } from "../source-section/SourceSection";
 import { ANCHOR_CALM, hasMarkup, lintEars, MarkupMirror, serializeEars, StatementText, stripMarkup } from "../../entities/model/markup";
 import { usePageMenu, useCopyId, copyIdItem } from "../../features/search/pageMenu";
-import {
-  BTN,
-  BTN_DANGER,
-  BTN_GO,
-  Editable,
-  Empty,
-  PageSection,
-  SectionEditor,
-  WordDiffText,
-} from "../../shared/ui/pagekit";
+import { BTN, Editable, Empty, PageSection, SectionEditor, WordDiffText } from "../../shared/ui/pagekit";
 import { RESP_ROW, STMT_HL_HOVER } from "./kit";
+import { DecisionText } from "./DecisionsSection";
 import { onAddClaimRequest } from "../../features/derived-tree/addClaim";
 import type { DerivedClaimStatus } from "../../entities/model/derived";
 import { CLAIM_TONE } from "../../entities/model/claimState";
 
 // --- responsibilities (the diff view) ---------------------------------------
 
-/** How one claim diverges from the committed model. The Overview reads as a
- *  diff: `added` (in the plan, not yet committed), `reworded` (statement or
- *  directives moved), `deleted` (committed but dropped from the plan, shown so
- *  it can be restored), `relocated` (committed here but moved to another host in
- *  the plan — shown for context, NOT restorable), `vagrant` (code does it, the
- *  model never claimed it — adopt or reject), or `unchanged`. */
+/** How one claim diverges from the committed tree: `added` (a todo stub, not
+ *  yet implemented), `reworded`, `deleted`, or `unchanged`. */
 interface RespDiffRow extends Omit<ElementDiff<Responsibility>, "item"> {
   resp: Responsibility;
 }
 
-/** Map every planned responsibility id to the display name of the node/group
- *  that holds it. Lets {@link buildRespDiff} tell a claim that *moved* to
- *  another host (id still present elsewhere in the plan) from one genuinely
- *  dropped — the former must not offer a Restore, which would re-add the id
- *  here and duplicate it across two hosts (both diff engines key by id, so one
- *  copy would silently vanish and corrupt the plan). */
-export function plannedRespHosts(model: ScryModel): Map<string, string> {
-  const hosts = new Map<string, string>();
-  for (const n of model.nodes)
-    for (const r of n.responsibilities ?? []) hosts.set(r.id, n.name || n.id);
-  for (const g of model.groups)
-    for (const r of g.responsibilities ?? []) hosts.set(r.id, g.name || "Group");
-  return hosts;
-}
-
-/** Build the diff rows for a host's claims: planned claims in order (each tagged
- *  added / reworded / vagrant / unchanged against the committed copy), then any
- *  committed claims the plan dropped — as restorable `deleted` rows, or, when the
- *  id now lives on another host, as read-only `relocated` rows. `plannedHosts`
- *  (respId → owning host name across the whole plan) drives that distinction. */
-function buildRespDiff(
-  planned: Responsibility[],
-  committed: Responsibility[],
-  plannedHosts?: Map<string, string>,
-): RespDiffRow[] {
+/** Build the diff rows for a node's claims: planned claims in order (each
+ *  tagged added / reworded / unchanged against the committed copy), then any
+ *  committed claims the plan dropped. */
+function buildRespDiff(planned: Responsibility[], committed: Responsibility[]): RespDiffRow[] {
   return buildElementDiff(planned, committed, {
     key: (r) => r.id,
     // Statements compare stripped of display markup: a markup-only touch is
     // presentation, not a reword.
-    changed: (prev, r) =>
-      stripMarkup(prev.statement) !== stripMarkup(r.statement) ||
-      (prev.directives ?? []).join("\n") !== (r.directives ?? []).join("\n"),
-    vagrant: (r) => !!r.vagrant,
-    relocatedTo: (r) => plannedHosts?.get(r.id),
+    changed: (prev, r) => stripMarkup(prev.statement) !== stripMarkup(r.statement),
   }).map(({ item, ...row }) => ({ ...row, resp: item }));
 }
 
@@ -182,17 +135,12 @@ function groupByConcern(rows: RespDiffRow[]): RespDiffRow[] {
   return orderByConcern(rows, (r) => r.resp.concern);
 }
 
-/** Render text with word-level add/remove highlighting (a reworded claim). When
- *  `from`/`to` are equal it's just the plain text. */
 export function ResponsibilitiesSection({
-  host,
-  hostId,
+  nodeId,
   resps,
   prevResps,
-  plannedHosts,
   concerns,
   testMap,
-  notes,
   testStates,
   claimStatuses,
   testVerdicts,
@@ -203,21 +151,15 @@ export function ResponsibilitiesSection({
   editing,
   onToggle,
 }: {
-  host: "node" | "group";
-  hostId: string;
+  nodeId: string;
   resps: Responsibility[];
-  /** The committed copy of this host's claims — the diff base for the rows. */
+  /** The committed copy of this node's claims — the diff base for the rows. */
   prevResps: Responsibility[];
-  /** respId → owning host name across the whole plan; distinguishes a relocated
-   *  claim from a deleted one so we never offer a duplicating Restore. */
-  plannedHosts: Map<string, string>;
   /** The model's concern registry — resolves each claim's `concern` slug to its
    *  glyph/description, and feeds the editor's slug suggestions. */
   concerns: ConcernDef[];
   /** respId → attached-test locations (the test dimension). */
   testMap: Record<string, SourceLocation[]>;
-  /** respId → the agent's progress note on a planned claim it left unfolded. */
-  notes?: Record<string, string>;
   /** respId → fingerprint state of the attached test, when it regressed. */
   testStates: Record<string, AnchorState>;
   /** respId → the claim's derived status: its row's marker (proven,
@@ -229,34 +171,26 @@ export function ResponsibilitiesSection({
   /** respId → probe result; absent for a claim nobody has probed. */
   probeResults: Record<string, ClaimProbeStatus>;
   projectPath: string | null;
-  /** Mint a fresh claim id clear of every host in BOTH layers (plus the
-   *  editor's own draft rows) — claim ids are globally unique, and a per-host
-   *  mint can duplicate one across hosts, silently corrupting the diff. */
+  /** Mint a fresh claim id clear of every node in both layers (plus the
+   *  editor's own draft rows). */
   mintId: (draft: Responsibility[]) => string;
   editor: Editor | undefined;
   editing: boolean;
   onToggle: () => void;
 }) {
-  const diffRows = buildRespDiff(resps, prevResps, plannedHosts);
-  /** Restore a dropped claim by putting the committed copy back into the plan. */
-  const restore = (r: Responsibility) => {
-    if (!editor) return;
-    const next = [...resps, r];
-    if (host === "node") editor.updateNode(hostId, { responsibilities: next });
-    else editor.updateGroup(hostId, { responsibilities: next });
-  };
+  const diffRows = buildRespDiff(resps, prevResps);
   // "Add responsibility" from read mode opens the editor seeded with a fresh
   // row; nothing is written to the model until Done.
   const [seedNewRow, setSeedNewRow] = useState(false);
   // "Add claim" from the tree opens this editor seeded with a fresh row.
   useEffect(
     () =>
-      onAddClaimRequest(hostId, () => {
+      onAddClaimRequest(nodeId, () => {
         if (!editor || editing) return;
         setSeedNewRow(true);
         onToggle();
       }),
-    [hostId, editor, editing, onToggle],
+    [nodeId, editor, editing, onToggle],
   );
 
   return (
@@ -272,8 +206,7 @@ export function ResponsibilitiesSection({
     >
       {editing && editor ? (
         <ResponsibilitiesEditor
-          host={host}
-          hostId={hostId}
+          nodeId={nodeId}
           initial={resps}
           concerns={concerns}
           seedNewRow={seedNewRow}
@@ -292,17 +225,13 @@ export function ResponsibilitiesSection({
             <RespDiffRow
               key={row.resp.id}
               row={row}
-              host={host}
               concerns={concerns}
               testLocations={testMap[row.resp.id] ?? []}
-              note={notes?.[row.resp.id]}
               testState={testStates[row.resp.id] ?? null}
               claimStatus={claimStatuses?.[row.resp.id]}
               testVerdict={testVerdicts[row.resp.id] ?? null}
               probeResult={probeResults[row.resp.id] ?? null}
               projectPath={projectPath}
-              onRestore={() => restore(row.resp)}
-              editor={editor}
             />
           ))}
         </ol>
@@ -313,13 +242,11 @@ export function ResponsibilitiesSection({
 
 /**
  * The responsibility-list form inside the shared {@link SectionEditor} shell.
- * Done commits: deletions go through the intent (so side-effects like
- * unlocking a relocated source still fire), then one bulk set writes the
- * final list. Untouched new rows vanish on commit.
+ * Done writes the final list in one update. Untouched new rows vanish on
+ * commit.
  */
 function ResponsibilitiesEditor({
-  host,
-  hostId,
+  nodeId,
   initial,
   concerns,
   seedNewRow,
@@ -327,8 +254,7 @@ function ResponsibilitiesEditor({
   editor,
   onClose,
 }: {
-  host: "node" | "group";
-  hostId: string;
+  nodeId: string;
   initial: Responsibility[];
   /** The registry — feeds the concern input's slug suggestions. */
   concerns: ConcernDef[];
@@ -343,10 +269,7 @@ function ResponsibilitiesEditor({
     : initial;
 
   const commit = (draft: Responsibility[]) => {
-    // Blank statements (invalid — the backend flags them) drop out on commit.
-    // A blank concern drops to
-    // untagged; slug normalization and registry minting happen at the write
-    // chokepoint (`registerConcerns`).
+    // Blank statements drop out on commit, and a blank concern to untagged.
     const initialStmt = new Map(initial.map((r) => [r.id, r.statement]));
     const cleaned = draft
       .filter((r) => r.statement.trim() !== "")
@@ -354,24 +277,18 @@ function ResponsibilitiesEditor({
         // A statement the user actually touched and left marker-free gets its
         // display markup minted from the positional EARS pass — exactly what
         // the field's mirror previewed. Untouched rows pass through byte-
-        // identical (mass-minting would re-date every claim's patina).
+        // identical.
         let statement = r.statement.trim();
         if (statement !== (initialStmt.get(r.id) ?? "").trim() && !hasMarkup(statement))
           statement = serializeEars(statement);
-        const dirs = (r.directives ?? []).map((s) => s.trim()).filter(Boolean);
         const concern = (r.concern ?? "").trim();
         return {
           ...r,
           statement,
-          directives: dirs.length ? dirs : undefined,
           concern: concern || undefined,
         };
       });
-    const keep = new Set(cleaned.map((r) => r.id));
-    for (const r of initial)
-      if (!keep.has(r.id)) editor.removeResponsibility(host, hostId, r.id);
-    if (host === "node") editor.updateNode(hostId, { responsibilities: cleaned });
-    else editor.updateGroup(hostId, { responsibilities: cleaned });
+    editor.updateNode(nodeId, { responsibilities: cleaned });
   };
 
   return (
@@ -430,35 +347,26 @@ function ResponsibilitiesEditor({
 }
 
 /**
- * One claim, rendered as a diff row against the committed model: a marker
- * (+ added / ~ reworded / − deleted / ? vagrant / blank unchanged), the
- * sequence number, the statement (word-diffed when reworded), its directives
- * (new ones flagged +), footnote citation chips, and the inline verdict actions
- * the row's kind calls for (adopt/reject a vagrant, restore a deletion, clear a
- * stale flag). No status pill — the marker carries the lifecycle now.
+ * One claim, rendered as a diff row against the committed tree: a marker
+ * (~ reworded / − deleted; a todo's state marker already says it is new), its
+ * state marker, the statement (word-diffed when reworded), its decisions, and
+ * the test that states it.
  */
 function RespDiffRow({
   row,
-  host,
   concerns,
   testLocations,
-  note,
   testState,
   claimStatus,
   testVerdict,
   probeResult,
   projectPath,
-  onRestore,
-  editor,
 }: {
   row: RespDiffRow;
-  host: "node" | "group";
   /** The model's concern registry — resolves the row's glyph. */
   concerns: ConcernDef[];
   /** The claim's attached tests (test dimension). */
   testLocations: SourceLocation[];
-  /** The agent's progress note: what is built and what is left. */
-  note?: string;
   /** Fingerprint state of the attached test, when it regressed since reconcile. */
   testState: AnchorState | null;
   /** The claim's derived status, when the health report has one. */
@@ -468,33 +376,22 @@ function RespDiffRow({
   /** The claim's recorded probe result, or null when nobody probed it. */
   probeResult: ClaimProbeStatus | null;
   projectPath: string | null;
-  onRestore: () => void;
-  editor: Editor | undefined;
 }) {
   const { resp, kind, prev } = row;
   const openMenu = usePageMenu();
   const copyId = useCopyId();
   const deleted = kind === "deleted";
-  const relocated = kind === "relocated";
-  const directives = resp.directives ?? [];
-  const prevDirs = prev?.directives ?? [];
-  // Directives the plan dropped from a kept claim — shown struck so the removal
-  // is visible, like a deleted line.
-  const removedDirs =
-    kind === "reworded" || kind === "unchanged" ? prevDirs.filter((d) => !directives.includes(d)) : [];
-  const reviewable = kind === "vagrant" && host === "node" && editor;
   // What a reworded claim last passed as: its statement reads as a diff
   // from that wording until it passes again.
   const provenAs = claimStatus?.provenAs;
   const mark = claimStatus && claimMark(claimStatus.state, testVerdict ?? undefined, probeResult ?? undefined, !!provenAs);
-  const contentColor = deleted || relocated
+  const contentColor = deleted
     ? "text-[var(--text-muted)]"
     : kind === "unchanged"
       ? "text-[var(--text-secondary)]"
       : "text-[var(--text)]";
 
   return (
-    <>
     <li
       id={respElementId(resp.id)}
       onContextMenu={(e) => openMenu(e, [copyIdItem(resp.id, copyId)])}
@@ -532,173 +429,34 @@ function RespDiffRow({
             <span className="italic text-[var(--text-ghost)]">Untitled claim</span>
           )}
         </span>
-        {/* The chip only earns its place when the verdict block below can't
-            render (read-only) — beside it, it would announce the same fact twice. */}
-        {resp.stale && !editor && (
-          <span
-            className={`${FLAG_COLORS.stale.pill} ml-2 align-middle`}
-            title="Drift check: the code no longer discharges this claim as written."
-          >
-            stale
-          </span>
-        )}
-        {/* Bleed spec: undo the row's 18+22px gutter columns and the 180px
-            control lane, so the open peek spans the article column.
-            A plan-ADDED claim shows neither dimension: anchoring is the build
-            checkpoint (rule 25), so until the claim folds, any recorded anchor
-            or test entry is a promise, not a fact — rendering it would dress
-            unbuilt work as built. The entries surface when the fold commits. */}
-        {kind !== "added" && (
-          // The anchor/test footnotes hang in their OWN register — indented a
-          // clear step right of the claim's text edge, so the statement reads
-          // alone and the refs scan as annotation under it, not more sentence.
-          // The bleed grows by the same 20px so an open peek still spans the
-          // article column.
-          <div className="pl-5">
-            {note && (
-              <p className="my-1 text-sm text-[var(--text-muted)]" title="The agent's progress note on this unfinished claim">
-                <span className="font-medium">Unfinished:</span> {note}
-              </p>
-            )}
-            {/* The claim's anchor is its test: flask-marked, peek and open
-                included. */}
-            <ClaimTests
-              locations={testLocations}
-              state={testState}
-              projectPath={projectPath}
-              deleted={deleted || relocated}
-              bleed="-ml-[60px] -mr-[180px]"
-            />
-          </div>
-        )}
-
-        {/* Verdict actions, inline where the row needs one — controls in their
-            own lane, off the mono content. A stale claim is a two-way verdict:
-            the model adheres to the code, or the code adheres to the model.
-            Which pair shows depends on whether the behaviour diverged (drift
-            wrote a reword proposal) or vanished (no proposal). Green is
-            reserved for the no-cost accept; rebuilding is neutral (it files
-            work); drop is red (it deletes from the model). */}
-        {resp.stale && editor && (
-          <div className={`mt-1.5 flex flex-wrap items-center gap-2 text-xs ${DRIFT_RULE}`}>
-            {resp.staleProposal ? (
-              <>
-                <span className={DRIFT_HINT}>Drift proposes:</span>
-                <span className="min-w-0 font-mono text-sm text-[var(--text-secondary)]">
-                  <WordDiffText from={stripMarkup(resp.statement)} to={stripMarkup(resp.staleProposal)} />
-                </span>
-                <button
-                  type="button"
-                  onClick={() => editor.rewordResponsibility(resp.id, resp.staleProposal!)}
-                  className={BTN_GO}
-                  title="The code changed what it does — accept this wording into the model. No rebuild: the code already does this."
-                >
-                  Accept reword
-                </button>
-                <span className="text-[var(--text-tertiary)]">Or the model is right —</span>
-                <button
-                  type="button"
-                  onClick={() => editor.reimplementResponsibility(resp.id)}
-                  className={BTN}
-                  title="Keep this claim as written and rebuild the behaviour in code — files a to-do the agent implements (folds back when done)."
-                >
-                  Rebuild code
-                </button>
-              </>
-            ) : (
-              <>
-                <span className={DRIFT_HINT}>
-                  Drift says the code no longer does this —
-                </span>
-                <button
-                  type="button"
-                  onClick={() => editor.dropResponsibility(resp.id)}
-                  className={BTN_DANGER}
-                  title="The behaviour was removed on purpose — drop the claim from the model."
-                >
-                  Drop claim
-                </button>
-                <button
-                  type="button"
-                  onClick={() => editor.reimplementResponsibility(resp.id)}
-                  className={BTN}
-                  title="Keep this claim and rebuild the behaviour in code — files a to-do the agent implements (folds back when done)."
-                >
-                  Rebuild code
-                </button>
-              </>
-            )}
-          </div>
-        )}
-        {reviewable && (
-          <VerdictBar hint="In the code, not in the model" className="-mr-[180px]">
-            <button
-              type="button"
-              onClick={() => editor!.adoptResponsibility(resp.id)}
-              className={BTN_GO}
-              title="Accept this discovered behaviour into the contract — commits it to the model now (the code already exists)"
-            >
-              Adopt
-            </button>
-            <button
-              type="button"
-              data-act="reject"
-              onClick={() => editor!.rejectResponsibility(resp.id)}
-              className={BTN_DANGER}
-              title="Mark the code for deletion — this behaviour is not wanted (folds it in, then schedules its removal)"
-            >
-              Reject
-            </button>
-          </VerdictBar>
-        )}
-        {deleted && editor && (
-          <VerdictBar hint="Removed from the plan">
-            <button type="button" onClick={onRestore} className={BTN_GO} title="Put this committed claim back into the plan">
-              Restore
-            </button>
-          </VerdictBar>
-        )}
-        {/* Relocated: the claim moved to another host in the plan. It still lives
-            there under the same id, so there's nothing to restore — a Restore
-            here would re-add the id and duplicate it across two hosts. */}
-        {relocated && (
-          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-[var(--text-tertiary)]">
-            <span>Moved to {row.movedTo} in the plan.</span>
-          </div>
-        )}
+        {/* The decisions and test hang in their OWN register — indented a
+            clear step right of the claim's text edge, so the statement reads
+            alone and the refs scan as annotation under it. The bleed undoes
+            the row's gutters, 180px control lane and this 20px indent, so an
+            open peek spans the article column. A todo claim shows them too:
+            its todo test is real, and so is its why. */}
+        <div className="pl-5">
+          {resp.decisions && (
+            <div className="my-1 font-sans" title="Written in the claim's test doc, after the claim">
+              <DecisionText text={resp.decisions} />
+            </div>
+          )}
+          {/* The claim's anchor is its test: flask-marked, peek and open
+              included. */}
+          <ClaimTests
+            locations={testLocations}
+            state={testState}
+            projectPath={projectPath}
+            deleted={deleted}
+            bleed="-ml-[60px] -mr-[180px]"
+          />
+        </div>
       </div>
 
       {/* The concern lane: the 180px control gutter is empty in read mode,
           so its right edge is an aligned concern column. */}
       <ConcernTag slug={resp.concern} concerns={concerns} />
     </li>
-
-      {/* Directives — each its own grid row so the +/− marker aligns in the
-          page's marker lane, like the mockup's `.row.dir`. */}
-      {directives.map((d, i) => {
-        const added = !!prev && !prevDirs.includes(d) && !deleted;
-        return (
-          <li key={`d${i}`} className={`${RESP_ROW} py-[0.5px]`}>
-            {added ? <ChangeGlyph kind="add" plain /> : <span className="select-none" />}
-            <span className="select-none" />
-            <div className="flex min-w-0 items-baseline gap-1.5 pr-[180px] font-mono text-sm leading-relaxed text-[var(--text-tertiary)]">
-              <CornerDownRight className="h-3 w-3 shrink-0 translate-y-px not-italic text-[var(--text-ghost)]" />
-              <span className="min-w-0">{d}</span>
-            </div>
-          </li>
-        );
-      })}
-      {removedDirs.map((d, i) => (
-        <li key={`rd${i}`} className={`${RESP_ROW} py-[0.5px]`}>
-          <ChangeGlyph kind="delete" plain />
-          <span className="select-none" />
-          <div className="flex min-w-0 items-baseline gap-1.5 pr-[180px] font-mono text-sm leading-relaxed text-[var(--text-tertiary)]">
-            <CornerDownRight className="h-3 w-3 shrink-0 translate-y-px not-italic text-[var(--text-ghost)]" />
-            <span className="min-w-0 text-[var(--text-muted)] line-through decoration-[var(--text-ghost)]">{d}</span>
-          </div>
-        </li>
-      ))}
-    </>
   );
 }
 
@@ -723,9 +481,8 @@ function ResponsibilityEditRow({
   // In-place edit row: each line is a contentEditable span flowing in the same
   // content cell as the read diff row, with the SAME font/size/line-height, so
   // read↔edit stays the same width. The concern glyph sits in the read view's
-  // marker lane — clickable here to tag/untag in place. The statement and each
-  // directive are their own hover-scoped line (`/srow`, `/drow`): the full cell
-  // highlights on hover and its controls (CTL) float over the right edge.
+  // marker lane — clickable here to tag/untag in place. The statement is its
+  // own hover-scoped line (`/srow`): the full cell highlights on hover and its controls (CTL) float over the right edge.
   return (
     <li data-erow={resp.id} className={`group/erow ${RESP_ROW} py-[1.5px] [&:not(:first-child)]:mt-2.5`}>
       <span className="select-none text-center font-mono text-2xs tabular-nums text-[var(--text-ghost)]">
@@ -748,7 +505,7 @@ function ResponsibilityEditRow({
             className="block !pr-[180px]"
           />
           {/* Only the wording edits here: a claim is a test, so deleting
-              it, tagging it or adding a directive happens in the code. The
+              it, tagging it or writing its decisions happens in the code. The
               concern is the test's trailing [tag]: shown, kept on reword. */}
           <ConcernTag slug={resp.concern} concerns={concerns} />
         </div>

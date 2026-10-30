@@ -250,7 +250,7 @@ fn touch(r: &ModelRef, event: &serde_json::Value, file: &str) {
 const OVERLAY_FILE_CAP: usize = 5;
 
 /// Codex reads fire no hook events, so the intent overlay rides the edit
-/// instead: just before a patch lands, inject the claims and directives
+/// instead: just before a patch lands, inject the claims
 /// governing the files it names. Claude Code sends this event only for Bash
 /// (post-Read is its overlay moment), and Copilot not at all. Before any shell
 /// command, its start is marked, so the files it modifies count as the

@@ -157,7 +157,6 @@ fn store_results_on(r: &ModelRef, model: &ScryModel, report: &ReportMatch) -> Re
         .nodes
         .iter()
         .flat_map(|n| n.responsibilities.iter())
-        .chain(model.groups.iter().flat_map(|g| g.responsibilities.iter()))
         .filter_map(|resp| {
             let file = model.test_map.get(&resp.id)?.first()?.pattern.clone();
             Some((resp.id.as_str(), ProvenAs { file, statement: resp.statement.clone() }))
@@ -310,7 +309,6 @@ fn live_claims(model: &ScryModel) -> BTreeSet<&str> {
         .nodes
         .iter()
         .flat_map(|n| n.responsibilities.iter())
-        .chain(model.groups.iter().flat_map(|g| g.responsibilities.iter()))
         .map(|resp| resp.id.as_str())
         .collect()
 }
@@ -506,7 +504,6 @@ pub fn read_probe_statuses(r: &ModelRef) -> Result<Vec<ClaimProbeStatus>, String
         .nodes
         .iter()
         .flat_map(|n| n.responsibilities.iter())
-        .chain(model.groups.iter().flat_map(|g| g.responsibilities.iter()))
         .map(|resp| resp.id.as_str())
         .collect();
     let mut files = FileCache::new();
@@ -620,8 +617,6 @@ mod tests {
             id: "sym".into(),
             kind: Kind::Symbol,
             name: "alpha".into(),
-            vagrant: None,
-            stale: None,
             parent_id: None,
             external: None,
             technology: None,
@@ -630,17 +625,11 @@ mod tests {
                 concern: None,
                 id: "r1".into(),
                 statement: "answers one".into(),
-                vagrant: None,
-                stale: None,
-                stale_proposal: None,
-                directives: Vec::new(),
-                last_touched_at: None,
+                decisions: None,
             }],
             properties: Vec::new(),
             icon: None,
-            notes: None,
             position: None,
-            directives: Vec::new(),
         });
         m.source_map.insert(
             "r1".into(),
@@ -996,11 +985,7 @@ mod tests {
             concern: None,
             id: "r2".into(),
             statement: "answers two".into(),
-            vagrant: None,
-            stale: None,
-            stale_proposal: None,
-            directives: Vec::new(),
-            last_touched_at: None,
+            decisions: None,
         });
         let loc = |pattern: &str, symbol: &str| SourceLocation {
             pattern: pattern.into(),

@@ -25,7 +25,6 @@ const model = {
     { id: "l-u", src: "ledger", dst: "db", label: "stores entries in" },
     { id: "l-s", src: "sys", dst: "db", label: "stores entries in" },
   ],
-  groups: [],
 } as unknown as ScryModel;
 
 const report = {

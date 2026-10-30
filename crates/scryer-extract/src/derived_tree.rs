@@ -1098,6 +1098,24 @@ mod tests {
         assert!(tree.style_violations.is_empty(), "{:?}", tree.style_violations);
     }
 
+    /// Carries each test's decisions onto its claim.
+    #[test]
+    fn a_claim_carries_its_tests_decisions() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "Cargo.toml", "[package]\nname = \"auth\"\nversion = \"0.1.0\"\n");
+        write(
+            d,
+            "src/lib.rs",
+            "pub fn check() {}\n#[cfg(test)]\nmod tests {\n    /// Rejects a stale token\n    ///\n    /// Not refreshed.\n    #[test]\n    fn rejects() { super::check(); }\n}\n",
+        );
+        let tree = derived_tree_uncached(d).unwrap();
+        let claim = tree.claims.iter().find(|c| c.identifier == "rejects").unwrap();
+        assert_eq!(claim.decisions.as_deref(), Some("Not refreshed."));
+        let resp = tree.planned.nodes.iter().flat_map(|n| &n.responsibilities).find(|r| r.id == claim.id).unwrap();
+        assert_eq!(resp.decisions.as_deref(), Some("Not refreshed."), "the app reads it on the responsibility");
+    }
+
     /// When a forbidden link comes from an import outside any definition (a
     /// module-scope `use` behind an `impl Trait for T`), its finding names
     /// the importing file, not the component's first file.

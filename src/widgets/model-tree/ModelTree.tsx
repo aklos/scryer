@@ -1,7 +1,6 @@
 /**
  * Left explorer — an IDE-style tree of the full derived hierarchy (persons,
- * systems, containers, components, symbols), with groups rendered as folders
- * that wrap their members, each level framed and titled. Every row carries
+ * systems, containers, components, symbols), each level framed and titled. Every row carries
  * the mix of its subtree's claims (proven, unverified, todo, failing) as one
  * thin bar, beside its structural violation count. Type-to-filter, the claim
  * state lenses (Todo / Unverified / Failing) and the concern lens narrow it. The structure is the code's, so right-click offers only what
@@ -9,11 +8,11 @@
  */
 
 import { Fragment, useRef, useState } from "react";
-import { Braces, ChevronRight, Loader2, Pencil, Plus } from "lucide-react";
+import { Braces, ChevronRight, Loader2 } from "lucide-react";
 import type { StyleViolation } from "../../entities/model/health";
 import { StructuralCount } from "../../entities/model/StructuralCount";
-import type { ScryModel, Node, Group } from "../../entities/model/viewmodel";
-import { childKindFor, concernCounts, normalizeConcernSlug } from "../../entities/model/viewmodel";
+import type { ScryModel, Node } from "../../entities/model/viewmodel";
+import { concernCounts } from "../../entities/model/viewmodel";
 import type { Editor } from "../../entities/model/editor";
 import { CLAIM_LABEL } from "../../entities/model/claimState";
 import type { ClaimState, DerivedCounts, DerivedNodeStatus } from "../../entities/model/derived";
@@ -32,7 +31,6 @@ import { lookupIcon } from "../../features/search/IconPicker";
 import { NAME_MAX, sanitizeIdentifier } from "../../shared/ui/pagekit";
 import { InlineText } from "../../shared/ui/InlineText";
 import { ContextMenu, type ContextMenuItem } from "../../features/search/ContextMenu";
-import { ConfirmPopover } from "../../shared/feedback/ConfirmPopover";
 import { Select } from "../../shared/ui/Select";
 import type { Selected } from "../../entities/model/navigation";
 import { requestAddClaim } from "../../features/derived-tree/addClaim";
@@ -86,17 +84,15 @@ const byName = (a: { name: string }, b: { name: string }) =>
 /** One visible row of the flattened tree, in render order — the basis for both
  *  rendering and arrow-key navigation. */
 interface TreeRow {
-  kind: "node" | "group";
   id: string;
   depth: number;
   hasChildren: boolean;
   isOpen: boolean;
-  parent: { kind: "node" | "group"; id: string } | null;
+  parent: { id: string } | null;
   // Full chain root→immediate-parent, one entry per depth. Drives the indent
   // guide rails (a rail per ancestor) and active-branch highlighting.
-  ancestors: { kind: "node" | "group"; id: string }[];
-  node?: Node;
-  group?: Group;
+  ancestors: { id: string }[];
+  node: Node;
 }
 
 /** What a level of the tree is, from the kinds of its rows, in the words the
@@ -139,7 +135,6 @@ export function ModelTree({
   selected,
   expanded,
   onSelectNode,
-  onSelectGroup,
   onToggle,
   editor,
   activeNodeIds,
@@ -157,7 +152,6 @@ export function ModelTree({
   selected: Selected | null;
   expanded: ReadonlySet<string>;
   onSelectNode: (id: string) => void;
-  onSelectGroup: (id: string) => void;
   onToggle: (id: string, expand?: boolean) => void;
   editor: Editor | undefined;
   activeNodeIds: ReadonlySet<string>;
@@ -184,9 +178,6 @@ export function ModelTree({
   });
   const [menu, setMenu] = useState<{ x: number; y: number; items: ContextMenuItem[] } | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
-  const [confirmDel, setConfirmDel] = useState<
-    { rect: DOMRect; run: () => void; label: string } | null
-  >(null);
 
   // Symbols are first-class pages and the page no longer re-lists children,
   // so the tree shows the full hierarchy by default. The altitude toggle
@@ -200,8 +191,6 @@ export function ModelTree({
       return !s;
     });
 
-  // Nothing is dragged in a tree read from the code.
-  const dropKey: string | null = null;
   // The ancestor whose thread-rail is hovered — lights that one line (and only
   // that line) along its whole length, Reddit-style. Never a mass.
   const [hoverRail, setHoverRail] = useState<string | null>(null);
@@ -225,17 +214,13 @@ export function ModelTree({
   };
 
   // --- filter + lenses --------------------------------------------------------
-  // Type-to-filter narrows by name; the lenses narrow by mark: "changes" (the
-  // plan — A/M/D/R, the model→code work queue), "drift" (Q/X — model↔code
-  // mismatch awaiting a verdict), and "tests" (claims the test dimension wants
-  // a look at — untested, failing, or a break the test let through). A branch
-  // stays visible when anything below it matches; matching auto-expands.
+  // Type-to-filter narrows by name; the lenses narrow by claim state (todo,
+  // unverified, failing). A branch stays visible when anything below it
+  // matches; matching auto-expands.
 
   const [filter, setFilter] = useState("");
   // A lens narrows the tree to the subtrees holding claims in one state.
   const [lens, setLens] = useState<"all" | "planned" | "stale" | "failing">("all");
-  // Inline rename of the ACTIVE concern (the pencil next to the lens picker).
-  const [renamingConcern, setRenamingConcern] = useState(false);
 
   const childIndex = new Map<string | null, Node[]>();
   for (const n of model.nodes) {
@@ -251,18 +236,9 @@ export function ModelTree({
   // picker options.
   const concernTally = concernLens ? concernCounts(model, concernLens) : null;
   const concernTotals = new Map<string, number>();
-  {
-    const tally = (rs?: { concern?: string }[]) => {
-      for (const r of rs ?? [])
-        if (r.concern) concernTotals.set(r.concern, (concernTotals.get(r.concern) ?? 0) + 1);
-    };
-    for (const n of model.nodes) tally(n.responsibilities);
-    for (const g of model.groups) tally(g.responsibilities);
-  }
-  const groupLit = (g: Group) =>
-    !concernTally ||
-    g.memberIds.some((m) => concernTally.has(m)) ||
-    (g.responsibilities ?? []).some((r) => r.concern === concernLens);
+  for (const n of model.nodes)
+    for (const r of n.responsibilities ?? [])
+      if (r.concern) concernTotals.set(r.concern, (concernTotals.get(r.concern) ?? 0) + 1);
 
   const q = filter.trim().toLowerCase();
   const filterActive = q !== "" || lens !== "all";
@@ -316,35 +292,6 @@ export function ModelTree({
       .filter((n) => (n.parentId ?? null) === parentId && visible(n))
       .sort(byName);
 
-  const groupsAtLevel = (parentId: string | null): Group[] =>
-    model.groups
-      .filter((g) => {
-        if (g.memberIds.length === 0) return (g.parentNodeId ?? null) === parentId;
-        return g.memberIds.some((m) => {
-          const n = model.nodes.find((nd) => nd.id === m);
-          return n && (n.parentId ?? null) === parentId && visible(n);
-        });
-      })
-      .sort(byName);
-
-  // --- structural edits -----------------------------------------------------
-
-  const addChild = (parent: Node) => {
-    if (!editor) return;
-    const kind = childKindFor(parent.kind);
-    const id = editor.addNode({ kind, parentId: parent.id });
-    // A symbol added while the altitude toggle hides symbols would land
-    // invisibly — surface them so the new node is where the eye expects it.
-    if (kind === "symbol") setShowSymbols(true);
-    toggle(parent.id, true);
-    onSelectNode(id);
-    setRenaming(id);
-  };
-
-  // The tree's structure is the code's: nothing is added at the root.
-  const openRootMenu = (_e: React.MouseEvent) => {};
-
-
   // The structure is the code's, so a node offers only what lands in the
   // code: add a claim (a todo test), rename a container (structure.toml).
   const nodeMenu = (e: React.MouseEvent, node: Node) => {
@@ -367,11 +314,6 @@ export function ModelTree({
     if (items.length > 0) setMenu({ x: e.clientX, y: e.clientY, items });
   };
 
-
-  // Groups are not derived; nothing to offer.
-  const groupMenu = (_e: React.MouseEvent, _group: Group) => {};
-
-
   // --- flattened visible rows -----------------------------------------------
   // One traversal produces the rows in render order; rendering maps over it and
   // arrow-key navigation walks it. Indentation is padding, so no nesting needed.
@@ -383,8 +325,7 @@ export function ModelTree({
       depth: number,
       ancestors: TreeRow["ancestors"],
     ) => {
-      const hasChildren =
-        childNodes(node.id).length > 0 || groupsAtLevel(node.id).length > 0;
+      const hasChildren = childNodes(node.id).length > 0;
       // While filtering, every surviving branch opens — the match is the
       // point — until the user closes it. The concern lens opens every LIT
       // branch the same way: "where does auth live" must answer itself, not
@@ -393,40 +334,11 @@ export function ModelTree({
         ? hasChildren && !closedInFilter.has(node.id)
         : expanded.has(node.id) || (concernTally !== null && concernTally.has(node.id));
       const parent = ancestors[ancestors.length - 1] ?? null;
-      rows.push({ kind: "node", id: node.id, depth, hasChildren, isOpen, parent, ancestors, node });
-      if (isOpen && hasChildren)
-        pushLevel(node.id, depth + 1, [...ancestors, { kind: "node", id: node.id }]);
+      rows.push({ id: node.id, depth, hasChildren, isOpen, parent, ancestors, node });
+      if (isOpen && hasChildren) pushLevel(node.id, depth + 1, [...ancestors, { id: node.id }]);
     };
-    const pushLevel = (
-      parentId: string | null,
-      depth: number,
-      ancestors: TreeRow["ancestors"],
-    ) => {
-      const groups = groupsAtLevel(parentId);
-      const grouped = new Set<string>();
-      for (const g of groups)
-        for (const m of g.memberIds)
-          if ((model.nodes.find((n) => n.id === m)?.parentId ?? null) === parentId)
-            grouped.add(m);
-      for (const n of childNodes(parentId).filter((n) => !grouped.has(n.id)))
-        pushNode(n, depth, ancestors);
-      for (const g of groups) {
-        const members = g.memberIds
-          .map((id) => model.nodes.find((n) => n.id === id))
-          .filter((n): n is Node => n != null && (n.parentId ?? null) === parentId && visible(n))
-          .sort(byName);
-        const isOpen = filterActive
-          ? !closedInFilter.has(g.id)
-          : (concernTally !== null && groupLit(g)) || expanded.has(g.id);
-        const parent = ancestors[ancestors.length - 1] ?? null;
-        rows.push({
-          kind: "group", id: g.id, depth,
-          hasChildren: members.length > 0, isOpen, parent, ancestors, group: g,
-        });
-        if (isOpen)
-          for (const m of members)
-            pushNode(m, depth + 1, [...ancestors, { kind: "group", id: g.id }]);
-      }
+    const pushLevel = (parentId: string | null, depth: number, ancestors: TreeRow["ancestors"]) => {
+      for (const n of childNodes(parentId)) pushNode(n, depth, ancestors);
     };
     pushLevel(null, 0, []);
   }
@@ -449,7 +361,7 @@ export function ModelTree({
   const onMap = (id: string) => activeLevel !== undefined && id === (activeLevel ?? ROOT);
   const levelName = (row: TreeRow): string =>
     levelTitle(
-      rows.filter((r) => (r.parent?.id ?? ROOT) === (row.parent?.id ?? ROOT)).flatMap((r) => (r.node ? [r.node.kind] : [])),
+      rows.filter((r) => (r.parent?.id ?? ROOT) === (row.parent?.id ?? ROOT)).map((r) => r.node.kind),
     );
   // A strip of each frame a row (or a level's title) sits in, back to front.
   const frameStrips = (ids: string[], opts: { head?: string; foot?: ReadonlyMap<string, number> }) =>
@@ -536,22 +448,15 @@ export function ModelTree({
     );
   };
 
-  // Nothing moves in a tree read from the code.
-  const dropProps = (_row: TreeRow) => ({});
-
-
-  const dragProps = (_node: Node) => ({});
-
   // --- keyboard navigation ----------------------------------------------------
 
   const containerRef = useRef<HTMLDivElement>(null);
 
   const focusRow = (row: TreeRow) => {
-    if (row.kind === "node") onSelectNode(row.id);
-    else onSelectGroup(row.id);
+    onSelectNode(row.id);
     requestAnimationFrame(() => {
       containerRef.current
-        ?.querySelector(`[data-rk="${row.kind}:${row.id}"]`)
+        ?.querySelector(`[data-rk="node:${row.id}"]`)
         ?.scrollIntoView({ block: "nearest" });
     });
   };
@@ -560,9 +465,7 @@ export function ModelTree({
     const t = e.target as HTMLElement;
     if (t.tagName === "INPUT" || t.tagName === "TEXTAREA") return; // renaming
     if (rows.length === 0) return;
-    const idx = rows.findIndex(
-      (r) => selected && r.kind === selected.kind && r.id === selected.id,
-    );
+    const idx = rows.findIndex((r) => selected?.kind === "node" && r.id === selected.id);
     const cur = idx >= 0 ? rows[idx] : null;
     switch (e.key) {
       case "ArrowDown": {
@@ -587,9 +490,7 @@ export function ModelTree({
         e.preventDefault();
         if (cur?.isOpen) toggle(cur.id, false);
         else if (cur?.parent) {
-          const p = rows.find(
-            (r) => r.kind === cur.parent!.kind && r.id === cur.parent!.id,
-          );
+          const p = rows.find((r) => r.id === cur.parent!.id);
           if (p) focusRow(p);
         }
         break;
@@ -607,12 +508,11 @@ export function ModelTree({
   // --- rendering ------------------------------------------------------------
 
   const renderNode = (row: TreeRow): React.ReactNode => {
-    const node = row.node!;
+    const node = row.node;
     const isSel = selected?.kind === "node" && selected.id === node.id;
     const ramp = altitudeRamp(node);
     const Icon = lookupIcon(node.icon) ?? kindIcon(node, previewable.has(node.id));
     const active = activeNodeIds.has(node.id);
-    const isDrop = dropKey === `node:${node.id}`;
 
     return (
       <div
@@ -622,13 +522,11 @@ export function ModelTree({
         onClick={() => onSelectNode(node.id)}
         onDoubleClick={() => row.hasChildren && toggle(node.id)}
         onContextMenu={(e) => nodeMenu(e, node)}
-        {...dragProps(node)}
-        {...dropProps(row)}
         className={`${ROW} ${
           isSel
             ? "bg-[var(--accent-soft)] text-[var(--text)]"
             : "text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
-        } ${isDrop ? "ring-1 ring-inset ring-[var(--border-strong)] bg-[var(--surface-hover)]" : ""} ${
+        } ${
           concernTally && !concernTally.has(node.id) && !isSel
             ? "opacity-40 transition-opacity"
             : ""
@@ -682,19 +580,6 @@ export function ModelTree({
             </span>
           )}
         </span>
-        {editor && node.kind !== "symbol" && node.kind !== "person" && renaming !== node.id && (
-          <button
-            type="button"
-            title={`Add ${childKindFor(node.kind)}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              addChild(node);
-            }}
-            className="shrink-0 rounded p-0.5 text-[var(--text-ghost)] opacity-0 transition-opacity group-hover/row:opacity-100 hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
-          >
-            <Plus className="h-3 w-3" />
-          </button>
-        )}
         {concernTally && concernTally.has(node.id) && (
           <span
             className="shrink-0 rounded bg-[var(--accent-soft)] px-1 font-mono text-2xs tabular-nums text-[var(--accent)]"
@@ -714,88 +599,6 @@ export function ModelTree({
           counts={claimStatus?.[node.id]?.subtree}
           empty={(node.kind === "system" && !node.external) || node.kind === "container" || node.kind === "component"}
         />
-      </div>
-    );
-  };
-
-  const renderGroup = (row: TreeRow): React.ReactNode => {
-    const group = row.group!;
-    const isSel = selected?.kind === "group" && selected.id === group.id;
-    // The folder's claims: its members' subtrees together.
-    const groupCounts = group.memberIds.reduce<DerivedCounts | undefined>((sum, m) => {
-      const c = claimStatus?.[m]?.subtree;
-      if (!c) return sum;
-      if (!sum) return { ...c };
-      for (const st of MIX_ORDER) sum[st] += c[st];
-      return sum;
-    }, undefined);
-    // Declared member count, shown (quietly) only when collapsed.
-    const memberCount = row.isOpen ? 0 : group.memberIds.length;
-
-    return (
-      <div
-        key={`group:${group.id}`}
-        data-rk={`group:${group.id}`}
-        style={{ paddingLeft: GUTTER + 6 + row.depth * INDENT }}
-        onClick={() => onSelectGroup(group.id)}
-        onDoubleClick={() => row.hasChildren && toggle(group.id)}
-        onContextMenu={(e) => groupMenu(e, group)}
-        {...dropProps(row)}
-        className={`${ROW} ${
-          isSel
-            ? "bg-[var(--accent-soft)] text-[var(--text)]"
-            : "text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
-        } ${dropKey === `group:${group.id}` ? "ring-1 ring-inset ring-[var(--border-strong)] bg-[var(--surface-hover)]" : ""} ${
-          !groupLit(group) && !isSel ? "opacity-40 transition-opacity" : ""
-        }`}
-      >
-        {renderFrames(row)}
-        <Chevron
-          has={row.hasChildren}
-          open={row.isOpen}
-          sel={isSel}
-          hot={hoverRail === group.id}
-          onHover={(h) => setHoverRail((cur) => (h ? group.id : cur === group.id ? null : cur))}
-          onClick={() => toggle(group.id)}
-        />
-        {/* No folder glyph — the uppercase label is signal enough; an empty
-            spacer the width of a node icon keeps group labels in the same
-            column as node names so groups read as headers, not a foreign kind. */}
-        <span className="ml-1.5 h-3.5 w-3.5 shrink-0" />
-        <span className="min-w-0 flex-1 truncate text-2xs font-medium uppercase tracking-[0.07em] text-[var(--text-tertiary)]">
-          {renaming === group.id && editor ? (
-            <InlineText
-              value={group.name}
-              autoEdit
-              placeholder="group name"
-              maxLength={NAME_MAX}
-              onCommit={(v) => editor.updateGroup(group.id, { name: v })}
-              onClose={() => setRenaming(null)}
-            />
-          ) : (
-            <span
-              onDoubleClick={
-                editor
-                  ? (e) => {
-                      e.stopPropagation();
-                      setRenaming(group.id);
-                    }
-                  : undefined
-              }
-            >
-              {group.name || <span className="text-[var(--text-ghost)]">Group</span>}
-            </span>
-          )}
-        </span>
-        {memberCount > 0 && (
-          <span
-            className="shrink-0 font-mono text-2xs tabular-nums text-[var(--text-ghost)]"
-            title={`${memberCount} member${memberCount === 1 ? "" : "s"}`}
-          >
-            {memberCount}
-          </span>
-        )}
-        <ClaimMix counts={groupCounts} empty={false} />
       </div>
     );
   };
@@ -876,64 +679,28 @@ export function ModelTree({
         {/* Concern lens — the cross-cutting axis. Picking a concern dims every
             row whose subtree doesn't serve it (tree and map together); rows
             never hide, because "nothing lit" is the answer the lens exists to
-            give. Options come from the model's concern registry; the pencil
-            renames the ACTIVE concern everywhere (registry + every tagged
-            responsibility) — the registry entry is the concept. */}
+            give. Options come from the model's concern registry. */}
         {onSetConcernLens && (model.concerns ?? []).length > 0 && (
-          <div className="flex items-center gap-1">
-            {renamingConcern && concernLens && editor ? (
-              <span className="min-w-0 flex-1 rounded-md border border-[var(--accent)] bg-[var(--surface-field)] px-2 py-1 font-mono text-xs text-[var(--text)]">
-                <InlineText
-                  value={concernLens}
-                  autoEdit
-                  placeholder="concern slug"
-                  onCommit={(v) => {
-                    const slug = normalizeConcernSlug(v);
-                    if (slug && slug !== concernLens) {
-                      editor.renameConcern(concernLens, slug);
-                      onSetConcernLens(slug);
-                    }
-                  }}
-                  onClose={() => setRenamingConcern(false)}
-                />
-              </span>
-            ) : (
-              <div
-                className="flex min-w-0 flex-1"
-                title="Concern lens — light up where a cross-cutting concern (auth, idempotency, …) lives; everything else dims"
-              >
-                <Select
-                  value={concernLens ?? ""}
-                  onChange={(v) => onSetConcernLens(v || null)}
-                  active={!!concernLens}
-                  options={[
-                    { value: "", label: "Concern lens" },
-                    ...(model.concerns ?? []).map((c) => ({
-                      value: c.slug,
-                      label: `${c.slug} · ${concernTotals.get(c.slug) ?? 0}`,
-                    })),
-                  ]}
-                />
-              </div>
-            )}
-            {concernLens && editor && !renamingConcern && (
-              <button
-                type="button"
-                title={`Rename "${concernLens}" everywhere — the registry entry and every tagged responsibility`}
-                onClick={() => setRenamingConcern(true)}
-                className="shrink-0 rounded p-1 text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
-              >
-                <Pencil className="h-3 w-3" />
-              </button>
-            )}
+          <div
+            className="flex min-w-0"
+            title="Concern lens — light up where a cross-cutting concern (auth, idempotency, …) lives; everything else dims"
+          >
+            <Select
+              value={concernLens ?? ""}
+              onChange={(v) => onSetConcernLens(v || null)}
+              active={!!concernLens}
+              options={[
+                { value: "", label: "Concern lens" },
+                ...(model.concerns ?? []).map((c) => ({
+                  value: c.slug,
+                  label: `${c.slug} · ${concernTotals.get(c.slug) ?? 0}`,
+                })),
+              ]}
+            />
           </div>
         )}
       </div>
-      <div
-        className="isolate flex-1 overflow-y-auto pb-4"
-        style={{ scrollbarGutter: "stable" }}
-        onContextMenu={openRootMenu}
-      >
+      <div className="isolate flex-1 overflow-y-auto pb-4" style={{ scrollbarGutter: "stable" }}>
         {model.nodes.length === 0 ? (
           <div className="px-4 py-6 text-xs text-[var(--text-muted)]">
             No packages found: the tree is read from the project's manifests and tests.
@@ -950,9 +717,9 @@ export function ModelTree({
           </div>
         ) : (
           rows.map((row, i) => (
-            <Fragment key={`${row.kind}:${row.id}`}>
+            <Fragment key={row.id}>
               {renderLevelTitle(row, i)}
-              {row.kind === "node" ? renderNode(row) : renderGroup(row)}
+              {renderNode(row)}
               {renderLevelFoot(row, i)}
             </Fragment>
           ))
@@ -972,17 +739,6 @@ export function ModelTree({
           y={menu.y}
           items={menu.items}
           onClose={() => setMenu(null)}
-        />
-      )}
-      {confirmDel && (
-        <ConfirmPopover
-          anchorRect={confirmDel.rect}
-          label={confirmDel.label}
-          onConfirm={() => {
-            confirmDel.run();
-            setConfirmDel(null);
-          }}
-          onCancel={() => setConfirmDel(null)}
         />
       )}
     </div>

@@ -15,11 +15,6 @@ import type { ClaimState } from "./derived";
 export interface HealthCounts {
   responsibilities: number;
   properties: number;
-  /** Responsibilities flagged vagrant (undescribed behaviour awaiting adopt/reject). */
-  vagrant: number;
-  /** Claims a drift review flagged stale (awaiting a decision) — not stale
-   *  test verdicts. */
-  driftStale: number;
   /** Claims expected to read through to code (any committed claim on a leaf). */
   anchorable: number;
   /** Of those, how many actually have a source anchor. */
@@ -41,8 +36,6 @@ export interface HealthCounts {
   /** Of the testable claims, how many have no test attached — testable
    *  claims with no test attached. */
   untested: number;
-  /** Unix seconds of the most recent truth-bearing edit in scope. */
-  lastTouchedAt?: number;
 }
 
 /** How much of a node's owned code region the lens actually reaches. */
@@ -393,7 +386,7 @@ export function testLaneTitle(
  *  are green with nothing worse beside them. Quiet means nobody has recorded
  *  a verdict down there at all. */
 export function subtreeTestTone(
-  model: Pick<ScryModel, "nodes" | "groups">,
+  model: Pick<ScryModel, "nodes">,
   nodeId: string,
   verdicts: Record<string, ClaimTestStatus>,
 ): "quiet" | "passing" | "stale" | "failing" {
@@ -420,10 +413,6 @@ export function subtreeTestTone(
   for (const n of model.nodes) {
     if (!inScope.has(n.id)) continue;
     for (const r of n.responsibilities ?? []) fold(r.id);
-  }
-  for (const g of model.groups ?? []) {
-    if (!g.parentNodeId || !inScope.has(g.parentNodeId)) continue;
-    for (const r of g.responsibilities ?? []) fold(r.id);
   }
   return tone;
 }

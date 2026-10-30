@@ -9,19 +9,17 @@
  */
 
 import { useMemo, useState } from "react";
-import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight } from "lucide-react";
 import type { ScryModel, Node, Link } from "../../entities/model/viewmodel";
 import { effectiveSourceMap } from "../../entities/model/viewmodel";
-import type { Editor } from "../../entities/model/editor";
 import type { ModelHealthReport, ImpliedConn, LinkPath } from "../../entities/model/health";
 import { linkEvidence, impliedFor, impliedPaths, pathsForLink } from "../../entities/model/health";
 import { kindIcon } from "../../entities/model/kindIcon";
-import { BTN, BTN_DANGER, BTN_GO, CTL, Editable, EYEBROW_BASE, PageSection, SectionEditor, WordDiffText } from "../../shared/ui/pagekit";
+import { EYEBROW_BASE, PageSection, WordDiffText } from "../../shared/ui/pagekit";
 import { buildElementDiff, CHANGE_OF, ChangeGlyph, DIFF_TINT, type ElementDiffKind } from "../../entities/model/diffkit";
 import { usePageMenu, useCopyId, copyIdItem } from "../../features/search/pageMenu";
 
-// Row grid: marker | index | content. The hover control (CTL) floats over the
-// right edge as an absolute overlay (hence `relative`), taking no layout space.
+// Row grid: marker | index | content.
 const CONN_ROW = "relative grid grid-cols-[18px_22px_1fr] items-baseline";
 
 /** How a declared link diverges from the committed model: `added` (new in the
@@ -80,52 +78,39 @@ interface SuggestedEdge {
 
 /** One declared relationship as a mono diff row — a change marker (+/~/−), the
  *  peer as a wikilink, label (word-diffed when reworded) and protocol inline,
- *  evidence dimmed. `removed` strikes the row (a pending deletion in edit mode);
- *  `control` is an optional action that rides in a reserved hover strip. */
+ *  evidence dimmed. */
 function ConnRow({
   node,
   row,
   evidence,
   hasAudit,
-  removed,
-  edit,
   expand,
-  control,
   onSelectNode,
 }: {
   node: Node;
   row: ConnDiffRow;
   evidence: Record<string, number>;
   hasAudit: boolean;
-  removed?: boolean;
-  /** When present (edit mode, row not staged for deletion), the label and
-   *  protocol render as inline editable fields seeded from these values. */
-  edit?: { onLabel: (t: string) => void; onMethod: (t: string) => void };
   /** When present, a disclosure chevron in the index lane toggles the link's
-   *  underlying code-path ladder (read mode only). */
+   *  underlying code-path ladder. */
   expand?: { open: boolean; onToggle: () => void };
-  control?: React.ReactNode;
   onSelectNode: (id: string) => void;
 }) {
   const { link, peer, kind, prev } = row;
   const openMenu = usePageMenu();
   const copyId = useCopyId();
-  // A link the plan drops (committed-but-removed) or one staged for deletion in
-  // the editor reads red + struck — deletion is the only thing link colour now
-  // encodes. Everything else is a plain blue wikilink to a real page.
-  const struck = kind === "deleted" || removed;
-  const mark = removed ? CHANGE_OF.deleted : kind === "unchanged" ? null : CHANGE_OF[kind];
+  // A link the plan drops reads red + struck — deletion is the only thing link
+  // colour encodes. Everything else is a plain blue wikilink to a real page.
+  const struck = kind === "deleted";
+  const mark = kind === "unchanged" ? null : CHANGE_OF[kind];
   // A brand-new link reads green (the connection itself is new), a dropped one
   // red + struck — the same whole-element treatment the claim rows carry
   // (light: quiet wash; dark: coloured text).
   const peerColor = struck
     ? DIFF_TINT.delete
-    : kind === "added" && !removed
+    : kind === "added"
       ? `${DIFF_TINT.add} hover:underline`
       : "text-blue-700 dark:text-blue-400";
-  // Inline editing only on live rows; a row staged for deletion keeps its
-  // struck, read-only rendering so the removal still reads at a glance.
-  const editable = edit && !struck;
   return (
     <li
       className={`group/erow ${CONN_ROW} py-[1.5px]`}
@@ -155,41 +140,24 @@ function ConnRow({
         >
           {peer.name || "Untitled"}
         </button>
-        {editable ? (
-          // Always-present edit slots so a labelless link can gain one.
-          <>
-            <span className="shrink-0 text-[var(--text-tertiary)]">
-              &nbsp;—{" "}
-              <Editable initial={link.label ?? ""} placeholder="label" onInput={edit!.onLabel} />
-            </span>
-            <span className="shrink-0 text-[var(--text-ghost)]">
-              &nbsp;·{" "}
-              <Editable initial={link.method ?? ""} placeholder="method" onInput={edit!.onMethod} />
-            </span>
-          </>
-        ) : (
-          <>
-            {(link.label || (kind === "reworded" && prev?.label)) && (
-              <span className="text-[var(--text-tertiary)]">
-                &nbsp;—{" "}
-                {kind === "reworded" && prev && prev.label !== link.label ? (
-                  <WordDiffText from={prev.label ?? ""} to={link.label ?? ""} />
-                ) : (
-                  link.label
-                )}
-              </span>
+        {(link.label || (kind === "reworded" && prev?.label)) && (
+          <span className="text-[var(--text-tertiary)]">
+            &nbsp;—{" "}
+            {kind === "reworded" && prev && prev.label !== link.label ? (
+              <WordDiffText from={prev.label ?? ""} to={link.label ?? ""} />
+            ) : (
+              link.label
             )}
-            {link.method && (
-              <span className="whitespace-nowrap text-[var(--text-ghost)]">&nbsp;· {link.method}</span>
-            )}
-          </>
+          </span>
+        )}
+        {link.method && (
+          <span className="whitespace-nowrap text-[var(--text-ghost)]">&nbsp;· {link.method}</span>
         )}
         <EvidenceTag
           count={evidence[link.id] ?? 0}
-          applicable={!struck && !editable && hasAudit && codeBearing(node) && codeBearing(peer)}
+          applicable={!struck && hasAudit && codeBearing(node) && codeBearing(peer)}
         />
       </div>
-      {control && <span className={CTL}>{control}</span>}
     </li>
   );
 }
@@ -518,31 +486,23 @@ function ReadConnRow({
 }
 
 /** A code-suggested edge as a mono row — the direction arrow, the peer (muted,
- *  it's not declared), the import count, and an optional declare control. */
+ *  it's not declared) and the import count. */
 function SuggestedRow({
   edge,
   peer,
   out,
-  declared,
-  control,
   onSelectNode,
 }: {
   edge: SuggestedEdge;
   peer: Node;
   /** Outgoing (this node imports the peer) vs incoming. */
   out: boolean;
-  declared?: boolean;
-  control?: React.ReactNode;
   onSelectNode: (id: string) => void;
 }) {
   return (
     <li className={`group/erow ${CONN_ROW} py-[1.5px]`}>
-      <span
-        className={`relative top-px flex select-none justify-center ${declared ? "text-emerald-700 dark:text-emerald-400" : "text-[var(--text-ghost)]"}`}
-      >
-        {declared ? (
-          <Plus className="h-3.5 w-3.5" />
-        ) : out ? (
+      <span className="relative top-px flex select-none justify-center text-[var(--text-ghost)]">
+        {out ? (
           <ArrowRight className="h-3.5 w-3.5" />
         ) : (
           <ArrowLeft className="h-3.5 w-3.5" />
@@ -553,7 +513,7 @@ function SuggestedRow({
         <button
           type="button"
           onClick={() => onSelectNode(peer.id)}
-          className={`shrink truncate text-left hover:underline ${declared ? "text-emerald-700 dark:text-emerald-400" : "text-[var(--text-muted)]"}`}
+          className="shrink truncate text-left text-[var(--text-muted)] hover:underline"
         >
           {peer.name || "Untitled"}
         </button>
@@ -564,7 +524,6 @@ function SuggestedRow({
           &nbsp;(×{edge.count})
         </span>
       </div>
-      {control && <span className={CTL}>{control}</span>}
     </li>
   );
 }
@@ -685,9 +644,6 @@ export function ConnectionsSection({
   committed,
   node,
   report,
-  editor,
-  editing,
-  onToggle,
   onSelectNode,
 }: {
   model: ScryModel;
@@ -695,9 +651,6 @@ export function ConnectionsSection({
   committed: ScryModel | null;
   node: Node;
   report: ModelHealthReport | null;
-  editor: Editor | undefined;
-  editing: boolean;
-  onToggle: () => void;
   onSelectNode: (id: string) => void;
 }) {
   // Code-side anchors live in the committed model; the plan overlays only the
@@ -744,8 +697,6 @@ export function ConnectionsSection({
     outgoing.filter((r) => r.kind !== "deleted").length +
     incoming.filter((r) => r.kind !== "deleted").length;
 
-  // Read-mode rows carry no controls — editing is a proper section mode (Edit
-  // → form → Cancel/Done in the header), not per-row affordances.
   const readRow = (r: ConnDiffRow) => (
     <ReadConnRow
       key={r.link.id}
@@ -759,7 +710,7 @@ export function ConnectionsSection({
       onSelectNode={onSelectNode}
     />
   );
-  const suggestedRow = (e: SuggestedEdge, control?: React.ReactNode, declaredNow?: boolean) => {
+  const suggestedRow = (e: SuggestedEdge) => {
     const out = e.src === node.id;
     const peer = byId(out ? e.dst : e.src);
     return peer ? (
@@ -768,213 +719,21 @@ export function ConnectionsSection({
         edge={e}
         peer={peer}
         out={out}
-        declared={declaredNow}
-        control={control}
         onSelectNode={onSelectNode}
       />
     ) : null;
   };
 
   return (
-    <PageSection
-      title="Connections"
-      count={declared}
-      editable={!!editor}
-      editing={editing}
-      onToggleEdit={onToggle}
-    >
-      {editing && editor ? (
-        <ConnectionsEditor
-          node={node}
-          outgoing={outgoing}
-          incoming={incoming}
-          suggested={suggested}
-          byId={byId}
-          evidence={evidence}
-          hasAudit={hasAudit}
-          editor={editor}
-          onSelectNode={onSelectNode}
-          onClose={onToggle}
-        />
-      ) : (
-        // Same wrapper as the editor body so read↔edit never reflows.
-        <div className="flex flex-col">
-          {outgoing.length > 0 && <ConnGroup title="Uses">{outgoing.map(readRow)}</ConnGroup>}
-          {incoming.length > 0 && <ConnGroup title="Used by">{incoming.map(readRow)}</ConnGroup>}
-          {suggested.length > 0 && (
-            <ConnGroup title="Suggested by the code">
-              {suggested.map((e) => suggestedRow(e))}
-            </ConnGroup>
-          )}
-        </div>
-      )}
+    <PageSection title="Connections" count={declared}>
+      <div className="flex flex-col">
+        {outgoing.length > 0 && <ConnGroup title="Uses">{outgoing.map(readRow)}</ConnGroup>}
+        {incoming.length > 0 && <ConnGroup title="Used by">{incoming.map(readRow)}</ConnGroup>}
+        {suggested.length > 0 && (
+          <ConnGroup title="Suggested by the code">{suggested.map(suggestedRow)}</ConnGroup>
+        )}
+      </div>
     </PageSection>
-  );
-}
-
-/**
- * The connections form inside the shared {@link SectionEditor} shell — Cancel /
- * Done ride in the section header. Deletions and declarations accumulate in a
- * draft (a removed link reads struck, a declared candidate reads as `+`) and
- * only hit the model on Done.
- */
-function ConnectionsEditor({
-  node,
-  outgoing,
-  incoming,
-  suggested,
-  byId,
-  evidence,
-  hasAudit,
-  editor,
-  onSelectNode,
-  onClose,
-}: {
-  node: Node;
-  outgoing: ConnDiffRow[];
-  incoming: ConnDiffRow[];
-  suggested: SuggestedEdge[];
-  byId: (id: string) => Node | undefined;
-  evidence: Record<string, number>;
-  hasAudit: boolean;
-  editor: Editor;
-  onSelectNode: (id: string) => void;
-  onClose: () => void;
-}) {
-  const edgeKey = (e: SuggestedEdge) => `${e.src}:${e.dst}`;
-  return (
-    <SectionEditor<{
-      remove: string[];
-      declare: string[];
-      /** Per-link label/method edits, keyed by link id; only changed links appear. */
-      patch: Record<string, { label: string; method: string }>;
-    }>
-      initial={{ remove: [], declare: [], patch: {} }}
-      onClose={onClose}
-      onCommit={({ remove, declare, patch }) => {
-        for (const id of remove) editor.deleteLink(id);
-        // A link staged for deletion ignores any label edits — deletion wins.
-        for (const [id, p] of Object.entries(patch)) {
-          if (remove.includes(id)) continue;
-          editor.updateLink(id, { label: p.label.trim(), method: p.method.trim() });
-        }
-        for (const key of declare) {
-          const [src, dst] = key.split(":");
-          editor.addLink(src, dst);
-        }
-      }}
-    >
-      {(draft, setDraft) => {
-        const isRemoved = (id: string) => draft.remove.includes(id);
-        const toggleRemove = (id: string) =>
-          setDraft((d) => ({
-            ...d,
-            remove: d.remove.includes(id) ? d.remove.filter((x) => x !== id) : [...d.remove, id],
-          }));
-        // Record an edited field, seeding from the link's current values.
-        const setField = (link: Link, field: "label" | "method", val: string) =>
-          setDraft((d) => {
-            const cur = d.patch[link.id] ?? {
-              label: link.label ?? "",
-              method: link.method ?? "",
-            };
-            return { ...d, patch: { ...d.patch, [link.id]: { ...cur, [field]: val } } };
-          });
-        const isDeclared = (key: string) => draft.declare.includes(key);
-        const toggleDeclare = (key: string) =>
-          setDraft((d) => ({
-            ...d,
-            declare: d.declare.includes(key)
-              ? d.declare.filter((x) => x !== key)
-              : [...d.declare, key],
-          }));
-
-        const editRow = (r: ConnDiffRow) =>
-          r.kind === "deleted" ? (
-            // Already dropped from the plan — not re-deletable here.
-            <ConnRow
-              key={r.link.id}
-              node={node}
-              row={r}
-              evidence={evidence}
-              hasAudit={hasAudit}
-              onSelectNode={onSelectNode}
-            />
-          ) : (
-            <ConnRow
-              key={r.link.id}
-              node={node}
-              row={r}
-              evidence={evidence}
-              hasAudit={hasAudit}
-              removed={isRemoved(r.link.id)}
-              edit={{
-                onLabel: (t) => setField(r.link, "label", t),
-                onMethod: (t) => setField(r.link, "method", t),
-              }}
-              control={
-                <button
-                  type="button"
-                  onClick={() => toggleRemove(r.link.id)}
-                  className={isRemoved(r.link.id) ? BTN_GO : BTN_DANGER}
-                >
-                  {isRemoved(r.link.id) ? (
-                    "Restore"
-                  ) : (
-                    <>
-                      <Trash2 className="h-3 w-3" /> Delete
-                    </>
-                  )}
-                </button>
-              }
-              onSelectNode={onSelectNode}
-            />
-          );
-
-        return (
-          <div className="flex flex-col">
-            {outgoing.length > 0 && <ConnGroup title="Uses">{outgoing.map(editRow)}</ConnGroup>}
-            {incoming.length > 0 && <ConnGroup title="Used by">{incoming.map(editRow)}</ConnGroup>}
-            {suggested.length > 0 && (
-              <ConnGroup title="Suggested by the code">
-                {suggested.map((e) => {
-                  const out = e.src === node.id;
-                  const peer = byId(out ? e.dst : e.src);
-                  if (!peer) return null;
-                  const key = edgeKey(e);
-                  const declared = isDeclared(key);
-                  return (
-                    <SuggestedRow
-                      key={key}
-                      edge={e}
-                      peer={peer}
-                      out={out}
-                      declared={declared}
-                      control={
-                        <button
-                          type="button"
-                          onClick={() => toggleDeclare(key)}
-                          className={declared ? BTN : BTN_GO}
-                        >
-                          {declared ? (
-                            "Undo"
-                          ) : (
-                            <>
-                              <Plus className="h-3 w-3" /> Declare
-                            </>
-                          )}
-                        </button>
-                      }
-                      onSelectNode={onSelectNode}
-                    />
-                  );
-                })}
-              </ConnGroup>
-            )}
-          </div>
-        );
-      }}
-    </SectionEditor>
   );
 }
 
@@ -984,7 +743,7 @@ function ConnectionsEditor({
  * node's subtree (a symbol's callers, a component reaching into another
  * container), with the peer rolled up to its architectural node and counts
  * summed. Same-parent siblings are deliberately absent — those are candidate
- * same-level links, surfaced as "Suggested by the code" in the editable section.
+ * same-level links, surfaced as "Suggested by the code" in the section above.
  * Nothing here is editable: it's a fact about the code, not an authored claim.
  */
 export function ImpliedConnectionsSection({

@@ -5,13 +5,12 @@
  * in sight does not.
  */
 import { describe, expect, it } from "vitest";
-import { addNode, mintId, nextNodeId, nextResponsibilityId } from "../src/entities/model/viewmodel";
+import { mintId, nextResponsibilityId } from "../src/entities/model/viewmodel";
 import type { ScryModel } from "../src/entities/model/viewmodel";
 
 const model = (ids: string[]): ScryModel =>
   ({
     nodes: ids.map((id) => ({ id, kind: "component", name: id, responsibilities: [] })),
-    groups: [],
     links: [],
   }) as unknown as ScryModel;
 
@@ -30,27 +29,11 @@ describe("mintId", () => {
     }
   });
 
-  it("When a node is added, clears both the plan and the committed layer", () => {
+  it("When a claim is added, clears both the plan and the committed layer", () => {
     const plan = model(["node-1"]);
     const committed = model(["node-1", "node-2"]);
-    const id = nextNodeId(plan, committed);
-    expect(id).not.toBe("node-2");
-    expect(id).toMatch(/^node-[0-9a-z]{6}$/);
     const rid = nextResponsibilityId([{ id: "resp-1", statement: "" }], plan, committed);
     expect(rid).toMatch(/^resp-[0-9a-z]{6}$/);
     expect(rid).not.toBe("resp-1");
-  });
-
-  it("addNode mints a random id unknown to both layers", () => {
-    const plan = model(["node-1"]);
-    const committed = model(["node-1", "node-2"]);
-    const { model: next, id } = addNode(
-      plan,
-      { kind: "component", name: "Fresh", parentId: "node-1" },
-      committed,
-    );
-    expect(id).toMatch(/^node-[0-9a-z]{6}$/);
-    expect(next.nodes.some((n) => n.id === id)).toBe(true);
-    expect(id).not.toBe("node-2");
   });
 });

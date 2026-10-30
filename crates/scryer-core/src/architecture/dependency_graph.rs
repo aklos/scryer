@@ -385,8 +385,6 @@ mod tests {
             id: id.into(),
             kind,
             name: id.into(),
-            vagrant: None,
-            stale: None,
             parent_id: parent.map(Into::into),
             external: None,
             technology: None,
@@ -394,9 +392,7 @@ mod tests {
             responsibilities: Vec::new(),
             properties: Vec::new(),
             icon: None,
-            notes: None,
             position: None,
-            directives: Vec::new(),
         }
     }
 
@@ -585,11 +581,7 @@ mod tests {
             concern: None,
             id: "r1".into(),
             statement: "does".into(),
-            vagrant: None,
-            stale: None,
-            stale_proposal: None,
-            directives: Vec::new(),
-            last_touched_at: None,
+            decisions: None,
         });
         m.nodes.push(sa);
         m.nodes.push(node("symb", Kind::Symbol, Some("sys")));

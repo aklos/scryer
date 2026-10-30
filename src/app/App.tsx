@@ -230,7 +230,7 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
   modelRef.current = model;
 
   // The set of ids that must be open for `nodeId` to be visible in the tree:
-  // its parent chain, and any group folder wrapping a node along that chain.
+  // its parent chain.
   const ancestorsToExpand = useCallback((nodeId: string): string[] => {
     const m = modelRef.current;
     const out: string[] = [];
@@ -238,8 +238,6 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
     let cur = m.nodes.find((n) => n.id === nodeId);
     while (cur && !seen.has(cur.id)) {
       seen.add(cur.id);
-      const g = m.groups.find((gr) => gr.memberIds.includes(cur!.id));
-      if (g) out.push(g.id);
       if (!cur.parentId) break;
       out.push(cur.parentId);
       cur = m.nodes.find((n) => n.id === cur!.parentId);
@@ -257,21 +255,6 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
       // own double-click; this only reframes on selection.
       const node = modelRef.current.nodes.find((n) => n.id === id);
       setDiagramFocus(node?.parentId ?? null);
-    },
-    [ancestorsToExpand],
-  );
-
-  const selectGroup = useCallback(
-    (id: string) => {
-      setSelected({ kind: "group", id });
-      const m = modelRef.current;
-      const g = m.groups.find((gr) => gr.id === id);
-      const container =
-        g?.parentNodeId ??
-        m.nodes.find((n) => n.id === (g?.memberIds[0] ?? ""))?.parentId ??
-        null;
-      const anc = container ? [container, ...ancestorsToExpand(container)] : [];
-      setExpanded((prev) => new Set([...prev, ...anc]));
     },
     [ancestorsToExpand],
   );
@@ -402,13 +385,6 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
     },
     [selectNode, dismissTree],
   );
-  const selectGroupFromTree = useCallback(
-    (id: string) => {
-      selectGroup(id);
-      dismissTree();
-    },
-    [selectGroup, dismissTree],
-  );
 
   // Structural violations per subtree — the tree marks every row that leads
   // down to one.
@@ -453,7 +429,6 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
             selected={selected}
             expanded={expanded}
             onSelectNode={selectNodeFromTree}
-            onSelectGroup={selectGroupFromTree}
             onToggle={toggle}
             editor={pageEditor}
             // Where the followed session is editing now.
@@ -501,7 +476,6 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
             projectPath={projectPath}
             editor={pageEditor}
             onSelectNode={selectNode}
-            onSelectGroup={selectGroup}
             onFixture={projectPath && !writing ? onFixture : undefined}
             preview={preview}
           />
@@ -544,7 +518,6 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
         <SearchPalette
           model={model}
           onSelectNode={selectNode}
-          onSelectGroup={selectGroup}
           onClose={() => setSearchOpen(false)}
         />
       )}

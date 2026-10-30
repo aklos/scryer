@@ -86,11 +86,11 @@ export interface ThemeConfig {
   zinc: PaletteName;
   /** Primary accent — buttons, selection, links (default: blue) */
   blue: PaletteName;
-  /** Added mark, adopt action, success toast (default: emerald) */
+  /** Added mark, success toast (default: emerald) */
   emerald: PaletteName;
-  /** Modified/relocate marks, code-focus source highlight (default: amber) */
+  /** Modified marks, code-focus source highlight (default: amber) */
   amber: PaletteName;
-  /** Deleted mark, danger, reject, error (default: red) */
+  /** Deleted mark, danger, error (default: red) */
   red: PaletteName;
   /** Agent activity, syntax keywords (default: violet) */
   violet: PaletteName;
@@ -121,10 +121,10 @@ export interface ThemeConfig {
 export const THEME_ROLES: { key: PaletteRole; label: string; description: string; palettes: readonly string[] }[] = [
   { key: "zinc",    label: "Neutral",     description: "Chrome, backgrounds, borders, text",         palettes: GRAY_PALETTES },
   { key: "blue",    label: "Accent",      description: "Primary accent — buttons, selection, links",  palettes: CHROMATIC_PALETTES },
-  { key: "amber",   label: "Modified",    description: "Modified/relocated marks, code-focus source highlight", palettes: CHROMATIC_PALETTES },
-  { key: "emerald", label: "Added",       description: "Added mark, adopt action, success toasts",    palettes: CHROMATIC_PALETTES },
-  { key: "orange",  label: "Drift",       description: "Drift flags — vagrant + stale — and empty symbols", palettes: CHROMATIC_PALETTES },
-  { key: "red",     label: "Danger",      description: "Deleted mark, reject/destructive actions, errors", palettes: CHROMATIC_PALETTES },
+  { key: "amber",   label: "Modified",    description: "Modified marks, code-focus source highlight", palettes: CHROMATIC_PALETTES },
+  { key: "emerald", label: "Added",       description: "Added mark, success toasts",    palettes: CHROMATIC_PALETTES },
+  { key: "orange",  label: "Empty",       description: "Empty symbols",                              palettes: CHROMATIC_PALETTES },
+  { key: "red",     label: "Danger",      description: "Deleted mark, destructive actions, errors", palettes: CHROMATIC_PALETTES },
   { key: "violet",  label: "Agent",       description: "Agent activity, syntax keywords",            palettes: CHROMATIC_PALETTES },
   { key: "indigo",  label: "Accent",      description: "Secondary accent, focus rings",              palettes: CHROMATIC_PALETTES },
   { key: "cyan",    label: "Syntax",      description: "Syntax type names",                          palettes: CHROMATIC_PALETTES },

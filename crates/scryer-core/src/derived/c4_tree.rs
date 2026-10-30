@@ -38,6 +38,10 @@ pub struct DerivedClaim {
     /// Trailing `[tag]`s, in order of appearance.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub concerns: Vec<String>,
+    /// Why the behaviour is this one, as markdown: the test's doc after its
+    /// claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decisions: Option<String>,
     /// The name a JUnit report gives this test.
     pub junit_name: String,
     /// A todo/skip stub: the claim is written but not yet implemented.

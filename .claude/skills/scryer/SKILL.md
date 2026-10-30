@@ -102,6 +102,8 @@ Make the todos pass and turn each into a real test: drop `#[ignore]` / `.todo` /
 
 No separate ADR files; the doc comment travels with the code it explains. A decision spanning several modules goes on the lowest node containing them all; the ones below inherit it. The system's description and decisions are the root `ARCHITECTURE.md`, first paragraph and the rest.
 
+**A decision about one behaviour goes on its test.** A test's doc splits the same way: the first paragraph is the claim, everything after it is why the behaviour is this one (`If the token has expired, then rejects with 401.`, then `Not refreshed: a refresh would hide a revoked session.`). Where the claim is a string or attribute (`it("…")`, `@DisplayName`, TestDox), the comment right above the test is its decisions; in .NET, its `<remarks>`. Keep the claim itself one sentence.
+
 ## 4. Verify
 
 1. `get_test_radius` (no `files` = this session's edits) names the tests your change reaches and, when configured, the exact command. Run those, never the whole suite.

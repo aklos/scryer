@@ -1,7 +1,7 @@
 /**
  * Global search palette (Ctrl/Cmd+K). Unlike the left tree's name-only filter,
  * this searches every node's content — name, technology, description, claims
- * and their directives, schema properties — plus group prose and link labels,
+ * and their decisions, schema properties — plus link labels,
  * and surfaces WHERE each match landed with a highlighted snippet. Name matches
  * rank first, then content by field. Keyboard: arrows to move, Enter to open,
  * Esc to close.
@@ -9,8 +9,8 @@
 
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { createPortal } from "react-dom";
-import { FolderOpen, Link2, Search, type LucideProps } from "lucide-react";
-import type { ScryModel, Node, Group } from "../../entities/model/viewmodel";
+import { Link2, Search, type LucideProps } from "lucide-react";
+import type { ScryModel, Node } from "../../entities/model/viewmodel";
 import { kindIcon, typeTag } from "../../entities/model/kindIcon";
 import { stripMarkup } from "../../entities/model/markup";
 import { lookupIcon } from "./IconPicker";
@@ -19,7 +19,7 @@ const MAX_RESULTS = 50;
 
 interface Hit {
   key: string;
-  kind: "node" | "group" | "link";
+  kind: "node" | "link";
   /** Target to open on select — node id (links open their source node). */
   id: string;
   name: string;
@@ -27,7 +27,6 @@ interface Hit {
   path: string[];
   Icon: ComponentType<LucideProps>;
   typeLabel: string;
-  italic: boolean;
   /** Where the match landed; null when it matched the name itself. */
   field: string | null;
   /** The field text the match came from — the snippet source. */
@@ -36,7 +35,7 @@ interface Hit {
   rank: number;
 }
 
-/** One searchable field of a node/group, in ascending rank (best first). */
+/** One searchable field of a node, in ascending rank (best first). */
 interface Field {
   label: string | null;
   rank: number;
@@ -49,24 +48,12 @@ function nodeFields(n: Node): Field[] {
   if (n.description) f.push({ label: "Description", rank: 2, text: n.description });
   for (const r of n.responsibilities ?? []) {
     if (r.statement) f.push({ label: "Responsibility", rank: 3, text: stripMarkup(r.statement) });
-    for (const d of r.directives ?? [])
-      if (d) f.push({ label: "Directive", rank: 4, text: d });
+    if (r.decisions) f.push({ label: "Decisions", rank: 4, text: r.decisions });
   }
   for (const p of n.properties ?? []) {
     if (p.label) f.push({ label: "Property", rank: 5, text: p.label });
     if (p.description)
       f.push({ label: "Property", rank: 5, text: `${p.label}: ${p.description}` });
-  }
-  return f;
-}
-
-function groupFields(g: Group): Field[] {
-  const f: Field[] = [{ label: null, rank: 0, text: g.name || "Group" }];
-  if (g.description) f.push({ label: "Description", rank: 2, text: g.description });
-  for (const r of g.responsibilities ?? []) {
-    if (r.statement) f.push({ label: "Responsibility", rank: 3, text: stripMarkup(r.statement) });
-    for (const d of r.directives ?? [])
-      if (d) f.push({ label: "Directive", rank: 4, text: d });
   }
   return f;
 }
@@ -123,12 +110,10 @@ function Snippet({ text, q }: { text: string; q: string }) {
 export function SearchPalette({
   model,
   onSelectNode,
-  onSelectGroup,
   onClose,
 }: {
   model: ScryModel;
   onSelectNode: (id: string) => void;
-  onSelectGroup: (id: string) => void;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
@@ -179,26 +164,6 @@ export function SearchPalette({
         path: chain(n.parentId),
         Icon: lookupIcon(n.icon) ?? kindIcon(n),
         typeLabel: typeTag(n).type,
-        italic: false,
-        field: match.label,
-        matchText: match.text,
-        rank: match.rank,
-      });
-    }
-    for (const g of model.groups) {
-      const match = q ? bestMatch(groupFields(g), q) : { label: null, rank: 0, text: g.name || "Group" };
-      if (!match) continue;
-      const container =
-        g.parentNodeId ?? byId.get(g.memberIds[0] ?? "")?.parentId ?? undefined;
-      out.push({
-        key: `g:${g.id}`,
-        kind: "group",
-        id: g.id,
-        name: g.name || "Group",
-        path: container ? chain(container) : [],
-        Icon: FolderOpen,
-        typeLabel: "Group",
-        italic: true,
         field: match.label,
         matchText: match.text,
         rank: match.rank,
@@ -216,7 +181,6 @@ export function SearchPalette({
           path: [`${nameOf(l.src)} → ${nameOf(l.dst)}`],
           Icon: Link2,
           typeLabel: "Link",
-          italic: false,
           // The title IS the label — the type tag + endpoints below say the
           // rest, so no duplicate snippet.
           field: null,
@@ -241,8 +205,7 @@ export function SearchPalette({
   }, [active]);
 
   const pick = (hit: Hit) => {
-    if (hit.kind === "group") onSelectGroup(hit.id);
-    else onSelectNode(hit.id);
+    onSelectNode(hit.id);
     onClose();
   };
 
@@ -300,7 +263,7 @@ export function SearchPalette({
               >
                 <span className="flex items-center gap-2 text-[var(--text-secondary)]">
                   <hit.Icon className="h-3.5 w-3.5 shrink-0 text-[var(--text-muted)]" />
-                  <span className={`truncate text-sm ${hit.italic ? "italic" : ""}`}>
+                  <span className="truncate text-sm">
                     <Highlighted text={hit.name} q={q} />
                   </span>
                   <span className="ml-auto shrink-0 text-xs text-[var(--text-muted)]">
