@@ -1,0 +1,16 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.aklos/scryer",
+  "title": "Scryer",
+  "description": "Spec-driven development where the spec is your tests.",
+  "repository": { "url": "https://github.com/aklos/scryer", "source": "github" },
+  "version": "0.4.21",
+  "packages": [
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/aklos/scryer/releases/download/v0.4.21/scryer-mcp.mcpb",
+      "fileSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "transport": { "type": "stdio" }
+    }
+  ]
+}

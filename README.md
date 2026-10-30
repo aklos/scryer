@@ -133,7 +133,7 @@ A trailing `[tag]` names a concern. A todo test (`it.todo`, `#[ignore]`, `@pytes
 
 ## MCP server
 
-The MCP server lets AI agents read the tree derived from your code and keep the test loop; it writes no model. It ships bundled with the desktop app.
+The MCP server lets AI agents read the tree derived from your code and keep the test loop; it writes no model. It ships bundled with the desktop app, and on its own for agents without the app: each [release](https://github.com/aklos/scryer/releases) carries a `scryer-mcp-<version>-<target>` archive per platform (static on Linux), and `scryer-mcp.mcpb`, the bundle the MCP Registry lists. Put `scryer-mcp` on your PATH and run `scryer-mcp setup on` in your project.
 
 ### Setup
 

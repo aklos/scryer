@@ -1,8 +1,9 @@
 name: Build
 
 # Builds the desktop app for every platform and uploads the bundles to a
-# draft GitHub release for `tag`. Normally invoked by release.yml, which
-# creates the tag first; a tag pushed by hand triggers it directly.
+# draft GitHub release for `tag`, with the MCP server and CLI on their own
+# beside them. Normally invoked by release.yml, which creates the tag first;
+# a tag pushed by hand triggers it directly.
 
 on:
   push:
@@ -89,3 +90,118 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.target }}
+
+  # scryer-mcp on its own, for agents without the app: one archive per target,
+  # same version as the app it ships beside. Linux builds are static (musl),
+  # so one archive runs on any distribution.
+  cli:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-musl
+          - platform: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-musl
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # The tree-sitter grammars are C; compile them against musl too, not
+      # the runner's glibc headers.
+      - name: Install musl
+        if: contains(matrix.target, 'musl')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          target='${{ matrix.target }}'
+          echo "CC_${target//-/_}=musl-gcc" >> "$GITHUB_ENV"
+
+      - name: Build scryer-mcp
+        run: cargo build --release -p scryer-mcp --target ${{ matrix.target }}
+
+      - name: Package
+        shell: bash
+        run: |
+          tag='${{ inputs.tag || github.ref_name }}'
+          name="scryer-mcp-${tag#v}-${{ matrix.target }}"
+          release="target/${{ matrix.target }}/release"
+          mkdir -p dist
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            cp LICENSE "$release/"
+            (cd "$release" && 7z a "$GITHUB_WORKSPACE/dist/$name.zip" scryer-mcp.exe LICENSE)
+          else
+            cp LICENSE "$release/"
+            tar -czf "dist/$name.tar.gz" -C "$release" scryer-mcp LICENSE
+          fi
+          cd dist
+          for f in *; do
+            if command -v sha256sum >/dev/null; then sha256sum "$f"; else shasum -a 256 "$f"; fi > "$f.sha256"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.target }}
+          path: dist/*
+
+  # After the app jobs, so the draft release they create exists. Also packs
+  # the MCP bundle the registry lists: one .mcpb for every OS, since a bundle
+  # picks its command by OS alone — macOS gets one universal binary, Linux a
+  # launcher that picks the CPU. On macOS for lipo.
+  publish-cli:
+    needs: [build, cli]
+    if: ${{ !cancelled() && needs.cli.result == 'success' }}
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          path: dist
+          merge-multiple: true
+
+      - name: Pack the MCP bundle
+        run: |
+          set -euo pipefail
+          tag='${{ inputs.tag || github.ref_name }}'
+          version="${tag#v}"
+          unpack() { mkdir -p "x/$1" && tar -xzf "dist/scryer-mcp-$version-$1.tar.gz" -C "x/$1"; }
+          for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl aarch64-apple-darwin x86_64-apple-darwin; do unpack "$t"; done
+          mkdir -p x/x86_64-pc-windows-msvc && unzip -q "dist/scryer-mcp-$version-x86_64-pc-windows-msvc.zip" -d x/x86_64-pc-windows-msvc
+
+          b=bundle/server
+          mkdir -p "$b/linux" "$b/darwin" "$b/win32"
+          cp x/x86_64-unknown-linux-musl/scryer-mcp "$b/linux/scryer-mcp-x86_64"
+          cp x/aarch64-unknown-linux-musl/scryer-mcp "$b/linux/scryer-mcp-aarch64"
+          cp crates/scryer-mcp/mcpb/scryer-mcp-linux "$b/linux/scryer-mcp"
+          lipo -create -output "$b/darwin/scryer-mcp" x/aarch64-apple-darwin/scryer-mcp x/x86_64-apple-darwin/scryer-mcp
+          cp x/x86_64-pc-windows-msvc/scryer-mcp.exe "$b/win32/"
+          chmod +x "$b"/linux/* "$b/darwin/scryer-mcp"
+          cp LICENSE bundle/
+          jq --arg v "$version" '.version = $v' crates/scryer-mcp/mcpb/manifest.json > bundle/manifest.json
+
+          (cd bundle && zip -qr -X "$GITHUB_WORKSPACE/dist/scryer-mcp.mcpb" .)
+          (cd dist && shasum -a 256 scryer-mcp.mcpb > scryer-mcp.mcpb.sha256)
+
+      - name: Upload to the draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload '${{ inputs.tag || github.ref_name }}' dist/* --clobber --repo '${{ github.repository }}'

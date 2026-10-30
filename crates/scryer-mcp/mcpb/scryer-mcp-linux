@@ -1,0 +1,7 @@
+#!/bin/sh
+# An MCP bundle picks a command by OS only; pick the CPU here.
+dir=$(dirname "$0")
+case "$(uname -m)" in
+  aarch64 | arm64) exec "$dir/scryer-mcp-aarch64" "$@" ;;
+  *) exec "$dir/scryer-mcp-x86_64" "$@" ;;
+esac

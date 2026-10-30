@@ -33,6 +33,10 @@ echo "  updated package.json"
 sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" "$ROOT/src-tauri/tauri.conf.json"
 echo "  updated tauri.conf.json"
 
+# server.json (MCP registry); its fileSha256 is filled when the release is published
+sed -i -e "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" -e "s|/download/v[^/]*/|/download/v$VERSION/|" "$ROOT/server.json"
+echo "  updated server.json"
+
 # Update only the workspace members' versions in Cargo.lock. Do NOT use
 # `cargo generate-lockfile` here: it re-resolves the whole tree and silently
 # bumps third-party deps (e.g. tauri-runtime), which has broken the build.

@@ -1,0 +1,25 @@
+{
+  "manifest_version": "0.3",
+  "name": "scryer-mcp",
+  "display_name": "Scryer",
+  "version": "0.0.0",
+  "description": "Spec-driven development where the spec is your tests: the architecture derived from the code, claims from behaviour tests.",
+  "long_description": "Agents orient on a task, write each behaviour as a todo test before building, run only the tests their change reaches, and probe what they doubt. Every tool takes an absolute `project` path. For hooks and the skill in Claude Code, Codex or Copilot CLI, run `scryer-mcp setup on` in the project.",
+  "author": { "name": "Alexander Klos" },
+  "repository": { "type": "git", "url": "https://github.com/aklos/scryer" },
+  "homepage": "https://github.com/aklos/scryer",
+  "license": "FSL-1.1-MIT",
+  "server": {
+    "type": "binary",
+    "entry_point": "server/linux/scryer-mcp",
+    "mcp_config": {
+      "command": "${__dirname}/server/linux/scryer-mcp",
+      "args": [],
+      "platform_overrides": {
+        "darwin": { "command": "${__dirname}/server/darwin/scryer-mcp" },
+        "win32": { "command": "${__dirname}/server/win32/scryer-mcp.exe" }
+      }
+    }
+  },
+  "compatibility": { "platforms": ["darwin", "win32", "linux"] }
+}
