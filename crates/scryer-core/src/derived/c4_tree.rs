@@ -23,7 +23,7 @@ pub enum ClaimLevel {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DerivedClaim {
-    /// The responsibility id the claim carries in the tree's models.
+    /// The id the claim carries in the tree's models.
     pub id: String,
     /// The node the claim nests under.
     pub node_id: String,

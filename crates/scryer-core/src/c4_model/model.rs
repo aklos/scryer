@@ -1,7 +1,7 @@
 //! The C4 model's shape: nodes (person, system, container, component, symbol),
 //! the links between them, each node's claims and data-shape
 //! properties, the maps that tie claims and nodes to code (`source_map`,
-//! `test_map`, `boundaries`), and the concern registry. The derived tree is a
+//! `test_map`, `boundaries`). The derived tree is a
 //! [`ScryModel`]; the one fact read straight off one, an empty symbol, lives
 //! beside it.
 
@@ -21,20 +21,20 @@ pub enum Kind {
     Component,
     /// A single addressable code definition — function, method, handler, hook,
     /// React component, class, struct, interface, or type. One leaf = one
-    /// symbol. A symbol may discharge responsibilities, declare a data shape
+    /// symbol. A symbol may discharge claims, declare a data shape
     /// (via `properties`), or both. A pure data type is a symbol that carries
     /// only properties.
     #[serde(alias = "schema")]
     Symbol,
 }
 
-// --- Responsibility ---
+// --- Claim ---
 
-/// A pure business-responsibility statement. The `statement` field is the spec.
+/// A claim: one behaviour its test states. The `statement` field is the spec.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-#[schemars(description = "A responsibility: a verb-led business statement with optional concern tag.")]
-pub struct Responsibility {
+#[schemars(description = "A claim: a verb-led business statement with optional concern tags.")]
+pub struct Claim {
     pub id: String,
     /// Verb-led business statement of accountability. No mechanism words.
     /// EARS-shaped (condition first, response last) and may carry display
@@ -42,15 +42,13 @@ pub struct Responsibility {
     /// renders and strips for comparison (statement-ears).
     #[schemars(description = "Verb-led EARS statement, **bold** on the keyword and response verb.")]
     pub statement: String,
-    /// The cross-cutting concern this responsibility serves — at most ONE
-    /// kebab-case slug (e.g. "auth", "idempotency"), referencing an entry in
-    /// the model's concern registry ([`ScryModel::concerns`]; entries are
-    /// minted automatically on first use). Untagged means core domain flow —
-    /// that absence is signal, not an omission. Metadata beside the statement,
-    /// not part of it: no conformance role. See the concerns rule.
-    #[schemars(description = "ONE kebab-case concern slug; omit for core domain flow.")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub concern: Option<String>,
+    /// The cross-cutting concerns this claim speaks for: its test's trailing
+    /// `[tags]` as kebab-case slugs, in order (see [`crate::concerns`]).
+    /// Untagged means core domain flow — that absence is signal, not an
+    /// omission. Metadata beside the statement, not part of it.
+    #[schemars(description = "Kebab-case concern slugs; empty for core domain flow.")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub concerns: Vec<String>,
     /// Why the behaviour is this one (what was rejected, what must stay
     /// true), as markdown: its test's doc after the claim. Derived, like a
     /// node's `decisions`.
@@ -87,11 +85,11 @@ pub struct Source {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceLocation {
-    /// File path (relative to the project) the responsibility maps into.
+    /// File path (relative to the project) the claim maps into.
     #[schemars(description = "Project-relative file path.")]
     pub pattern: String,
     /// Durable anchor: the identifier (function/handler/type/component name)
-    /// that discharges the responsibility. The exact line range is resolved
+    /// that discharges the claim. The exact line range is resolved
     /// from this on demand, so it survives edits that shift line numbers.
     #[schemars(description = "Enclosing definition name; the durable anchor.")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -128,8 +126,10 @@ pub struct Node {
     pub technology: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub responsibilities: Vec<Responsibility>,
+    /// The claims its tests state about it. Read from `responsibilities` too,
+    /// the name an old authored `.scry` model used, so `migrate` still loads one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty", alias = "responsibilities")]
+    pub claims: Vec<Claim>,
     /// Field declarations, when this symbol defines a data shape (struct,
     /// class, interface, type). Empty for behavior-only symbols.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -154,7 +154,7 @@ pub struct Node {
     /// The layer this component plays in its governing style, from the style's layer list. Components only; symbols inherit it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layer: Option<String>,
-    /// The claims (responsibility ids) whose tests exercise this symbol: the
+    /// The ids of the claims whose tests exercise this symbol: the
     /// test's body names it, and it is defined in the test's file or in a file
     /// the test imports. Derived; the claims stay on their component.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -185,14 +185,14 @@ pub struct Node {
 }
 
 /// The `empty` flag — a SYMBOL that carries no semantic content of its own: no
-/// responsibilities, no properties, and not external. Derived, never stored. Mirrors `isNodeEmpty` in the frontend (`src/viewmodel.ts`)
+/// claims, no properties, and not external. Derived, never stored. Mirrors `isNodeEmpty` in the frontend (`src/viewmodel.ts`)
 /// — keep the two in lockstep. Scoped to symbols: structural nodes
 /// (system/container/component) carry their meaning through their children, so a
-/// parent without its own responsibilities is not "empty" in this sense.
+/// parent without its own claims is not "empty" in this sense.
 pub fn is_node_empty(node: &Node) -> bool {
     node.kind == Kind::Symbol
         && node.external != Some(true)
-        && node.responsibilities.is_empty()
+        && node.claims.is_empty()
         && node.properties.is_empty()
 }
 
@@ -243,13 +243,13 @@ pub struct ScryModel {
     pub version: String,
     pub nodes: Vec<Node>,
     pub links: Vec<Link>,
-    /// Maps **responsibility id** → line-precise source locations (where reality
-    /// discharges that responsibility — the conformance numerator), or **schema
+    /// Maps **claim id** → line-precise source locations (where reality
+    /// discharges that claim — the conformance numerator), or **schema
     /// node id** → that type's declaration location. Agent-produced and
     /// regenerable; never hand-authored.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub source_map: BTreeMap<String, Vec<SourceLocation>>,
-    /// Maps **responsibility id** → the locations of the tests attached to
+    /// Maps **claim id** → the locations of the tests attached to
     /// that claim. A separate dimension from `source_map` — where a claim is
     /// implemented vs. which tests are attached to it — and a claim may carry
     /// either, both, or neither. Attachment is the only fact recorded: scryer
@@ -263,12 +263,6 @@ pub struct ScryModel {
     /// within its parent's. Agent-produced and regenerable; never hand-authored.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub boundaries: BTreeMap<String, Vec<Source>>,
-    /// The concern registry — one entry per concern slug used by any
-    /// responsibility (see [`Responsibility::concern`]). Minted automatically
-    /// on write ([`crate::concerns::register_concerns`]), curated by the user
-    /// (description, icon, renames), never pruned automatically.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub concerns: Vec<ConcernDef>,
 }
 
 impl ScryModel {
@@ -280,7 +274,6 @@ impl ScryModel {
             source_map: BTreeMap::new(),
             test_map: BTreeMap::new(),
             boundaries: BTreeMap::new(),
-            concerns: Vec::new(),
         }
     }
 }
@@ -296,16 +289,16 @@ impl Default for ScryModel {
 /// Prefix distinguishing a `test_map` anchor from a `source_map` anchor in
 /// shared key spaces (the anchor-fingerprint baseline, anchor observations).
 /// Model maps themselves never carry it — `test_map` keys are bare
-/// responsibility ids; the prefix exists so one baseline can fingerprint both
+/// claim ids; the prefix exists so one baseline can fingerprint both
 /// dimensions without a second file.
 pub const TEST_KEY_PREFIX: &str = "test:";
 
-/// The baseline/observation key for a responsibility's attached-test anchor.
+/// The baseline/observation key for a claim's attached-test anchor.
 pub fn test_key(resp_id: &str) -> String {
     format!("{TEST_KEY_PREFIX}{resp_id}")
 }
 
-/// The responsibility id behind a test-namespaced key, or `None` for a
+/// The claim id behind a test-namespaced key, or `None` for a
 /// plain source-map key.
 pub fn test_resp_id(key: &str) -> Option<&str> {
     key.strip_prefix(TEST_KEY_PREFIX)
@@ -342,16 +335,16 @@ mod tests {
             "id": "n2",
             "kind": "symbol",
             "name": "Projects",
-            "responsibilities": [{ "id": "r1", "statement": "configures projects" }],
+            "claims": [{ "id": "r1", "statement": "configures projects" }],
             "properties": [{ "label": "odooMapping" }]
         }"#;
         let node: Node = serde_json::from_str(json).unwrap();
         assert_eq!(node.kind, Kind::Symbol);
-        assert_eq!(node.responsibilities.len(), 1);
+        assert_eq!(node.claims.len(), 1);
         assert_eq!(node.properties.len(), 1);
     }
 
-    /// A symbol with no responsibilities or properties — and not external — is
+    /// A symbol with no claims or properties — and not external — is
     /// flagged empty. Any one of those, or being a
     /// structural node, gives it content of its own.
     #[test]
@@ -361,7 +354,7 @@ mod tests {
 
         assert!(!is_node_empty(&node(
             r#"{ "id": "n1", "kind": "symbol", "name": "S",
-                 "responsibilities": [{ "id": "r1", "statement": "does X" }] }"#
+                 "claims": [{ "id": "r1", "statement": "does X" }] }"#
         )));
         assert!(!is_node_empty(&node(
             r#"{ "id": "n1", "kind": "symbol", "name": "S",
@@ -373,24 +366,5 @@ mod tests {
         // Structural nodes carry meaning through their children — never "empty".
         assert!(!is_node_empty(&node(r#"{ "id": "n1", "kind": "component", "name": "C" }"#)));
     }
-}
-
-/// One entry in the model's concern registry: the single place a concern is
-/// named and decorated. Responsibilities reference it by `slug`; renaming a
-/// concern means rewriting the slug here AND on every tagged responsibility
-/// (the registry entry is the concept, not per-responsibility text).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ConcernDef {
-    /// Kebab-case identifier, e.g. "auth", "failure-handling". Displayed as-is.
-    pub slug: String,
-    /// One line on what accountability the concern covers. Optional.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Lucide icon name (PascalCase, e.g. "Shield") — the glyph that prefixes
-    /// every responsibility tagged with this concern. Falls back to a
-    /// deterministic pick from `slug` when unset. Frontend-only meaning.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub icon: Option<String>,
 }
 

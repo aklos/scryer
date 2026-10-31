@@ -132,6 +132,7 @@ function RegionLabels({ regions }: { regions: LayerRegion[] }) {
                 at.boundary ? "text-[var(--text-tertiary)]" : "uppercase text-[var(--map-region-label)]"
               }`}
               style={{ fontSize: at.size, letterSpacing: at.boundary ? 0.2 : 1.5 }}
+              data-layer={r.layer}
             >
               {r.layer}
               {r.caption && (

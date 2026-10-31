@@ -12,7 +12,7 @@ import { Braces, ChevronRight, Loader2 } from "lucide-react";
 import type { StyleViolation } from "../../entities/model/health";
 import { StructuralCount } from "../../entities/model/StructuralCount";
 import type { ScryModel, Node } from "../../entities/model/viewmodel";
-import { concernCounts } from "../../entities/model/viewmodel";
+import { concernCounts, modelConcerns } from "../../entities/model/viewmodel";
 import type { Editor } from "../../entities/model/editor";
 import { CLAIM_LABEL } from "../../entities/model/claimState";
 import type { ClaimState, DerivedCounts, DerivedNodeStatus } from "../../entities/model/derived";
@@ -159,8 +159,8 @@ export function ModelTree({
    *  (null = top level). Rows at this level get a faint band so the tree mirrors
    *  the map. `undefined` (i.e. not in map view) disables the tint. */
   activeLevel: string | null | undefined;
-  /** The active concern lens (a registry slug, or null). Rows whose subtree
-   *  holds no responsibility tagged with it DIM — they never hide, because "the
+  /** The active concern lens (a concern slug some claim carries, or null). Rows whose subtree
+   *  holds no claim tagged with it DIM — they never hide, because "the
    *  concern lives nowhere here" is exactly what the lens exists to show. */
   concernLens?: string | null;
   onSetConcernLens?: (slug: string | null) => void;
@@ -235,10 +235,7 @@ export function ModelTree({
   // never hides: the dark rows ARE the finding). Registry totals label the
   // picker options.
   const concernTally = concernLens ? concernCounts(model, concernLens) : null;
-  const concernTotals = new Map<string, number>();
-  for (const n of model.nodes)
-    for (const r of n.responsibilities ?? [])
-      if (r.concern) concernTotals.set(r.concern, (concernTotals.get(r.concern) ?? 0) + 1);
+  const concerns = modelConcerns(model);
 
   const q = filter.trim().toLowerCase();
   const filterActive = q !== "" || lens !== "all";
@@ -583,7 +580,7 @@ export function ModelTree({
         {concernTally && concernTally.has(node.id) && (
           <span
             className="shrink-0 rounded bg-[var(--accent-soft)] px-1 font-mono text-2xs tabular-nums text-[var(--accent)]"
-            title={`${concernTally.get(node.id)} responsibilit${concernTally.get(node.id) === 1 ? "y" : "ies"} tagged "${concernLens}" in this subtree`}
+            title={`${concernTally.get(node.id)} claim${concernTally.get(node.id) === 1 ? "" : "s"} tagged "${concernLens}" in this subtree`}
           >
             {concernTally.get(node.id)}
           </span>
@@ -679,8 +676,8 @@ export function ModelTree({
         {/* Concern lens — the cross-cutting axis. Picking a concern dims every
             row whose subtree doesn't serve it (tree and map together); rows
             never hide, because "nothing lit" is the answer the lens exists to
-            give. Options come from the model's concern registry. */}
-        {onSetConcernLens && (model.concerns ?? []).length > 0 && (
+            give. Options are the concerns the claims are tagged with. */}
+        {onSetConcernLens && concerns.length > 0 && (
           <div
             className="flex min-w-0"
             title="Concern lens — light up where a cross-cutting concern (auth, idempotency, …) lives; everything else dims"
@@ -691,10 +688,7 @@ export function ModelTree({
               active={!!concernLens}
               options={[
                 { value: "", label: "Concern lens" },
-                ...(model.concerns ?? []).map((c) => ({
-                  value: c.slug,
-                  label: `${c.slug} · ${concernTotals.get(c.slug) ?? 0}`,
-                })),
+                ...concerns.map((c) => ({ value: c.slug, label: `${c.slug} · ${c.count}` })),
               ]}
             />
           </div>

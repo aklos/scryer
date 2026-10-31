@@ -30,6 +30,9 @@ pub enum SessionEvent {
     /// The task the agent oriented on, in its own words — the session's
     /// title. The latest is kept.
     Task { text: String },
+    /// The harness the session runs in (`claude-code`, `codex`, `copilot`),
+    /// as its hook was registered: how another session can reach it.
+    Harness { name: String },
     /// The branch checked out where the session works, noted as it begins
     /// a turn and as it stops whenever it changed. The latest is kept.
     Branch { name: String },
@@ -127,6 +130,8 @@ pub struct SessionLog {
     pub task: Option<String>,
     /// The branch it last worked on.
     pub branch: Option<String>,
+    /// The harness it runs in, as its hook named it.
+    pub harness: Option<String>,
     /// The todo tests last recorded (at start or the last stop), as
     /// [`test_key`]s; `None` until the first record.
     pub planned_seen: Option<Vec<String>>,
@@ -189,6 +194,7 @@ impl SessionLog {
             SessionEvent::ShellEnd { tool, ns } => self.shell_ends.push((tool.clone(), *ns)),
             SessionEvent::Task { text } => self.task = Some(text.clone()),
             SessionEvent::Branch { name } => self.branch = Some(name.clone()),
+            SessionEvent::Harness { name } => self.harness = Some(name.clone()),
         }
     }
 
@@ -325,6 +331,14 @@ mod tests {
     fn the_latest_branch_is_the_sessions() {
         let branch = |b: &str| entry(SessionEvent::Branch { name: b.into() });
         assert_eq!(SessionLog::from_events(&[branch("main"), branch("feature")]).branch.as_deref(), Some("feature"));
+    }
+
+    /// When the hook names the session's harness, keeps it.
+    #[test]
+    fn the_hooks_harness_is_the_sessions() {
+        assert_eq!(SessionLog::from_events(&[]).harness, None);
+        let named = entry(SessionEvent::Harness { name: "codex".into() });
+        assert_eq!(SessionLog::from_events(&[named]).harness.as_deref(), Some("codex"));
     }
 
     /// When a stub appeared since the last record in a file the session touched, counts it as the session's, and with no record yet, every stub in a touched file.

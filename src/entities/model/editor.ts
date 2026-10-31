@@ -5,7 +5,7 @@
  * decisions, a claim's wording, a new claim as a todo stub.
  */
 
-import type { Responsibility } from "./viewmodel";
+import type { Claim } from "./viewmodel";
 
 export interface Editor {
   updateNode: (
@@ -15,7 +15,7 @@ export interface Editor {
       description?: string;
       /** The decisions after the description, as markdown. `""` clears them. */
       decisions?: string;
-      responsibilities?: Responsibility[];
+      claims?: Claim[];
     },
   ) => void;
 }

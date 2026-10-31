@@ -1,38 +1,19 @@
-//! Cross-cutting concern vocabulary — the model's third axis.
+//! Cross-cutting concerns: the trailing `[tags]` on claims, the model's third axis.
 //!
 //! The containment tree answers "what's inside X?", links answer "what talks to
 //! what?"; a concern answers "where does auth (persistence, idempotency, …)
-//! live?". Code answers that question with factoring plus convention
-//! (`middleware/`, decorators); the tree can't relocate a claim, so the concern
-//! is a LENS instead: each claim may carry at most one concern slug, and the
-//! registry on [`crate::ScryModel`] names every slug in use so the UI can
-//! group, badge, and dim by it.
+//! live?". Code answers that with factoring plus convention, so the tree can't
+//! hold it; a concern is a LENS over the claims instead. A claim says which
+//! concerns it speaks for by tagging its test, `… [auth]` or, where one
+//! behaviour serves two, `… [auth] [idempotency]`, and that tag is the
+//! whole of a concern: there is no registry beside the claims,
+//! so nothing to curate and nothing that can disagree with the tests. The
+//! concerns a model has are the tags its claims carry.
 //!
-//! [`register_concerns`] runs when the tree is derived: it normalizes every
-//! slug to kebab-case, so the vocabulary can't fork on casing or spacing, and
-//! mints a registry entry for each new one, seeding description and icon from
-//! [`STANDARD_CONCERNS`]. Entries are never pruned — a registered concern with
-//! nothing tagged is itself signal ("this app has no auth story").
-
-
-use crate::model::ScryModel;
-
-pub use crate::model::ConcernDef;
-
-/// The seeded standard vocabulary: `(slug, description, icon)`. A used slug
-/// that matches one of these gets its description and icon filled in when the
-/// registry entry is minted; the set also anchors the agent's tagging rule
-/// (rules.rs rule 20) so every model answers the same questions the same way.
-pub const STANDARD_CONCERNS: &[(&str, &str, &str)] = &[
-    ("auth", "Identity, authentication, and access control", "Shield"),
-    ("persistence", "Durable storage and retrieval of data", "Database"),
-    ("failure-handling", "Detecting, capturing, and recovering from failures", "AlertTriangle"),
-    ("idempotency", "Making retries and duplicate deliveries safe", "Repeat"),
-    ("validation", "Checking inputs against expected shape and rules", "CheckCircle"),
-    ("observability", "Logging, metrics, and tracing for runtime insight", "Activity"),
-    ("performance", "Speed, capacity, and resource efficiency", "Gauge"),
-    ("compliance", "Satisfying external policy, legal, or platform rules", "Scale"),
-];
+//! A tag is normalized to a kebab-case slug so the vocabulary can't fork on
+//! casing or spacing. A `key:value` tag is an internal marker, not a concern.
+//! Descriptions and icons for the common slugs are presentation and live with
+//! the UI.
 
 /// Normalize a raw concern value to a kebab-case slug: lowercase, every run of
 /// non-alphanumerics collapses to one hyphen, leading/trailing hyphens trimmed.
@@ -55,86 +36,25 @@ pub fn normalize_slug(raw: &str) -> String {
     out
 }
 
-/// Normalize every responsibility's concern slug and make sure each used slug
-/// has a registry entry — the single choke point that keeps tags and registry
-/// coherent. Runs when the tree is derived, so no claim can leave a dangling
-/// or misspelled-case slug. New entries seed description/icon from
-/// [`STANDARD_CONCERNS`] when the slug matches; existing entries are never
-/// touched and unused entries are never pruned. The registry is kept sorted by
-/// slug for stable serialization. Mirrored in the frontend mutation helpers
-/// (`src/viewmodel.ts`), which write raw JSON and bypass this path — keep the
-/// two in lockstep.
-pub fn register_concerns(model: &mut ScryModel) {
-    let mut used: Vec<String> = Vec::new();
-    let mut visit = |resp_concern: &mut Option<String>| {
-        if let Some(raw) = resp_concern.as_deref() {
-            let slug = normalize_slug(raw);
-            if slug.is_empty() {
-                *resp_concern = None;
-            } else {
-                if !used.contains(&slug) {
-                    used.push(slug.clone());
-                }
-                *resp_concern = Some(slug);
-            }
-        }
-    };
-    for n in &mut model.nodes {
-        for r in &mut n.responsibilities {
-            visit(&mut r.concern);
+/// The concerns a claim speaks for, from its test's trailing tags: each
+/// normalized, in order of appearance, once each. Internal `key:value`
+/// markers and tags with no alphanumerics are not concerns.
+pub fn concern_tags(tags: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for slug in tags.iter().filter(|t| !t.contains(':')).map(|t| normalize_slug(t)) {
+        if !slug.is_empty() && !out.contains(&slug) {
+            out.push(slug);
         }
     }
-
-    for slug in used {
-        if model.concerns.iter().any(|c| c.slug == slug) {
-            continue;
-        }
-        let std = STANDARD_CONCERNS.iter().find(|(s, _, _)| *s == slug);
-        model.concerns.push(ConcernDef {
-            slug,
-            description: std.map(|(_, d, _)| d.to_string()),
-            icon: std.map(|(_, _, i)| i.to_string()),
-        });
-    }
-    model.concerns.sort_by(|a, b| a.slug.cmp(&b.slug));
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Kind, Node, Responsibility};
 
-    fn resp(id: &str, concern: Option<&str>) -> Responsibility {
-        Responsibility {
-            id: id.into(),
-            statement: "does a thing".into(),
-            concern: concern.map(Into::into),
-            decisions: None,
-        }
-    }
-
-    fn model_with(resps: Vec<Responsibility>) -> ScryModel {
-        let mut m = ScryModel::default();
-        m.nodes.push(Node {
-            style: None,
-            layer: None,
-            exercised_by: Vec::new(),
-            tooling: None,
-            as_layer: Default::default(),
-            decisions: None,
-            id: "n1".into(),
-            kind: Kind::Component,
-            name: "N".into(),
-            parent_id: None,
-            external: None,
-            technology: None,
-            description: None,
-            responsibilities: resps,
-            properties: Vec::new(),
-            icon: None,
-            position: None,
-        });
-        m
+    fn tags(raw: &[&str]) -> Vec<String> {
+        raw.iter().map(|t| t.to_string()).collect()
     }
 
     #[test]
@@ -145,47 +65,19 @@ mod tests {
         assert_eq!(normalize_slug("  "), "");
     }
 
+    /// Keeps every concern tag a claim carries, normalized, in order, once each.
     #[test]
-    fn register_mints_entries_seeding_standards_and_normalizes_tags() {
-        let mut m = model_with(vec![
-            resp("r1", Some("Auth")),
-            resp("r2", Some("session-windows")),
-            resp("r3", None),
-            resp("r4", Some("!!")), // normalizes to empty → cleared
-        ]);
-        register_concerns(&mut m);
-
-        let node = &m.nodes[0];
-        assert_eq!(node.responsibilities[0].concern.as_deref(), Some("auth"));
-        assert_eq!(node.responsibilities[3].concern, None);
-
-        // Registry: standard slug got description+icon, custom slug got bare entry.
-        let auth = m.concerns.iter().find(|c| c.slug == "auth").unwrap();
-        assert_eq!(auth.icon.as_deref(), Some("Shield"));
-        assert!(auth.description.is_some());
-        let custom = m.concerns.iter().find(|c| c.slug == "session-windows").unwrap();
-        assert_eq!(custom.icon, None);
-        // Sorted by slug.
+    fn keeps_every_tag_normalized() {
         assert_eq!(
-            m.concerns.iter().map(|c| c.slug.as_str()).collect::<Vec<_>>(),
-            vec!["auth", "session-windows"]
+            concern_tags(&tags(&["Auth", "Failure Handling", "auth", "idempotency"])),
+            tags(&["auth", "failure-handling", "idempotency"])
         );
     }
 
+    /// Drops internal `key:value` markers and tags that normalize to nothing.
     #[test]
-    fn register_never_touches_existing_entries_or_prunes_unused() {
-        let mut m = model_with(vec![resp("r1", Some("auth"))]);
-        m.concerns.push(ConcernDef {
-            slug: "auth".into(),
-            description: Some("user-curated wording".into()),
-            icon: Some("Lock".into()),
-        });
-        m.concerns.push(ConcernDef { slug: "unused".into(), description: None, icon: None });
-        register_concerns(&mut m);
-
-        let auth = m.concerns.iter().find(|c| c.slug == "auth").unwrap();
-        assert_eq!(auth.description.as_deref(), Some("user-curated wording"));
-        assert_eq!(auth.icon.as_deref(), Some("Lock"));
-        assert!(m.concerns.iter().any(|c| c.slug == "unused"));
+    fn drops_markers_and_empty_tags() {
+        assert_eq!(concern_tags(&tags(&["session:ab12", "!!", "io"])), tags(&["io"]));
+        assert!(concern_tags(&[]).is_empty());
     }
 }

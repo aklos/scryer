@@ -67,11 +67,18 @@ impl Tool {
     }
 
     /// The hook command, with `--copilot` for the harness whose tool names and
-    /// reply shape differ (the event can't be sniffed for them).
+    /// reply shape differ, and `--codex` so a Codex session is known as one
+    /// (the event can't be sniffed for either).
     pub fn hook_command(self, binary: &str) -> String {
+        format!("\"{binary}\" {}", self.hook_args())
+    }
+
+    /// What the hook command runs after the binary.
+    pub fn hook_args(self) -> &'static str {
         match self {
-            Tool::Copilot => format!("\"{binary}\" hook --copilot"),
-            _ => format!("\"{binary}\" hook"),
+            Tool::Copilot => "hook --copilot",
+            Tool::Codex => "hook --codex",
+            Tool::ClaudeCode => "hook",
         }
     }
 }
@@ -130,6 +137,10 @@ pub const CODEX_HOOKS_FILE: &str = ".codex/hooks.json";
 /// hook location it reads — so scryer takes a file of its own there.
 pub const COPILOT_HOOKS_FILE: &str = ".github/hooks/scryer.json";
 pub const GITIGNORE: &str = ".scryer/.gitignore";
+/// Left by `setup off` so a connected agent stops nudging toward `setup on`;
+/// `on` removes it. Under `.scryer/`, so the `.gitignore` keeps it to this
+/// machine, like the Claude Code settings it stands in for.
+pub const SETUP_OFF: &str = ".scryer/setup-off";
 /// The skill where Claude Code (and Copilot) look for project skills.
 pub const CLAUDE_SKILL: &str = ".claude/skills/scryer/SKILL.md";
 /// The skill where Codex looks for project skills.
@@ -137,10 +148,6 @@ pub const AGENTS_SKILL: &str = ".agents/skills/scryer/SKILL.md";
 
 /// The server-wide allow entry: Claude Code reads a bare `mcp__<server>` as
 /// "auto-approve every tool from that server".
-/// Left by `setup off` so a connected agent stops nudging toward `setup on`;
-/// `on` removes it. Under `.scryer/`, so the `.gitignore` keeps it to this
-/// machine, like the Claude Code settings it stands in for.
-pub const SETUP_OFF: &str = ".scryer/setup-off";
 pub const MCP_ALLOW: &str = "mcp__scryer";
 
 /// `(event, matcher, timeout seconds)`.
@@ -250,7 +257,7 @@ fn is_scryer_binary(binary: &str) -> bool {
 
 /// Whether `command` runs scryer-mcp's `subcommand` (`hook`, `statusline`).
 pub fn is_scryer_command(command: &str, subcommand: &str) -> bool {
-    let rest = command.trim_end().trim_end_matches(" --copilot");
+    let rest = command.trim_end().trim_end_matches(" --copilot").trim_end_matches(" --codex");
     is_scryer_binary(command_binary(command)) && rest.ends_with(&format!(" {subcommand}"))
 }
 
@@ -384,19 +391,30 @@ pub fn remove_allow(root: &mut serde_json::Value) -> bool {
 
 // --- Hooks: `{"hooks": {event: [entry…]}}` ---
 
-/// Where scryer's hooks in `root` stand against `events`. Stale when the
-/// registered set differs (an event since dropped or added, a changed
-/// matcher, a duplicate) or a command names a binary that is gone.
-pub fn hooks_state(root: &serde_json::Value, events: &[HookEvent], exists: &dyn Fn(&str) -> bool) -> EntryState {
+/// Where scryer's hooks in `root` stand against `events`, each running the
+/// hook client with `args`. Stale when the registered set differs (an event
+/// since dropped or added, a changed matcher, a duplicate, other arguments)
+/// or a command names a binary that is gone.
+pub fn hooks_state(
+    root: &serde_json::Value,
+    events: &[HookEvent],
+    args: &str,
+    exists: &dyn Fn(&str) -> bool,
+) -> EntryState {
     let Some(map) = root.get("hooks").and_then(|h| h.as_object()) else {
         return EntryState::Missing;
     };
     let mut found: Vec<(String, Option<String>)> = Vec::new();
     let mut gone = false;
+    let mut other_args = false;
+    let tail = format!(" {args}");
     for (event, entries) in map {
         for entry in entries.as_array().into_iter().flatten().filter(|e| is_scryer_hook_entry(e)) {
             found.push((event.clone(), entry["matcher"].as_str().map(String::from)));
-            gone |= hook_commands(entry).filter(|c| is_scryer_command(c, "hook")).any(|c| !exists(command_binary(c)));
+            for c in hook_commands(entry).filter(|c| is_scryer_command(c, "hook")) {
+                gone |= !exists(command_binary(c));
+                other_args |= !c.trim_end().ends_with(&tail);
+            }
         }
     }
     if found.is_empty() {
@@ -408,7 +426,7 @@ pub fn hooks_state(root: &serde_json::Value, events: &[HookEvent], exists: &dyn 
     want.sort();
     if gone {
         EntryState::Stale("names a scryer-mcp that no longer exists".into())
-    } else if found != want {
+    } else if found != want || other_args {
         EntryState::Stale("registered by an earlier scryer".into())
     } else {
         EntryState::Installed
@@ -539,21 +557,36 @@ mod tests {
     #[test]
     fn a_hook_set_from_an_earlier_scryer_reads_as_stale() {
         let foreign = serde_json::json!({ "hooks": { "Stop": [{ "hooks": [{ "command": "my-linter" }] }] } });
-        assert_eq!(hooks_state(&foreign, CLAUDE_HOOK_EVENTS, &yes), EntryState::Missing);
+        assert_eq!(hooks_state(&foreign, CLAUDE_HOOK_EVENTS, "hook", &yes), EntryState::Missing);
 
         let mut root = serde_json::json!({});
         set_hooks(&mut root, CLAUDE_HOOK_EVENTS, "\"/opt/scryer-mcp\" hook");
-        assert_eq!(hooks_state(&root, CLAUDE_HOOK_EVENTS, &yes), EntryState::Installed);
-        assert!(matches!(hooks_state(&root, CLAUDE_HOOK_EVENTS, &|_| false), EntryState::Stale(_)), "binary gone");
+        assert_eq!(hooks_state(&root, CLAUDE_HOOK_EVENTS, "hook", &yes), EntryState::Installed);
+        assert!(matches!(hooks_state(&root, CLAUDE_HOOK_EVENTS, "hook", &|_| false), EntryState::Stale(_)), "binary gone");
 
         let mut doubled = root.clone();
         let stop = doubled["hooks"]["Stop"][0].clone();
         doubled["hooks"]["Stop"].as_array_mut().unwrap().push(stop);
-        assert!(matches!(hooks_state(&doubled, CLAUDE_HOOK_EVENTS, &yes), EntryState::Stale(_)), "duplicate");
+        assert!(matches!(hooks_state(&doubled, CLAUDE_HOOK_EVENTS, "hook", &yes), EntryState::Stale(_)), "duplicate");
 
         let mut old = root.clone();
         old["hooks"]["SessionStart"] = old["hooks"]["Stop"].clone();
-        assert!(matches!(hooks_state(&old, CLAUDE_HOOK_EVENTS, &yes), EntryState::Stale(_)), "dropped event");
+        assert!(matches!(hooks_state(&old, CLAUDE_HOOK_EVENTS, "hook", &yes), EntryState::Stale(_)), "dropped event");
+        assert!(
+            matches!(hooks_state(&root, CLAUDE_HOOK_EVENTS, "hook --codex", &yes), EntryState::Stale(_)),
+            "a Codex hook from before it named its harness"
+        );
+    }
+
+    /// Registers each harness's hook with its own flag, so a session knows which harness runs it.
+    #[test]
+    fn each_harness_hook_names_its_harness() {
+        assert_eq!(Tool::ClaudeCode.hook_command("/opt/scryer-mcp"), "\"/opt/scryer-mcp\" hook");
+        assert_eq!(Tool::Codex.hook_command("/opt/scryer-mcp"), "\"/opt/scryer-mcp\" hook --codex");
+        assert_eq!(Tool::Copilot.hook_command("/opt/scryer-mcp"), "\"/opt/scryer-mcp\" hook --copilot");
+        for tool in [Tool::ClaudeCode, Tool::Codex, Tool::Copilot] {
+            assert!(is_scryer_command(&tool.hook_command("/opt/scryer-mcp"), "hook"));
+        }
     }
 
     /// One predicate recognises scryer in both hook schemas; a foreign command,

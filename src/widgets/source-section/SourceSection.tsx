@@ -24,7 +24,7 @@ const ANCHOR_TITLE: Record<AnchorStatus, string> = {
   lineOutOfRange: "Line is past the end of the file",
 };
 
-/** Element id for a responsibility row — a jump target for banners and the
+/** Element id for a claim row — a jump target for banners and the
  *  Unmapped claims page. */
 export const respElementId = (respId: string) => `resp-${respId}`;
 

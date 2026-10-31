@@ -189,21 +189,24 @@ export function RelationshipEdge({
               transform: `translate(-50%, -50%) translate(${labelDivX}px,${labelDivY}px)`,
               zIndex: red ? 3 : full ? 2 : 1,
               pointerEvents: "none",
-              ...(data?.dimmed ? { opacity: 0.18 } : full ? {} : { opacity: 0.45 }),
+              // At rest the words are muted by colour, not by opacity: a
+              // translucent label lets the edge under it strike the text.
+              ...(data?.dimmed ? { opacity: 0.18 } : {}),
             }}
             className="flex flex-col items-center"
           >
             {label && (
               // Wrapped to a narrow column: a sentence-long label on one line
               // runs across its neighbours' pills where edges converge. At
-              // rest, bare text: no pill to cover what runs behind it.
+              // rest, no border, but the canvas colour behind the words so
+              // the edge they sit on does not strike them through.
               <div
                 className={`w-max max-w-[150px] rounded border px-1.5 py-0.5 text-center text-[10px] leading-tight ${
                   red
                     ? "border-red-500/50 bg-[var(--surface-raised)] text-red-600 dark:text-red-300"
                     : full
                       ? "border-[var(--map-card-stroke)] bg-[var(--surface-raised)] text-[var(--text-secondary)]"
-                      : "border-transparent text-[var(--text-muted)]"
+                      : "border-transparent bg-[var(--surface-canvas)] text-[var(--text-muted)]"
                 }`}
               >
                 {label}

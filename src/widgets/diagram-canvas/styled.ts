@@ -516,13 +516,17 @@ function hexagonLayout(def: StyleDef, members: StyledMember[], ghosts: string[],
 
   // Centre + ring. An empty ring stays a thin band, so the hexagon still
   // reads as one without a moat of nothing around the centre.
+  // A region is a flat-topped hexagon of circumradius r, so at its top and
+  // bottom it reaches only r·cos 30°: a card seated at the top of a circle
+  // of radius R needs r = R / cos 30° to sit inside the hexagon.
+  const HEX_IN = Math.cos(Math.PI / 6);
   const coreIds = ids(core);
-  let r = packCenter(coreIds, centers) + PAD;
+  let r = (packCenter(coreIds, centers) + PAD) / HEX_IN;
   regions.push({ layer: core, caption: describe(def, core), shape: "hex", cx: 0, cy: 0, r });
   const ringIds = orderByAngle(ids(ring), edges, centers);
   if (ringIds.length) {
     const ringR = ringPlace(ringIds, r + PAD + CARD_H / 2 + 10, -Math.PI / 2, centers);
-    r = ringR + CARD_H / 2 + PAD;
+    r = (ringR + CARD_H / 2 + PAD) / HEX_IN;
     turnClear(ringIds, centers, outsidePaths);
   } else {
     r += PAD * 2;

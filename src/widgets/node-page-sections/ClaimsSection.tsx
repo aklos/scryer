@@ -18,7 +18,7 @@ import {
   Triangle,
   X,
 } from "lucide-react";
-import type { ConcernDef, Responsibility, SourceLocation } from "../../entities/model/viewmodel";
+import type { Claim, SourceLocation } from "../../entities/model/viewmodel";
 import { STANDARD_CONCERNS } from "../../entities/model/viewmodel";
 import { lookupIcon } from "../../features/search/IconPicker";
 import type { Editor } from "../../entities/model/editor";
@@ -35,18 +35,18 @@ import { onAddClaimRequest } from "../../features/derived-tree/addClaim";
 import type { DerivedClaimStatus } from "../../entities/model/derived";
 import { CLAIM_TONE } from "../../entities/model/claimState";
 
-// --- responsibilities (the diff view) ---------------------------------------
+// --- claims (the diff view) ---------------------------------------
 
 /** How one claim diverges from the committed tree: `added` (a todo stub, not
  *  yet implemented), `reworded`, `deleted`, or `unchanged`. */
-interface RespDiffRow extends Omit<ElementDiff<Responsibility>, "item"> {
-  resp: Responsibility;
+interface RespDiffRow extends Omit<ElementDiff<Claim>, "item"> {
+  resp: Claim;
 }
 
 /** Build the diff rows for a node's claims: planned claims in order (each
  *  tagged added / reworded / unchanged against the committed copy), then any
  *  committed claims the plan dropped. */
-function buildRespDiff(planned: Responsibility[], committed: Responsibility[]): RespDiffRow[] {
+function buildRespDiff(planned: Claim[], committed: Claim[]): RespDiffRow[] {
   return buildElementDiff(planned, committed, {
     key: (r) => r.id,
     // Statements compare stripped of display markup: a markup-only touch is
@@ -93,21 +93,28 @@ export function ClaimMarker({ mark, label, detail = "" }: { mark?: ClaimMark; la
   );
 }
 
-/** A tagged claim's concern, in the right-hand lane: its glyph (registry icon
- *  → standard vocabulary → Tag) and name, muted, in one column down the page
- *  so a concern reads vertically. An untagged claim leaves the lane empty. */
-export function ConcernTag({ slug, concerns }: { slug?: string; concerns: ConcernDef[] }) {
-  if (!slug) return null;
-  const entry = concerns.find((c) => c.slug === slug);
-  const description = entry?.description ?? STANDARD_CONCERNS.get(slug)?.description;
-  const Icon = lookupIcon(entry?.icon ?? STANDARD_CONCERNS.get(slug)?.icon ?? "Tag") ?? Tag;
+/** A tagged claim's concerns, in the right-hand lane: each one's glyph
+ *  (standard vocabulary → Tag) and name, muted, in tag order, in one column
+ *  down the page so a concern reads vertically. An untagged claim leaves the
+ *  lane empty. */
+export function ConcernTag({ slugs }: { slugs?: string[] }) {
+  if (!slugs?.length) return null;
   return (
-    <span
-      className="absolute right-1 top-[3px] flex max-w-[170px] select-none items-center gap-1 text-2xs text-[var(--text-tertiary)]"
-      title={description ? `${slug} — ${description}` : slug}
-    >
-      <Icon className="h-3 w-3 shrink-0" />
-      <span className="truncate">{slug}</span>
+    <span className="absolute right-1 top-[3px] flex max-w-[170px] select-none items-center gap-2 text-2xs text-[var(--text-tertiary)]">
+      {slugs.map((slug) => {
+        const standard = STANDARD_CONCERNS.get(slug);
+        const Icon = lookupIcon(standard?.icon ?? "Tag") ?? Tag;
+        return (
+          <span
+            key={slug}
+            className="flex min-w-0 items-center gap-1"
+            title={standard ? `${slug} — ${standard.description}` : slug}
+          >
+            <Icon className="h-3 w-3 shrink-0" />
+            <span className="truncate">{slug}</span>
+          </span>
+        );
+      })}
     </span>
   );
 }
@@ -115,31 +122,37 @@ export function ConcernTag({ slug, concerns }: { slug?: string; concerns: Concer
 /** Presentation-only anatomy, shared by read and edit: concern groups A→Z
  *  (auth on top, always), then untagged core flow trailing in authored order.
  *  Stored order is never touched — this is how the list READS, the same
- *  arrangement on every page and in the editor. */
-function orderByConcern<T>(rows: T[], concernOf: (row: T) => string | undefined): T[] {
+ *  arrangement on every page and in the editor. With `repeat`, a claim
+ *  tagged with several concerns sits in each of their groups, so every
+ *  concern's group is whole; without it (the editor, one input per claim),
+ *  only in its first tag's. Each entry names the group it sits in. */
+export function orderByConcern<T>(
+  rows: T[],
+  concernsOf: (row: T) => string[] | undefined,
+  repeat: boolean,
+): { row: T; group?: string }[] {
   const byConcern = new Map<string, T[]>();
   const flow: T[] = [];
   for (const row of rows) {
-    const c = concernOf(row);
-    if (c) {
+    const tags = concernsOf(row) ?? [];
+    if (tags.length === 0) flow.push(row);
+    for (const c of repeat ? tags : tags.slice(0, 1)) {
       const arr = byConcern.get(c) ?? [];
       arr.push(row);
       byConcern.set(c, arr);
-    } else flow.push(row);
+    }
   }
   const slugs = [...byConcern.keys()].sort((a, b) => a.localeCompare(b));
-  return [...slugs.flatMap((s) => byConcern.get(s)!), ...flow];
+  return [
+    ...slugs.flatMap((group) => byConcern.get(group)!.map((row) => ({ row, group }))),
+    ...flow.map((row) => ({ row })),
+  ];
 }
 
-function groupByConcern(rows: RespDiffRow[]): RespDiffRow[] {
-  return orderByConcern(rows, (r) => r.resp.concern);
-}
-
-export function ResponsibilitiesSection({
+export function ClaimsSection({
   nodeId,
   resps,
   prevResps,
-  concerns,
   testMap,
   testStates,
   claimStatuses,
@@ -152,12 +165,9 @@ export function ResponsibilitiesSection({
   onToggle,
 }: {
   nodeId: string;
-  resps: Responsibility[];
+  resps: Claim[];
   /** The committed copy of this node's claims — the diff base for the rows. */
-  prevResps: Responsibility[];
-  /** The model's concern registry — resolves each claim's `concern` slug to its
-   *  glyph/description, and feeds the editor's slug suggestions. */
-  concerns: ConcernDef[];
+  prevResps: Claim[];
   /** respId → attached-test locations (the test dimension). */
   testMap: Record<string, SourceLocation[]>;
   /** respId → fingerprint state of the attached test, when it regressed. */
@@ -173,13 +183,13 @@ export function ResponsibilitiesSection({
   projectPath: string | null;
   /** Mint a fresh claim id clear of every node in both layers (plus the
    *  editor's own draft rows). */
-  mintId: (draft: Responsibility[]) => string;
+  mintId: (draft: Claim[]) => string;
   editor: Editor | undefined;
   editing: boolean;
   onToggle: () => void;
 }) {
   const diffRows = buildRespDiff(resps, prevResps);
-  // "Add responsibility" from read mode opens the editor seeded with a fresh
+  // "Add claim" from read mode opens the editor seeded with a fresh
   // row; nothing is written to the model until Done.
   const [seedNewRow, setSeedNewRow] = useState(false);
   // "Add claim" from the tree opens this editor seeded with a fresh row.
@@ -205,10 +215,10 @@ export function ResponsibilitiesSection({
       }}
     >
       {editing && editor ? (
-        <ResponsibilitiesEditor
+        <ClaimsEditor
           nodeId={nodeId}
           initial={resps}
-          concerns={concerns}
+         
           seedNewRow={seedNewRow}
           mintId={mintId}
           editor={editor}
@@ -221,11 +231,11 @@ export function ResponsibilitiesSection({
         <Empty>No tests state a claim here yet.</Empty>
       ) : (
         <ol className="-mx-2 flex flex-col">
-          {groupByConcern(diffRows).map((row) => (
+          {orderByConcern(diffRows, (r) => r.resp.concerns, true).map(({ row, group }) => (
             <RespDiffRow
-              key={row.resp.id}
+              key={`${group ?? ""}:${row.resp.id}`}
               row={row}
-              concerns={concerns}
+             
               testLocations={testMap[row.resp.id] ?? []}
               testState={testStates[row.resp.id] ?? null}
               claimStatus={claimStatuses?.[row.resp.id]}
@@ -241,35 +251,32 @@ export function ResponsibilitiesSection({
 }
 
 /**
- * The responsibility-list form inside the shared {@link SectionEditor} shell.
+ * The claim-list form inside the shared {@link SectionEditor} shell.
  * Done writes the final list in one update. Untouched new rows vanish on
  * commit.
  */
-function ResponsibilitiesEditor({
+function ClaimsEditor({
   nodeId,
   initial,
-  concerns,
   seedNewRow,
   mintId,
   editor,
   onClose,
 }: {
   nodeId: string;
-  initial: Responsibility[];
-  /** The registry — feeds the concern input's slug suggestions. */
-  concerns: ConcernDef[];
+  initial: Claim[];
   seedNewRow: boolean;
-  mintId: (draft: Responsibility[]) => string;
+  mintId: (draft: Claim[]) => string;
   editor: Editor;
   onClose: () => void;
 }) {
   const seededId = seedNewRow ? mintId(initial) : null;
-  const start: Responsibility[] = seededId
+  const start: Claim[] = seededId
     ? [...initial, { id: seededId, statement: "" }]
     : initial;
 
-  const commit = (draft: Responsibility[]) => {
-    // Blank statements drop out on commit, and a blank concern to untagged.
+  const commit = (draft: Claim[]) => {
+    // Blank statements drop out on commit, and blank concerns to untagged.
     const initialStmt = new Map(initial.map((r) => [r.id, r.statement]));
     const cleaned = draft
       .filter((r) => r.statement.trim() !== "")
@@ -281,18 +288,18 @@ function ResponsibilitiesEditor({
         let statement = r.statement.trim();
         if (statement !== (initialStmt.get(r.id) ?? "").trim() && !hasMarkup(statement))
           statement = serializeEars(statement);
-        const concern = (r.concern ?? "").trim();
+        const concerns = (r.concerns ?? []).map((c) => c.trim()).filter(Boolean);
         return {
           ...r,
           statement,
-          concern: concern || undefined,
+          concerns: concerns.length > 0 ? concerns : undefined,
         };
       });
-    editor.updateNode(nodeId, { responsibilities: cleaned });
+    editor.updateNode(nodeId, { claims: cleaned });
   };
 
   return (
-    <SectionEditor<Responsibility[]>
+    <SectionEditor<Claim[]>
       initial={start}
       onCommit={commit}
       onClose={onClose}
@@ -321,18 +328,18 @@ function ResponsibilitiesEditor({
       )}
     >
       {(draft, setDraft) => {
-        const patchRow = (id: string, patch: Partial<Responsibility>) =>
+        const patchRow = (id: string, patch: Partial<Claim>) =>
           setDraft((d) => d.map((r) => (r.id === id ? { ...r, ...patch } : r)));
         return draft.length === 0 ? (
           <Empty>No tests state a claim here yet.</Empty>
         ) : (
           <ul className="-mx-2 flex flex-col">
-            {orderByConcern(draft, (r) => r.concern).map((r, i) => (
-              <ResponsibilityEditRow
+            {orderByConcern(draft, (r) => r.concerns, false).map(({ row: r }, i) => (
+              <ClaimEditRow
                 key={r.id}
                 resp={r}
                 index={i + 1}
-                concerns={concerns}
+               
                 // autoFocus fires at mount only — it lands on the seeded row
                 // and on rows appended via "Add claim".
                 autoFocus={r.statement === "" && r.id === draft[draft.length - 1].id}
@@ -354,7 +361,6 @@ function ResponsibilitiesEditor({
  */
 function RespDiffRow({
   row,
-  concerns,
   testLocations,
   testState,
   claimStatus,
@@ -363,8 +369,6 @@ function RespDiffRow({
   projectPath,
 }: {
   row: RespDiffRow;
-  /** The model's concern registry — resolves the row's glyph. */
-  concerns: ConcernDef[];
   /** The claim's attached tests (test dimension). */
   testLocations: SourceLocation[];
   /** Fingerprint state of the attached test, when it regressed since reconcile. */
@@ -455,26 +459,23 @@ function RespDiffRow({
 
       {/* The concern lane: the 180px control gutter is empty in read mode,
           so its right edge is an aligned concern column. */}
-      <ConcernTag slug={resp.concern} concerns={concerns} />
+      <ConcernTag slugs={resp.concerns} />
     </li>
   );
 }
 
-/** One draft row of the responsibilities form — fully controlled; every
+/** One draft row of the claims form — fully controlled; every
  *  change lands in the section draft, never directly in the model. */
-function ResponsibilityEditRow({
+function ClaimEditRow({
   resp,
   index,
-  concerns,
   autoFocus,
   onPatch,
 }: {
-  resp: Responsibility;
+  resp: Claim;
   index: number;
-  /** The concern registry — feeds the in-place concern picker. */
-  concerns: ConcernDef[];
   autoFocus: boolean;
-  onPatch: (id: string, patch: Partial<Responsibility>) => void;
+  onPatch: (id: string, patch: Partial<Claim>) => void;
 }) {
   const lints = lintEars(stripMarkup(resp.statement));
 
@@ -506,8 +507,8 @@ function ResponsibilityEditRow({
           />
           {/* Only the wording edits here: a claim is a test, so deleting
               it, tagging it or writing its decisions happens in the code. The
-              concern is the test's trailing [tag]: shown, kept on reword. */}
-          <ConcernTag slug={resp.concern} concerns={concerns} />
+              concerns are the test's trailing [tags]: shown, kept on reword. */}
+          <ConcernTag slugs={resp.concerns} />
         </div>
 
         {lints.length > 0 && (

@@ -33,7 +33,7 @@ function buildPropDiff(planned: SchemaProperty[], committed: SchemaProperty[]): 
 
 /** One property as a mono diff row — the field name and its type, then its description after
  *  an em-dash (word-diffed when reworded), keyed to the shared marker/number
- *  grid so it reads as part of the same diff sheet as the responsibilities. */
+ *  grid so it reads as part of the same diff sheet as the claims. */
 function PropDiffRow({ row, nodeId }: { row: PropDiffRow; nodeId: string }) {
   const { prop, kind, prev, index } = row;
   const deleted = kind === "deleted";

@@ -15,7 +15,7 @@ import {
 // --- description ------------------------------------------------------------
 
 /** The lede — a title-less paragraph directly under the header, Wikipedia
- *  style, so the kind-specific hero (responsibilities / properties / preview)
+ *  style, so the kind-specific hero (claims / properties / preview)
  *  is the first titled section the eye lands on. Edits live in a draft and
  *  persist only on Save; Cancel/Esc discards. */
 export function DescriptionSection({

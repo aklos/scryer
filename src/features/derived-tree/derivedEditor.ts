@@ -62,16 +62,16 @@ export function makeDerivedEditor({
           shown.decisions = patch.decisions;
         } else onError("Decisions live in a module doc; this node has none.");
       }
-      if (patch.responsibilities) {
-        const before = new Map((node.responsibilities ?? []).map((r) => [r.id, r]));
-        for (const r of patch.responsibilities) {
+      if (patch.claims) {
+        const before = new Map((node.claims ?? []).map((r) => [r.id, r]));
+        for (const r of patch.claims) {
           const text = stripMarkup(r.statement).trim();
           const old = before.get(r.id);
           if (!old) writes.push(run("add_claim_stub", { nodeId, text }));
           else if (text !== stripMarkup(old.statement).trim()) writes.push(editClaim(r.id, r.statement));
         }
-        const kept = new Set(patch.responsibilities.map((r) => r.id));
-        if ((node.responsibilities ?? []).some((r) => !kept.has(r.id)))
+        const kept = new Set(patch.claims.map((r) => r.id));
+        if ((node.claims ?? []).some((r) => !kept.has(r.id)))
           onError("A claim is a test: delete the test in the code to remove it.");
       }
       if (writes.length > 0)

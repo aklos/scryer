@@ -15,7 +15,7 @@ import { isDataShape } from "./viewmodel";
 import type { TermId } from "./glossary";
 
 /** The minimal node shape these helpers read. */
-type IconNode = Pick<Node, "kind" | "external" | "technology" | "properties" | "responsibilities">;
+type IconNode = Pick<Node, "kind" | "external" | "technology" | "properties" | "claims">;
 
 /** The kind silhouette for a node. Person → bust, external → cloud, previewable
  *  symbol → eye, data-shape symbol → database, code symbol → braces, else the

@@ -9,14 +9,14 @@
  *  the committed model): completeness is defined from greenfield onward, the
  *  denominator being intent. The unit is the anchorable primitive — a node's
  *  boundary box (counted only when its glob owns a real file), a leaf
- *  responsibility, or a data shape. A structural node's own responsibilities are
+ *  claim, or a data shape. A structural node's own claims are
  *  not primitives (they discharge through the subtree). */
 export interface Completeness {
   /** Anchored primitives in the subtree. */
   anchored: number;
   /** Authored primitives in the subtree — the denominator. */
   total: number;
-  /** Leaf primitives (responsibilities + data shapes) in the subtree. When 0 the
+  /** Leaf primitives (claims + data shapes) in the subtree. When 0 the
    *  node is unmeasured (a bare box) and `pct` is absent. */
   leafTotal: number;
   /** Rounded 0–100 percent, or absent ("—") when there is nothing to measure. */

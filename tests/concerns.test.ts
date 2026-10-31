@@ -1,28 +1,29 @@
 /**
- * The concern lens's subtree tally (`concernCounts`).
+ * The concern lens: its subtree tally (`concernCounts`) and its options (`modelConcerns`).
  */
 import { describe, expect, it } from "vitest";
 import {
   concernCounts,
   emptyModel,
+  modelConcerns,
   type Node,
-  type Responsibility,
+  type Claim,
   type ScryModel,
 } from "../src/entities/model/viewmodel";
 
 let respSeq = 0;
-const resp = (concern?: string): Responsibility => ({
+const resp = (...concerns: string[]): Claim => ({
   id: `resp-${++respSeq}`,
   statement: "does a thing",
-  ...(concern !== undefined ? { concern } : {}),
+  ...(concerns.length > 0 ? { concerns } : {}),
 });
 
-const node = (id: string, parentId: string | undefined, resps: Responsibility[]): Node => ({
+const node = (id: string, parentId: string | undefined, resps: Claim[]): Node => ({
   id,
   kind: "component",
   name: id,
   ...(parentId ? { parentId } : {}),
-  responsibilities: resps,
+  claims: resps,
 });
 
 const modelWith = (nodes: Node[]): ScryModel => ({ ...emptyModel(), nodes });
@@ -40,5 +41,28 @@ describe("concernCounts", () => {
     expect(counts.get("api")).toBe(2);
     expect(counts.get("sys")).toBe(2);
     expect(counts.has("ui")).toBe(false);
+  });
+
+  it("Counts a claim under each concern it is tagged with", () => {
+    const m = modelWith([node("webhook", undefined, [resp("auth", "idempotency"), resp("auth")])]);
+    expect(concernCounts(m, "auth").get("webhook")).toBe(2);
+    expect(concernCounts(m, "idempotency").get("webhook")).toBe(1);
+    expect(modelConcerns(m)).toEqual([
+      { slug: "auth", count: 2 },
+      { slug: "idempotency", count: 1 },
+    ]);
+  });
+});
+
+describe("modelConcerns", () => {
+  it("Lists the concerns the model's claims carry, A to Z, each with its claim count", () => {
+    const m = modelWith([
+      node("api", undefined, [resp("validation"), resp("auth"), resp()]),
+      node("webhook", "api", [resp("auth")]),
+    ]);
+    expect(modelConcerns(m)).toEqual([
+      { slug: "auth", count: 2 },
+      { slug: "validation", count: 1 },
+    ]);
   });
 });

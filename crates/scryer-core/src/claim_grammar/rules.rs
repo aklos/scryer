@@ -23,8 +23,8 @@ pub const RULES: &[Rule] = &[
     Rule {
         id: 20,
         slug: "concerns",
-        title: "Concerns tag cross-cutting accountability — at most one per claim",
-        body: r#"A claim may carry ONE concern: a kebab-case `[tag]` at the end of its test description naming the cross-cutting concern it serves — `When a save fails, keeps the draft [persistence]`. The standard vocabulary: `auth`, `persistence`, `failure-handling`, `idempotency`, `validation`, `observability`, `performance`, `compliance`. Leave a component's core domain flow UNTAGGED: no tag means "this is the main behaviour". Reuse before minting, and use the same slug for the same concern everywhere ([[naming]]); a claim that seems to need two tags bundles two claims — split the test. The tag carries the category, so purpose clauses like "…so duplicates aren't reprocessed" are redundant: cut them."#,
+        title: "Concerns tag cross-cutting accountability",
+        body: r#"A claim carries a kebab-case `[tag]` at the end of its test description for each cross-cutting concern it serves — `When a save fails, keeps the draft [persistence]`, or, where one behaviour serves two, `If a retried webhook carries a stale signature, then rejects it [auth] [idempotency]`. The standard vocabulary: `auth`, `persistence`, `failure-handling`, `idempotency`, `validation`, `observability`, `performance`, `compliance`. Leave a component's core domain flow UNTAGGED: no tag means "this is the main behaviour". Reuse before minting, and use the same slug for the same concern everywhere ([[naming]]); when the tags describe different responses, the test bundles two claims — split it. The tag carries the category, so purpose clauses like "…so duplicates aren't reprocessed" are redundant: cut them."#,
     },
     Rule {
         id: 21,

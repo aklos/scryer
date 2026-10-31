@@ -1,7 +1,7 @@
 /**
  * The tree's schema (v0.3) plus derived view types.
  *
- * `ScryModel`, `Node`, `Link`, `Responsibility`, `Source`, `SchemaProperty`
+ * `ScryModel`, `Node`, `Link`, `Claim`, `Source`, `SchemaProperty`
  * and `Kind` mirror the Rust types in `crates/scryer-core/src/c4_model/model.rs`,
  * so the derived tree the backend serves parses straight into them. The rest
  * are pure helpers over that shape: data-shape checks, the concern lens, id
@@ -19,23 +19,21 @@ export type Kind =
   | "component"
   | "symbol";
 
-// --- Responsibilities & code-level data --------------------------------------
+// --- Claims & code-level data --------------------------------------
 
-export interface Responsibility {
+export interface Claim {
   id: string;
   /** Verb-led business statement of accountability. No mechanism words.
    *  EARS-shaped (condition first, response last) and may carry display
    *  markup — `**bold**` on the keyword and response verb — which the UI
    *  renders and strips for comparison (rule 21; see `markup.tsx`). */
   statement: string;
-  /** The cross-cutting concern this responsibility serves — at most ONE
-   *  kebab-case slug (e.g. "auth"), referencing an entry in the model's
-   *  concern registry ({@link ScryModel.concerns}). Untagged means core domain
-   *  flow. Metadata beside the statement, no conformance role. Mirrors Rust
-   *  `Responsibility.concern`. */
-  concern?: string;
+  /** The cross-cutting concerns this claim speaks for: its test's trailing
+   *  `[tags]` as kebab-case slugs, in order. Absent means core domain flow.
+   *  Metadata beside the statement. Mirrors Rust `Claim.concerns`. */
+  concerns?: string[];
   /** Why the behaviour is this one, as markdown: its test's doc after the
-   *  claim. Derived; mirrors Rust `Responsibility.decisions`. */
+   *  claim. Derived; mirrors Rust `Claim.decisions`. */
   decisions?: string;
 }
 
@@ -81,11 +79,11 @@ export interface Node {
    *  tag from the style's layer list, required under a styled container and
    *  absent otherwise; symbols inherit it. Mirrors Rust `Node.layer`. */
   layer?: string;
-  responsibilities?: Responsibility[];
+  claims?: Claim[];
   /** Field declarations, when this symbol defines a data shape; a React
    *  component's props. */
   properties?: SchemaProperty[];
-  /** The claims (responsibility ids) whose tests exercise this symbol: the
+  /** The ids of the claims whose tests exercise this symbol: the
    *  test's body names it, and it is defined in the test's file or a file the
    *  test imports. Derived; the claims stay on their component. Mirrors Rust
    *  `Node.exercised_by`. */
@@ -121,30 +119,14 @@ export interface Link {
   kind?: LinkKind;
 }
 
-/** One entry in the model's concern registry: the single place a concern is
- *  named and decorated. Responsibilities reference it by `slug`. Mirrors Rust
- *  `ConcernDef`. */
-export interface ConcernDef {
-  /** Kebab-case identifier, e.g. "auth", "failure-handling". Displayed as-is. */
-  slug: string;
-  /** One line on what accountability the concern covers. */
-  description?: string;
-  /** Lucide icon name (PascalCase, e.g. "Shield") — the glyph that prefixes
-   *  every responsibility tagged with this concern. Falls back to Tag. */
-  icon?: string;
-}
-
 export interface ScryModel {
   version: typeof SCRY_VERSION;
   nodes: Node[];
   links: Link[];
-  /** The concern registry — one entry per concern slug used by any
-   *  responsibility. */
-  concerns?: ConcernDef[];
-  /** Keyed by **responsibility id** → line-precise locations (conformance
+  /** Keyed by **claim id** → line-precise locations (conformance
    *  numerator). Agent-produced and regenerable; never hand-authored. */
   sourceMap?: Record<string, SourceLocation[]>;
-  /** Keyed by **responsibility id** → locations of the tests that back the
+  /** Keyed by **claim id** → locations of the tests that back the
    *  claim (which tests are attached). A separate dimension from `sourceMap` —
    *  where a claim is implemented vs. which tests are attached. Same single-home
    *  layer rule. Agent-produced; never executed. */
@@ -168,18 +150,18 @@ export function emptyModel(): ScryModel {
  * A symbol that defines a data type — it declares fields and discharges no
  * behavior. Renders with the table affordance and (like the former `schema`
  * kind) hides its incoming links, which are typically too numerous to be
- * useful. A symbol carrying both properties and responsibilities is not a pure
+ * useful. A symbol carrying both properties and claims is not a pure
  * data shape and renders as a normal code node, and neither is a React
  * component, whose properties are its props.
  */
 export function isDataShape(node: {
   properties?: SchemaProperty[];
-  responsibilities?: Responsibility[];
+  claims?: Claim[];
   technology?: string;
 }): boolean {
   return (
     (node.properties?.length ?? 0) > 0 &&
-    (node.responsibilities?.length ?? 0) === 0 &&
+    (node.claims?.length ?? 0) === 0 &&
     node.technology !== REACT_COMPONENT
   );
 }
@@ -213,8 +195,10 @@ export function effectiveTestMap(
 
 // --- Concerns (the cross-cutting lens) ----------------------------------------
 
-/** The seeded standard concern vocabulary: slug → {description, icon}. Mirrors
- *  Rust `STANDARD_CONCERNS` — keep the two in lockstep. */
+/** The standard concern vocabulary: slug → {description, icon}, for the
+ *  glyph and tooltip a tagged claim shows. Presentation only — a concern is
+ *  its claims' tag, and an unlisted slug shows the plain Tag glyph. The slugs
+ *  match the tagging rule's vocabulary (Rust `claim_grammar::rules`). */
 export const STANDARD_CONCERNS: ReadonlyMap<string, { description: string; icon: string }> =
   new Map([
     ["auth", { description: "Identity, authentication, and access control", icon: "Shield" }],
@@ -239,14 +223,27 @@ export const STANDARD_CONCERNS: ReadonlyMap<string, { description: string; icon:
     ],
   ]);
 
-/** Per-node subtree tally for one concern: node id → how many responsibilities
+/** Per-node subtree tally for one concern: node id → how many claims
  *  tagged `slug` live on the node or anywhere beneath it. Nodes with zero
  *  matches are absent — `counts.has(id)` IS the lens predicate ("does this
  *  concern live here?"). */
+/** The concerns the model's claims are tagged with, A to Z, each with how
+ *  many claims carry it: the concern lens's options. A concern exists only
+ *  as a claim's tag, so this is the whole vocabulary. */
+export function modelConcerns(model: ScryModel): { slug: string; count: number }[] {
+  const counts = new Map<string, number>();
+  for (const n of model.nodes)
+    for (const r of n.claims ?? [])
+      for (const slug of r.concerns ?? []) counts.set(slug, (counts.get(slug) ?? 0) + 1);
+  return [...counts]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([slug, count]) => ({ slug, count }));
+}
+
 export function concernCounts(model: ScryModel, slug: string): Map<string, number> {
   const own = new Map<string, number>();
   for (const node of model.nodes) {
-    const n = (node.responsibilities ?? []).filter((r) => r.concern === slug).length;
+    const n = (node.claims ?? []).filter((r) => r.concerns?.includes(slug)).length;
     if (n > 0) own.set(node.id, n);
   }
 
@@ -306,14 +303,14 @@ export function mintId(prefix: string, existing: Iterable<string>): string {
 
 // Claim ids are unique model-wide, so a draft claim's id clears every node's
 // claims in every layer. `draft` covers editor rows not yet written.
-export function nextResponsibilityId(
-  draft: Responsibility[],
+export function nextClaimId(
+  draft: Claim[],
   ...models: (ScryModel | null | undefined)[]
 ): string {
   const ids = draft.map((r) => r.id);
   for (const m of models) {
     if (!m) continue;
-    for (const n of m.nodes) for (const r of n.responsibilities ?? []) ids.push(r.id);
+    for (const n of m.nodes) for (const r of n.claims ?? []) ids.push(r.id);
   }
   return mintId("resp", ids);
 }

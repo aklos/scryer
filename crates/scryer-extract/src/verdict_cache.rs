@@ -156,7 +156,7 @@ fn store_results_on(r: &ModelRef, model: &ScryModel, report: &ReportMatch) -> Re
     let wording: HashMap<&str, ProvenAs> = model
         .nodes
         .iter()
-        .flat_map(|n| n.responsibilities.iter())
+        .flat_map(|n| n.claims.iter())
         .filter_map(|resp| {
             let file = model.test_map.get(&resp.id)?.first()?.pattern.clone();
             Some((resp.id.as_str(), ProvenAs { file, statement: resp.statement.clone() }))
@@ -308,7 +308,7 @@ fn live_claims(model: &ScryModel) -> BTreeSet<&str> {
     model
         .nodes
         .iter()
-        .flat_map(|n| n.responsibilities.iter())
+        .flat_map(|n| n.claims.iter())
         .map(|resp| resp.id.as_str())
         .collect()
 }
@@ -503,7 +503,7 @@ pub fn read_probe_statuses(r: &ModelRef) -> Result<Vec<ClaimProbeStatus>, String
     let live: BTreeSet<&str> = model
         .nodes
         .iter()
-        .flat_map(|n| n.responsibilities.iter())
+        .flat_map(|n| n.claims.iter())
         .map(|resp| resp.id.as_str())
         .collect();
     let mut files = FileCache::new();
@@ -592,7 +592,7 @@ pub fn ingest_mutation_file(r: &ModelRef, report: &str) -> Result<MutationSummar
 mod tests {
     use super::*;
     use scryer_core::test_results::TestOutcome;
-    use scryer_core::{Kind, Node, Responsibility, SourceLocation};
+    use scryer_core::{Kind, Node, Claim, SourceLocation};
 
     const IMPL_TS: &str = "export function alpha() {\n    return 1;\n}\n";
     const SPEC_TS: &str = "describe(\"alpha\", () => {\n  it(\"answers one\", () => {\n    expect(alpha()).toBe(1);\n  });\n});\n";
@@ -621,8 +621,8 @@ mod tests {
             external: None,
             technology: None,
             description: None,
-            responsibilities: vec![Responsibility {
-                concern: None,
+            claims: vec![Claim {
+                concerns: Vec::new(),
                 id: "r1".into(),
                 statement: "answers one".into(),
                 decisions: None,
@@ -665,7 +665,7 @@ mod tests {
         let (_dir, r) = project();
         fresh_statuses(&r);
         let mut m = TEST_MODEL.with(|c| c.borrow().clone()).unwrap();
-        let resp = &mut m.nodes[0].responsibilities[0];
+        let resp = &mut m.nodes[0].claims[0];
         resp.id = "r2".into();
         resp.statement = "answers exactly one".into();
         for map in [&mut m.source_map, &mut m.test_map] {
@@ -790,7 +790,7 @@ mod tests {
         let (_dir, r) = project();
         assert_eq!(fresh_statuses(&r).len(), 1);
         let mut m = working_model(&r).unwrap();
-        m.nodes[0].responsibilities.clear();
+        m.nodes[0].claims.clear();
         m.source_map.clear();
         m.test_map.clear();
         use_model(&m);
@@ -981,8 +981,8 @@ mod tests {
         )
         .unwrap();
         let mut m = working_model(&r).unwrap();
-        m.nodes[0].responsibilities.push(Responsibility {
-            concern: None,
+        m.nodes[0].claims.push(Claim {
+            concerns: Vec::new(),
             id: "r2".into(),
             statement: "answers two".into(),
             decisions: None,

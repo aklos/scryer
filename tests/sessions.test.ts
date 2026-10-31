@@ -102,7 +102,7 @@ describe("followView", () => {
 
   it("When a followed change rewrites the node's claims or description, shows it in the wiki", () => {
     expect(followView(tree(), tree((m) => (m.nodes[1].description = "Queues drafts.")), "a")).toBe("wiki");
-    expect(followView(tree(), tree((m) => (m.nodes[1].responsibilities = [{ id: "r", statement: "Saves offline" }])), "a")).toBe("wiki");
+    expect(followView(tree(), tree((m) => (m.nodes[1].claims = [{ id: "r", statement: "Saves offline" }])), "a")).toBe("wiki");
     expect(stepView({ kind: "verdict", at: 1, claim })).toBe("wiki");
     expect(stepView({ kind: "todo", at: 1, claim })).toBe("wiki");
   });

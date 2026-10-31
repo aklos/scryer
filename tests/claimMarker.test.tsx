@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ClaimMarker, ConcernTag } from "../src/widgets/node-page-sections/ResponsibilitiesSection";
+import { ClaimMarker, ConcernTag } from "../src/widgets/node-page-sections/ClaimsSection";
 import { CLAIM_TONE } from "../src/entities/model/claimState";
 import {
   claimMark,
@@ -79,13 +79,19 @@ describe("claim row marker", () => {
 
 describe("claim row concern", () => {
   it("Shows a tagged claim's concern as its glyph and name, in no state's hue", () => {
-    const html = renderToStaticMarkup(<ConcernTag slug="auth" concerns={[]} />);
+    const html = renderToStaticMarkup(<ConcernTag slugs={["auth"]} />);
     expect(html).toContain("<svg");
     expect(html).toContain(">auth<");
     for (const s of ["proven", "stale", "failing", "planned"] as const) expect(html).not.toContain(tone(s));
   });
 
+  it("Shows every concern of a claim tagged with several, in tag order", () => {
+    const html = renderToStaticMarkup(<ConcernTag slugs={["idempotency", "auth"]} />);
+    expect(html.indexOf(">idempotency<")).toBeGreaterThan(-1);
+    expect(html.indexOf(">auth<")).toBeGreaterThan(html.indexOf(">idempotency<"));
+  });
+
   it("Shows nothing in the concern lane for an untagged claim", () => {
-    expect(renderToStaticMarkup(<ConcernTag concerns={[]} />)).toBe("");
+    expect(renderToStaticMarkup(<ConcernTag />)).toBe("");
   });
 });

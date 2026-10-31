@@ -67,9 +67,9 @@ pub(crate) fn kind_str(k: &Kind) -> &'static str {
 }
 
 /// Build a compact outline tree of the model: each node carries its id, name,
-/// kind, a one-line description, and responsibility/property COUNTS (not
+/// kind, a one-line description, and claim/property COUNTS (not
 /// bodies), plus its children nested under it. Lets an agent grasp a model's
-/// shape without materializing every responsibility, property, link, and
+/// shape without materializing every claim, property, link, and
 /// source-map entry. Roots are nodes with no parent. When `include_symbols` is
 /// false the code level is omitted — the architecture overview (drill into a
 /// component with `read_model {node}` to see its symbols).
@@ -98,7 +98,7 @@ pub(crate) fn outline_tree(model: &ScryModel, include_symbols: bool) -> Vec<serd
             "name": node.name,
             "kind": kind_str(&node.kind),
             "description": node.description,
-            "nResp": node.responsibilities.len(),
+            "nResp": node.claims.len(),
             "nProps": node.properties.len(),
             "children": kids,
         });

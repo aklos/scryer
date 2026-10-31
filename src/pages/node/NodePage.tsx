@@ -28,7 +28,7 @@ import {
   effectiveSourceMap,
   effectiveTestMap,
   isDataShape,
-  nextResponsibilityId,
+  nextClaimId,
 } from "../../entities/model/viewmodel";
 import {
   structuralBySubtree,
@@ -61,7 +61,7 @@ import {
   NOTICE_ACTION,
 } from "../../widgets/node-page-sections/PageHeader";
 import { DescriptionSection } from "../../widgets/node-page-sections/DescriptionSection";
-import { ResponsibilitiesSection } from "../../widgets/node-page-sections/ResponsibilitiesSection";
+import { ClaimsSection } from "../../widgets/node-page-sections/ClaimsSection";
 import { PropertiesSection } from "../../widgets/node-page-sections/PropertiesSection";
 import { PreviewSection } from "../../widgets/node-page-sections/PreviewSection";
 import { ExercisedBySection } from "../../widgets/node-page-sections/ExercisedBySection";
@@ -233,19 +233,19 @@ function NodePageBody(props: PageProps & { node: Node }) {
   const anchor = [...ancestorChain(model, node.parentId), node].map((n) => n.name).join(" / ");
   const [structuralOpen, setStructuralOpen] = useState(false);
   const dataShape = isDataShape(node);
-  const resps = node.responsibilities ?? [];
+  const resps = node.claims ?? [];
   // Each claim's derived status: its row's marker, and what a reworded one
   // last passed as.
   const claimStatuses = Object.fromEntries((report?.derivedStatus?.claims ?? []).map((c) => [c.respId, c]));
   // The committed copy of this node's claims — the diff base for the Overview.
   const committedResps =
-    committed?.nodes.find((n) => n.id === node.id)?.responsibilities ?? [];
+    committed?.nodes.find((n) => n.id === node.id)?.claims ?? [];
   const definition = sourceMap[node.id] ?? [];
   // Preview-ability is derived, never stored: the section exists iff the
   // sidecar reports a mountable export for the node's anchored source file.
   const previewSourceFile =
     sourceMap[node.id]?.[0]?.pattern ??
-    node.responsibilities?.map((r) => sourceMap[r.id]?.[0]?.pattern).find(Boolean);
+    node.claims?.map((r) => sourceMap[r.id]?.[0]?.pattern).find(Boolean);
   const previewEntry = previewEntryFor(node, props.preview.components, previewSourceFile);
   const KindIcon = lookupIcon(node.icon) ?? kindIcon(node, previewEntry != null);
 
@@ -445,21 +445,20 @@ function NodePageBody(props: PageProps & { node: Node }) {
               {/* A symbol owns no claims by design; its section shows only
                   when a test is placed on it directly. */}
               {!dataShape && !(node.kind === "symbol" && resps.length === 0) && (
-                <ResponsibilitiesSection
+                <ClaimsSection
                   nodeId={node.id}
                   resps={resps}
                   prevResps={committedResps}
-                  concerns={model.concerns ?? []}
                   testMap={testMap}
                   testStates={testStates}
                   claimStatuses={claimStatuses}
                   testVerdicts={props.testVerdicts}
                   probeResults={props.probeResults}
                   projectPath={projectPath}
-                  mintId={(draft) => nextResponsibilityId(draft, model, committed)}
+                  mintId={(draft) => nextClaimId(draft, model, committed)}
                   editor={editor}
-                  editing={ed.isEditing("responsibilities")}
-                  onToggle={() => ed.toggle("responsibilities")}
+                  editing={ed.isEditing("claims")}
+                  onToggle={() => ed.toggle("claims")}
                 />
               )}
 

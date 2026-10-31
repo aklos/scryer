@@ -26,7 +26,7 @@ export function followView(prev: ScryModel, next: ScryModel, nodeId: string): Fo
       .join(" ");
   if (!before || before.parentId !== after.parentId || links(prev) !== links(next)) return "diagram";
   const says = (n: typeof after) =>
-    JSON.stringify([n.description ?? "", (n.responsibilities ?? []).map((r) => [r.id, r.statement])]);
+    JSON.stringify([n.description ?? "", (n.claims ?? []).map((r) => [r.id, r.statement])]);
   return says(before) !== says(after) ? "wiki" : null;
 }
 

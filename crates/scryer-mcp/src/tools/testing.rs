@@ -121,8 +121,14 @@ impl ScryerServer {
             Ok(x) => x,
             Err(e) => return error(e),
         };
-        // Only to name the claims in the answer by their tests.
-        let tree = load(&model_ref).ok().map(|l| l.tree);
+        // To name the claims in the answer by their tests, and to tell which
+        // were proven before this run.
+        let loaded = load(&model_ref).ok();
+        let proven_before: std::collections::HashSet<String> = loaded
+            .iter()
+            .flat_map(|l| l.tree.claims.iter().filter(|c| l.claim_status(c).starts_with("proven")).map(|c| c.id.clone()))
+            .collect();
+        let tree = loaded.map(|l| l.tree);
         // Two agents ingesting at once must not lose one report's verdicts
         // to a read-modify-write race.
         let _lock = match lock_or_err(&model_ref) {
@@ -134,11 +140,24 @@ impl ScryerServer {
             Err(e) => return error(format!("Failed to ingest '{}': {e}", req.path)),
         };
         drop(_lock);
+        let me = self.session_id(&model_ref);
+        // A proven claim this run turned red was someone's work: name the
+        // session that verified it last, read before this run's verdicts are
+        // recorded as the caller's own.
+        let mut broken: Vec<(String, Option<scryer_core::session::Peer>)> = summary
+            .report
+            .claims
+            .iter()
+            .filter(|(id, c)| {
+                matches!(c.outcome, TestOutcome::Failed | TestOutcome::Errored) && proven_before.contains(id.as_str())
+            })
+            .map(|(id, _)| (id.clone(), scryer_core::session::last_verifier(&model_ref, id, me.as_deref())))
+            .collect();
         // The claims whose verdicts this session recorded: what it proves
         // or breaks is its own, not every claim its edits reach.
-        if let Some(session) = self.session_id(&model_ref) {
+        if let Some(session) = me.as_deref() {
             let ids = summary.report.claims.keys().cloned().collect();
-            let _ = scryer_core::session::record_verdicts(&model_ref, &session, ids);
+            let _ = scryer_core::session::record_verdicts(&model_ref, session, ids);
         }
 
         let name_of = |id: &str| {
@@ -163,6 +182,20 @@ impl ScryerServer {
             msg.push_str(&format!("\n{} RED:", red.len()));
             for (name, outcome) in &red {
                 msg.push_str(&format!("\n  {name}: {outcome:?}"));
+            }
+        }
+        if !broken.is_empty() {
+            broken.sort_by(|a, b| a.0.cmp(&b.0));
+            msg.push_str("\nRed now, proven before this run:");
+            for (id, verifier) in &broken {
+                msg.push_str(&format!("\n  {}", name_of(id)));
+                if let Some(peer) = verifier {
+                    msg.push_str(&format!(
+                        " — last verified by {}: before changing its test or code, {}",
+                        peer.who(),
+                        peer.reach.how()
+                    ));
+                }
             }
         }
         if summary.report.unmatched_cases > 0 {
@@ -597,6 +630,38 @@ mod tests {
             .unwrap_or_default()
             .to_string();
         assert!(desc.contains("never through a subagent"), "{desc}");
+    }
+
+    /// When a run turns a proven claim red, names the session that last verified it and how to reach it.
+    #[test]
+    fn a_broken_claim_names_its_last_verifier() {
+        let dir = project();
+        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let case = |failure: &str| {
+            format!(r#"<testsuite name="notes"><testcase classname="notes" name="draft::tests::keeps_draft">{failure}</testcase></testsuite>"#)
+        };
+        let ingest = |session: &str, report: &str| {
+            write(dir.path(), "junit.xml", report);
+            text_of(
+                &ScryerServer::for_session(session)
+                    .ingest_test_report(Parameters(IngestReportRequest { project: project_arg(&dir), path: "junit.xml".into() }))
+                    .unwrap(),
+            )
+        };
+        scryer_core::session::record_harness(&r, "theirs", "codex").unwrap();
+        scryer_core::session::record_task(&r, "theirs", "keep drafts").unwrap();
+        ingest("theirs", &case(""));
+
+        let text = ingest("mine", &case(r#"<failure message="no"/>"#));
+        assert!(
+            text.contains(
+                "Red now, proven before this run:\n  keeps_draft — last verified by another session \
+                 (\"keep drafts\"): before changing its test or code, codex queue --thread theirs"
+            ),
+            "{text}"
+        );
+        let again = ingest("mine", &case(r#"<failure message="no"/>"#));
+        assert!(!again.contains("proven before"), "already failing: {again}");
     }
 
     /// An unreadable report answers with what went wrong.

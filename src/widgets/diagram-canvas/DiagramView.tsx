@@ -165,8 +165,8 @@ export function DiagramView({
   /** Nodes whose semantics aren't generated yet — drawn as pulsing placeholders.
    *  Used by the trailer's build sequence; unset (empty) in the product. */
   pendingIds?: ReadonlySet<string>;
-  /** The active concern lens (a registry slug, or null): cards whose subtree
-   *  holds no responsibility tagged with it dim, mirroring the tree. */
+  /** The active concern lens (a concern slug some claim carries, or null): cards whose subtree
+   *  holds no claim tagged with it dim, mirroring the tree. */
   concernLens?: string | null;
 }) {
   return (
@@ -292,7 +292,7 @@ function DiagramInner({
     return { active: true, neighbors };
   }, [scene, selectedId]);
 
-  // Concern lens: a card is lit when its subtree holds a responsibility tagged
+  // Concern lens: a card is lit when its subtree holds a claim tagged
   // with the active slug; everything else dims. Composes with the subgraph
   // highlight — either reason to dim, dims.
   const concernLit = useMemo(() => {

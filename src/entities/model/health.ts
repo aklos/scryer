@@ -5,7 +5,7 @@
  * UI renders it, never writes it.
  */
 
-import type { ScryModel, Link, Node, Responsibility } from "./viewmodel";
+import type { ScryModel, Link, Node, Claim } from "./viewmodel";
 import { effectiveTestMap } from "./viewmodel";
 import { earsTestable } from "./markup";
 import type { Completeness } from "./completeness";
@@ -13,7 +13,7 @@ import type { ClaimState } from "./derived";
 
 /** Health counters over one scope — a node's own content, or a whole subtree. */
 export interface HealthCounts {
-  responsibilities: number;
+  claims: number;
   properties: number;
   /** Claims expected to read through to code (any committed claim on a leaf). */
   anchorable: number;
@@ -67,7 +67,7 @@ export interface ModelHealth {
 export type AnchorState = "changed" | "broken" | "fileMissing";
 
 export interface AnchorObservation {
-  /** sourceMap key — responsibility id, or node id for a data-shape anchor. */
+  /** sourceMap key — claim id, or node id for a data-shape anchor. */
   key: string;
   hostId: string;
   hostName: string;
@@ -412,7 +412,7 @@ export function subtreeTestTone(
   };
   for (const n of model.nodes) {
     if (!inScope.has(n.id)) continue;
-    for (const r of n.responsibilities ?? []) fold(r.id);
+    for (const r of n.claims ?? []) fold(r.id);
   }
   return tone;
 }
@@ -654,7 +654,7 @@ export function pathsForLink(
 export interface TestFinding {
   kind: "untested" | "failing" | "hollow";
   node: Node;
-  resp: Responsibility;
+  resp: Claim;
   survivors?: string[];
 }
 
@@ -679,11 +679,11 @@ export function testFindings(
   const tests = effectiveTestMap(committed, model);
   const committedIds = new Set<string>();
   for (const n of committed?.nodes ?? [])
-    for (const r of n.responsibilities ?? []) committedIds.add(r.id);
+    for (const r of n.claims ?? []) committedIds.add(r.id);
   const out: TestFinding[] = [];
   for (const node of model.nodes) {
     const codeBacked = !node.external && node.kind !== "person";
-    for (const resp of node.responsibilities ?? []) {
+    for (const resp of node.claims ?? []) {
       const attached = (tests[resp.id] ?? []).length > 0;
       if (attached) {
         // Verdict and probe are both fingerprinted on the same anchors, so a

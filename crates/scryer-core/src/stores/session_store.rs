@@ -1,5 +1,5 @@
 //! Session logs on disk: `.scryer/sessions/<session_id>.jsonl`, one
-//! [`SessionEntry`] per line, append-only.
+//! [`SessionEntry`] per line, append-only until the whole log is pruned.
 //!
 //! Each append is one `write` of one line on a file opened `O_APPEND`, so the
 //! hook processes and the MCP server — separate processes writing the same
@@ -65,6 +65,12 @@ pub fn read(r: &ModelRef, session: &str) -> Vec<SessionEntry> {
     raw.lines()
         .filter_map(|l| serde_json::from_str(l).ok())
         .collect()
+}
+
+/// Delete the session's log.
+pub fn remove(r: &ModelRef, session: &str) -> Result<(), String> {
+    let path = session_path(r, session).ok_or_else(|| format!("invalid session id '{session}'"))?;
+    std::fs::remove_file(path).map_err(|e| e.to_string())
 }
 
 /// Every session with a log, most recently written first, with that mtime in

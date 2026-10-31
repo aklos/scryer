@@ -142,7 +142,7 @@ pub(crate) async fn ensure_preview_server(
 }
 
 /// Find a node's anchored source file: the node-id source-map entry (data
-/// shapes) or the first responsibility's source location.
+/// shapes) or the first claim's source location.
 fn node_source_file(model: &scryer_core::ScryModel, node_id: &str) -> String {
     let from_node = model
         .source_map
@@ -156,7 +156,7 @@ fn node_source_file(model: &scryer_core::ScryModel, node_id: &str) -> String {
                 .iter()
                 .find(|n| n.id == node_id)
                 .and_then(|node| {
-                    node.responsibilities
+                    node.claims
                         .iter()
                         .find_map(|r| model.source_map.get(&r.id))
                         .and_then(|locs| locs.first())
@@ -318,7 +318,7 @@ mod tests {
             serde_json::json!({ "id": "node-1", "kind": "symbol", "name": "Card" }),
         )
         .unwrap();
-        node.responsibilities = vec![serde_json::from_value(
+        node.claims = vec![serde_json::from_value(
             serde_json::json!({ "id": "resp-1", "statement": "renders the card" }),
         )
         .unwrap()];

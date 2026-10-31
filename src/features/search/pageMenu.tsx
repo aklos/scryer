@@ -3,10 +3,10 @@
  * state and renders the shared {@link ContextMenu}; any primitive on the page
  * calls `usePageMenu()(e, items)` from its own `onContextMenu` to open it. IDs
  * copied here are the references you paste into an agent prompt (the MCP
- * `read_model` can scope to a node/responsibility id).
+ * `read_model` can scope to a node/claim id).
  *
  * Handlers stop propagation, so the innermost primitive wins: right-clicking a
- * responsibility row copies the claim id; right-clicking elsewhere on the page
+ * claim row copies the claim id; right-clicking elsewhere on the page
  * falls through to the node id.
  */
 

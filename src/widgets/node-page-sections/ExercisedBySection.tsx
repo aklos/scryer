@@ -30,7 +30,7 @@ export function ExercisedBySection({
   const rows = useMemo(() => {
     const owner = new Map<string, { nodeId: string; nodeName: string; statement: string }>();
     for (const n of model.nodes)
-      for (const r of n.responsibilities ?? []) owner.set(r.id, { nodeId: n.id, nodeName: n.name, statement: r.statement });
+      for (const r of n.claims ?? []) owner.set(r.id, { nodeId: n.id, nodeName: n.name, statement: r.statement });
     const state = new Map((status?.claims ?? []).map((c) => [c.respId, c.state] as const));
     return claimIds.flatMap((id) => {
       const o = owner.get(id);

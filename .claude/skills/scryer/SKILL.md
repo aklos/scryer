@@ -120,6 +120,8 @@ A green test proves only what it checks. For a claim that matters, `open_probe {
 
 Several agents may be working in this repository at once. Nothing locks. Don't revert uncommitted changes you didn't make, and don't delete todo tests you didn't write unless the user asks.
 
+When another session has work at stake, scryer names it with how to reach it: `orient`, `locate` and the overlay on a file you read list its uncommitted edits and the todo tests it owns there, and `ingest_test_report` names who last verified a claim your run turned red. To change that work, ask its session first, the way the line says: message it by name in Claude Code, `codex queue` in Codex, or, when it is not running, a comment thread on the code.
+
 ## Comments
 
 People and other agents leave comment threads on nodes: questions, requests, decisions to respect. `orient`, `locate` and the overlay on a file you read list the open threads on its node and the nodes above it; `comments` lists them all.

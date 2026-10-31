@@ -15,6 +15,7 @@ pub mod probe_tree;
 pub mod product_code;
 pub mod session_hooks;
 pub mod session_log;
+pub mod session_peers;
 pub mod c4_model;
 pub use c4_model::{model, concerns, model_ref};
 pub mod derived;
@@ -95,6 +96,7 @@ pub mod build_edges {
 pub mod session {
     pub use crate::session_hooks::*;
     pub use crate::session_log::{relativize, SessionLog};
+    pub use crate::session_peers::{last_verifier, stakes_in_file, FileStake, Peer, Reach};
 }
 
 /// On-disk schema version of the derived tree's model shape.

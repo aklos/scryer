@@ -291,7 +291,7 @@ impl<'a> Docs<'a> {
         match part {
             Part::McpServer => d::mcp_json_state(root, exists),
             Part::AutoApprove => d::allow_state(root),
-            Part::Hooks => d::hooks_state(root, tool.hook_events(), exists),
+            Part::Hooks => d::hooks_state(root, tool.hook_events(), tool.hook_args(), exists),
             Part::Statusline => d::statusline_state(root, exists),
             Part::Skill | Part::Gitignore => unreachable!("not a JSON entry"),
         }

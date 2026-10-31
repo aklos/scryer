@@ -149,7 +149,7 @@ pub struct AmbiguousCase {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ReportMatch {
-    /// Responsibility id → aggregated verdict.
+    /// Claim id → aggregated verdict.
     pub claims: HashMap<String, ClaimOutcome>,
     /// Report cases naming no attached test. Expected to be most of any
     /// suite — attachment is curated, the suite is not.

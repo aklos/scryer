@@ -133,6 +133,15 @@ pub fn record_task(r: &ModelRef, session: &str, task: &str) -> Result<(), String
     session_store::append(r, session, SessionEvent::Task { text: task.to_string() })
 }
 
+/// Record the harness the session runs in, once: how another session can
+/// reach it.
+pub fn record_harness(r: &ModelRef, session: &str, name: &str) -> Result<(), String> {
+    if session_log(r, session).harness.as_deref() == Some(name) {
+        return Ok(());
+    }
+    session_store::append(r, session, SessionEvent::Harness { name: name.to_string() })
+}
+
 /// The task the session last oriented on, if any.
 pub fn session_task(r: &ModelRef, session: &str) -> Option<String> {
     session_log(r, session).task
@@ -200,6 +209,7 @@ pub fn stop(
     let Some(planned) = planned else {
         return session_store::append(r, session, SessionEvent::Stop);
     };
+    prune(r, session, planned, now_secs());
     let theirs: HashSet<(String, String)> = session_store::list(r)
         .into_iter()
         .filter(|(id, _)| id != session)
@@ -214,6 +224,43 @@ pub fn stop(
         session_store::append(r, session, SessionEvent::Reached { ids: reached })?;
     }
     session_store::append(r, session, SessionEvent::Stop)
+}
+
+/// How long a session's log is kept after its last write. The Sessions page
+/// lists the last week by default and older sessions on request; past this,
+/// a log only costs every overlay and orient that reads all of them.
+const KEEP_SECS: u64 = 30 * 86_400;
+
+/// Delete the logs of sessions other than `session` not written for
+/// [`KEEP_SECS`] before `now`, and the pid pointers to them, unless a log
+/// still owns a test that is todo in `planned`: that ownership is what stops
+/// another session deleting the test. Uncommitted edits keep no log: a month
+/// on, they are the checkout's, not a session's.
+fn prune(r: &ModelRef, session: &str, planned: &[(String, String)], now: u64) {
+    let planned: HashSet<&(String, String)> = planned.iter().collect();
+    let pruned: HashSet<String> = session_store::list(r)
+        .into_iter()
+        .filter(|(id, written)| id != session && written + KEEP_SECS < now)
+        .filter(|(id, _)| !session_log(r, id).stubs.iter().any(|s| planned.contains(s)))
+        .filter(|(id, _)| session_store::remove(r, id).is_ok())
+        .map(|(id, _)| id)
+        .collect();
+    if pruned.is_empty() {
+        return;
+    }
+    let Ok(pointers) = std::fs::read_dir(r.sessions_dir().join(".by-pid")) else { return };
+    for p in pointers.flatten() {
+        if std::fs::read_to_string(p.path()).is_ok_and(|s| pruned.contains(s.trim())) {
+            let _ = std::fs::remove_file(p.path());
+        }
+    }
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// Point harness process `pid` at `session`, so an MCP server spawned by that
@@ -411,6 +458,40 @@ mod tests {
 
         assert_eq!(record_shell_edits(&r, "a", Some("call-1")).unwrap(), vec!["src/mine.rs"]);
         assert!(!session_log(&r, "a").touched.contains(&"src/theirs.rs".to_string()));
+    }
+
+    /// At a stop, deletes other sessions' logs not written for 30 days and the pid pointers to them, keeping any that still owns a todo test.
+    #[test]
+    fn a_stop_prunes_logs_left_for_a_month() {
+        let (_dir, r) = project();
+        let t = |f: &str, n: &str| (f.to_string(), n.to_string());
+        let day = 86_400;
+        for id in ["old", "owner", "recent", "s"] {
+            record_touch(&r, id, "src/a.rs").unwrap();
+        }
+        crate::stores::append(&r, "owner", SessionEvent::Stub { file: "src/a.rs".into(), test: "wanted".into() })
+            .unwrap();
+        bind_pid(&r, "old", 7).unwrap();
+        bind_pid(&r, "recent", 8).unwrap();
+        let now = now_secs();
+        let age = |id: &str, days: u64| {
+            let f = std::fs::File::options().append(true).open(session_store::session_path(&r, id).unwrap()).unwrap();
+            f.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(now - days * day)).unwrap();
+        };
+        age("old", 31);
+        age("owner", 31);
+        age("recent", 29);
+        age("s", 31);
+
+        prune(&r, "s", &[t("src/a.rs", "wanted")], now);
+        let mut left: Vec<String> = list_sessions(&r).into_iter().map(|(id, _)| id).collect();
+        left.sort();
+        assert_eq!(left, vec!["owner", "recent", "s"], "the stopping session is never pruned by its own stop");
+        assert_eq!(session_for_pid(&r, 7), None, "the pointer went with its log");
+        assert_eq!(session_for_pid(&r, 8).as_deref(), Some("recent"));
+
+        prune(&r, "s", &[], now);
+        assert!(!list_sessions(&r).iter().any(|(id, _)| id == "owner"), "once its test is no longer todo");
     }
 
     #[test]

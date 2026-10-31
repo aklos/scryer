@@ -107,7 +107,40 @@ impl std::fmt::Display for ModelRef {
 // --- Project model resolution ---
 
 /// The project at `project_path`, when it has a `.scryer/` directory (its
-/// `structure.toml`, sessions and caches live there).
+/// `structure.toml`, sessions and caches live there). The home directory is
+/// never a project: its `~/.scryer/` is the global settings dir, and taking
+/// it for one would make every repo under `~` without its own `.scryer/`
+/// resolve to `~`.
 pub fn resolve_project(project_path: &Path) -> Option<ModelRef> {
+    resolve_project_under(project_path, dirs::home_dir().as_deref())
+}
+
+fn resolve_project_under(project_path: &Path, home: Option<&Path>) -> Option<ModelRef> {
+    if home.is_some_and(|h| same_dir(h, project_path)) {
+        return None;
+    }
     project_path.join(".scryer").is_dir().then(|| ModelRef::ProjectLocal(project_path.to_path_buf()))
+}
+
+fn same_dir(a: &Path, b: &Path) -> bool {
+    a == b || matches!((a.canonicalize(), b.canonicalize()), (Ok(x), Ok(y)) if x == y)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn if_the_directory_is_home_then_its_global_scryer_dir_is_not_taken_for_a_project() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".scryer")).unwrap();
+        let repo = home.path().join("Projects/repo");
+        std::fs::create_dir_all(repo.join(".scryer")).unwrap();
+
+        assert_eq!(resolve_project_under(home.path(), Some(home.path())), None);
+        assert_eq!(
+            resolve_project_under(&repo, Some(home.path())),
+            Some(ModelRef::ProjectLocal(repo.clone()))
+        );
+    }
 }

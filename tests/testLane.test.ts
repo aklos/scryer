@@ -16,7 +16,7 @@ import {
   type ClaimTestStatus,
   type ClaimProbeStatus,
 } from "../src/entities/model/health";
-import type { Node, Responsibility } from "../src/entities/model/viewmodel";
+import type { Node, Claim } from "../src/entities/model/viewmodel";
 
 const verdict = (over: Partial<ClaimTestStatus>): ClaimTestStatus => ({
   respId: "r1",
@@ -47,13 +47,13 @@ describe("testLaneTone", () => {
 });
 
 describe("subtreeTestTone", () => {
-  const resp = (id: string): Responsibility => ({ id, statement: id });
+  const resp = (id: string): Claim => ({ id, statement: id });
   const node = (id: string, parentId: string | undefined, resps: string[]): Node => ({
     id,
     kind: "component",
     name: id,
     parentId,
-    responsibilities: resps.map(resp),
+    claims: resps.map(resp),
   });
   // root ── mid ── leaf, plus an unrelated sibling.
   const model = {

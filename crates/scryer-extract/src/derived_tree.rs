@@ -112,11 +112,11 @@ mod tests {
         assert_eq!(level_of("Saves and reloads a draft unchanged"), (ClaimLevel::Container, "Core".into(), false));
         assert_eq!(level_of("Writes and publishes a post"), (ClaimLevel::System, "drafts".into(), false));
 
-        let draft_claims: Vec<&str> = draft.responsibilities.iter().map(|r| r.statement.as_str()).collect();
+        let draft_claims: Vec<&str> = draft.claims.iter().map(|r| r.statement.as_str()).collect();
         assert_eq!(draft_claims.len(), 2);
         let committed_draft = tree.committed.nodes.iter().find(|n| n.id == draft.id).unwrap();
-        assert_eq!(committed_draft.responsibilities.len(), 1, "the todo stub is planned only");
-        assert_eq!(draft.responsibilities[0].concern.as_deref(), Some("persistence"));
+        assert_eq!(committed_draft.claims.len(), 1, "the todo stub is planned only");
+        assert_eq!(draft.claims[0].concerns, ["persistence"]);
 
         // Symbols are the product definitions; test helpers stay out.
         let symbols: BTreeSet<&str> = m
@@ -320,7 +320,7 @@ mod tests {
         assert_eq!(named("launch").layer.as_deref(), Some("domain"));
         assert_eq!(named("launch").description.as_deref(), Some("Which agent to run."));
         assert_eq!(named("client").layer.as_deref(), Some("infrastructure"));
-        assert_eq!(named("domain").layer.as_deref(), Some("domain"));
+        assert!(!tree.planned.nodes.iter().any(|n| n.name == "domain"), "a layer folder's mod.rs is wiring, not a component");
         assert_eq!(named("rules").layer.as_deref(), Some("application"));
         assert_eq!(named("odd").layer, None);
         assert_eq!(named("odd").description.as_deref(), Some("See [`launch`]."));
@@ -516,7 +516,7 @@ mod tests {
         assert!(!named.iter().any(|n| n.name == "doc"), "doc.go speaks for its folder");
     }
 
-    /// When a top folder is named for one of its container's style layers, makes each folder inside it a component on that layer, in any language, and keeps the files loose in it one component named for the layer.
+    /// When a top folder is named for one of its container's style layers and the style lets siblings use each other, makes each folder and each file loose in it a component on that layer, in any language, so no component is named for a layer.
     #[test]
     fn a_layer_folder_holds_components_not_one() {
         let dir = tempfile::tempdir().unwrap();
@@ -541,10 +541,58 @@ mod tests {
             BTreeMap::from([
                 ("Cargo", Some("features")),
                 ("Combat", Some("features")),
-                ("features", Some("features")),
-                ("framework", Some("framework")),
+                ("EventBus", Some("framework")),
+                ("Glue", Some("features")),
             ]),
         );
+    }
+
+    /// When a layer folder's own root file (`domain/mod.rs`) only wires the files beside it, treats it as the container's wiring like a crate root, and each file is a component named for its job with its own module doc as its description.
+    #[test]
+    fn a_layer_folders_root_is_wiring_not_a_component() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n");
+        write(d, "crates/ledger/Cargo.toml", "[package]\nname = \"ledger\"\nversion = \"0.1.0\"\n");
+        write(d, "crates/ledger/src/lib.rs", "//! The ledger.\npub mod domain;\n");
+        write(d, "crates/ledger/src/domain/mod.rs", "//! Accounts and the rules that balance them.\npub mod account;\npub mod refund;\n");
+        write(d, "crates/ledger/src/domain/account.rs", "//! An account's balance, from its entries.\npub struct Account;\n");
+        write(
+            d,
+            "crates/ledger/src/domain/refund.rs",
+            "//! A refund gives part of a capture back.\nuse super::account::Account;\npub struct Refund(pub Account);\n",
+        );
+        write(
+            d,
+            ".scryer/structure.toml",
+            "[containers.ledger]\nname = \"Ledger\"\nstyle = \"hexagonal\"\nlayers = [\"domain\", \"application\", \"infrastructure\"]\n",
+        );
+        let tree = derived_tree_uncached(d).unwrap();
+        let components: BTreeMap<&str, (Option<&str>, Option<&str>)> = tree
+            .planned
+            .nodes
+            .iter()
+            .filter(|n| n.kind == Kind::Component)
+            .map(|n| (n.name.as_str(), (n.layer.as_deref(), n.description.as_deref())))
+            .collect();
+        assert_eq!(
+            components,
+            BTreeMap::from([
+                ("account", (Some("domain"), Some("An account's balance, from its entries."))),
+                ("refund", (Some("domain"), Some("A refund gives part of a capture back."))),
+            ]),
+            "{:?}",
+            tree.planned.nodes.iter().map(|n| (&n.name, n.kind)).collect::<Vec<_>>()
+        );
+        assert!(!tree.style_violations.iter().any(|v| v.kind == "layerless"), "{:?}", tree.style_violations);
+        let symbols: Vec<(&str, &str)> = tree
+            .planned
+            .nodes
+            .iter()
+            .filter(|n| n.kind == Kind::Symbol)
+            .map(|n| (n.name.as_str(), tree.planned.nodes.iter().find(|p| Some(&p.id) == n.parent_id.as_ref()).unwrap().name.as_str()))
+            .collect();
+        assert_eq!(symbols, [("Account", "account"), ("Refund", "refund")], "a job file's symbols sit on its component, not on a copy of it");
     }
 
     /// When a component imports another of its own layer, links them as siblings that use each other, which its style allows.
@@ -1050,6 +1098,24 @@ mod tests {
         assert!(dark.contains("web/src/shared/cache.ts"), "{dark:?}");
     }
 
+    /// Carries each test's decisions onto its claim.
+    #[test]
+    fn a_claim_carries_its_tests_decisions() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "Cargo.toml", "[package]\nname = \"auth\"\nversion = \"0.1.0\"\n");
+        write(
+            d,
+            "src/lib.rs",
+            "pub fn check() {}\n#[cfg(test)]\nmod tests {\n    /// Rejects a stale token\n    ///\n    /// Not refreshed.\n    #[test]\n    fn rejects() { super::check(); }\n}\n",
+        );
+        let tree = derived_tree_uncached(d).unwrap();
+        let claim = tree.claims.iter().find(|c| c.identifier == "rejects").unwrap();
+        assert_eq!(claim.decisions.as_deref(), Some("Not refreshed."));
+        let resp = tree.planned.nodes.iter().flat_map(|n| &n.claims).find(|r| r.id == claim.id).unwrap();
+        assert_eq!(resp.decisions.as_deref(), Some("Not refreshed."), "the app reads it on the claim");
+    }
+
     /// When a documented, tested file becomes a sub-component, it takes its
     /// directory's layer, and its imports are held to the style.
     #[test]
@@ -1096,24 +1162,6 @@ mod tests {
         let named = |n: &str| tree.planned.nodes.iter().find(|x| x.name == n).unwrap();
         assert_eq!(named("refund").layer.as_deref(), Some("entities"));
         assert!(tree.style_violations.is_empty(), "{:?}", tree.style_violations);
-    }
-
-    /// Carries each test's decisions onto its claim.
-    #[test]
-    fn a_claim_carries_its_tests_decisions() {
-        let dir = tempfile::tempdir().unwrap();
-        let d = dir.path();
-        write(d, "Cargo.toml", "[package]\nname = \"auth\"\nversion = \"0.1.0\"\n");
-        write(
-            d,
-            "src/lib.rs",
-            "pub fn check() {}\n#[cfg(test)]\nmod tests {\n    /// Rejects a stale token\n    ///\n    /// Not refreshed.\n    #[test]\n    fn rejects() { super::check(); }\n}\n",
-        );
-        let tree = derived_tree_uncached(d).unwrap();
-        let claim = tree.claims.iter().find(|c| c.identifier == "rejects").unwrap();
-        assert_eq!(claim.decisions.as_deref(), Some("Not refreshed."));
-        let resp = tree.planned.nodes.iter().flat_map(|n| &n.responsibilities).find(|r| r.id == claim.id).unwrap();
-        assert_eq!(resp.decisions.as_deref(), Some("Not refreshed."), "the app reads it on the responsibility");
     }
 
     /// When a forbidden link comes from an import outside any definition (a
@@ -1205,7 +1253,7 @@ mod tests {
                 .iter()
                 .filter(|n| n.kind == Kind::Component && n.parent_id.as_deref() == Some(c.id.as_str()))
                 .collect();
-            let own = c.responsibilities.len();
+            let own = c.claims.len();
             // Unit claims sit on components and their sub-components.
             let mut below: BTreeSet<&str> = comps.iter().map(|n| n.id.as_str()).collect();
             for n in m.nodes.iter().filter(|n| n.kind == Kind::Component) {
@@ -1217,7 +1265,7 @@ mod tests {
                 .nodes
                 .iter()
                 .filter(|n| below.contains(n.id.as_str()))
-                .map(|n| n.responsibilities.len())
+                .map(|n| n.claims.len())
                 .sum();
             eprintln!(
                 "  {} — {} components, {} container claims, {} unit claims{}",
@@ -1229,7 +1277,7 @@ mod tests {
             );
         }
         let sys = m.nodes.iter().find(|n| n.kind == Kind::System && n.external.is_none()).unwrap();
-        eprintln!("  system claims on {}: {}", sys.name, sys.responsibilities.len());
+        eprintln!("  system claims on {}: {}", sys.name, sys.claims.len());
         if let Ok(path) = std::env::var("DUMP_NODE") {
             let ids: BTreeSet<&str> = m.nodes.iter().filter(|n| n.name == path).map(|n| n.id.as_str()).collect();
             let mut files: BTreeMap<&str, usize> = BTreeMap::new();

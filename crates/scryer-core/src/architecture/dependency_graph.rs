@@ -162,15 +162,15 @@ pub fn derive_graph(model: &ScryModel, edges: &BuildEdges) -> DerivedGraph {
 
     // --- endpoint resolution ---------------------------------------------------
     // 1) (file, symbol name) → host node, from sourceMap. Definition anchors
-    //    (node-id keys) are authored first and win over responsibility anchors.
+    //    (node-id keys) are authored first and win over claim anchors.
     let mut by_symbol: HashMap<(&str, &str), &str> = HashMap::new();
     let mut resp_host: HashMap<&str, &str> = HashMap::new();
     for node in &model.nodes {
-        for resp in &node.responsibilities {
+        for resp in &node.claims {
             resp_host.insert(resp.id.as_str(), node.id.as_str());
         }
     }
-    // Two passes for deterministic precedence: definitions, then responsibilities.
+    // Two passes for deterministic precedence: definitions, then claims.
     for node in &model.nodes {
         if let Some(locs) = model.source_map.get(&node.id) {
             for loc in locs {
@@ -372,7 +372,7 @@ pub fn derive_graph(model: &ScryModel, edges: &BuildEdges) -> DerivedGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::c4_model::{Link, Node, Responsibility, Source, SourceLocation};
+    use crate::c4_model::{Link, Node, Claim, Source, SourceLocation};
 
     fn node(id: &str, kind: Kind, parent: Option<&str>) -> Node {
         Node {
@@ -389,7 +389,7 @@ mod tests {
             external: None,
             technology: None,
             description: None,
-            responsibilities: Vec::new(),
+            claims: Vec::new(),
             properties: Vec::new(),
             icon: None,
             position: None,
@@ -570,15 +570,15 @@ mod tests {
         );
     }
 
-    /// A responsibility anchor (resp-id key) resolves the symbol to its host
+    /// A claim anchor (resp-id key) resolves the symbol to its host
     /// node just like a definition anchor.
     #[test]
     fn responsibility_anchors_resolve_endpoints() {
         let mut m = ScryModel::new();
         m.nodes.push(node("sys", Kind::System, None));
         let mut sa = node("syma", Kind::Symbol, Some("sys"));
-        sa.responsibilities.push(Responsibility {
-            concern: None,
+        sa.claims.push(Claim {
+            concerns: Vec::new(),
             id: "r1".into(),
             statement: "does".into(),
             decisions: None,
@@ -848,7 +848,7 @@ mod ownership_tests {
             .collect();
         serde_json::from_value(serde_json::json!({
             "id": id, "kind": kind, "name": name, "parentId": parent,
-            "responsibilities": resps,
+            "claims": resps,
         }))
         .unwrap()
     }

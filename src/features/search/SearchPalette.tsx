@@ -46,8 +46,8 @@ function nodeFields(n: Node): Field[] {
   const f: Field[] = [{ label: null, rank: 0, text: n.name || "" }];
   if (n.technology) f.push({ label: "Technology", rank: 1, text: n.technology });
   if (n.description) f.push({ label: "Description", rank: 2, text: n.description });
-  for (const r of n.responsibilities ?? []) {
-    if (r.statement) f.push({ label: "Responsibility", rank: 3, text: stripMarkup(r.statement) });
+  for (const r of n.claims ?? []) {
+    if (r.statement) f.push({ label: "Claim", rank: 3, text: stripMarkup(r.statement) });
     if (r.decisions) f.push({ label: "Decisions", rank: 4, text: r.decisions });
   }
   for (const p of n.properties ?? []) {
@@ -222,7 +222,7 @@ export function SearchPalette({
           <input
             ref={inputRef}
             type="text"
-            placeholder="Search names, descriptions, responsibilities…"
+            placeholder="Search names, descriptions, claims…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {

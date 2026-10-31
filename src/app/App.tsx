@@ -37,7 +37,7 @@ import { useTestStatuses } from "../features/health-feed/useTestStatuses";
 import { useFollow } from "../features/sessions/useFollow";
 import { sessionTitle, stepLine } from "../features/sessions/useSessions";
 import { structuralBySubtree } from "../entities/model/health";
-import { effectiveSourceMap, type ScryModel } from "../entities/model/viewmodel";
+import { effectiveSourceMap, modelConcerns, type ScryModel } from "../entities/model/viewmodel";
 import type { Editor } from "../entities/model/editor";
 
 /** Navigation a host sends through the event layer: the demo film, which
@@ -185,13 +185,13 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
 
   // The concern lens — the cross-cutting third axis ("where does auth live?").
   // One selected slug dims every tree row and diagram card whose subtree holds
-  // no responsibility tagged with it. Shared by the tree (picker + dimming) and
+  // no claim tagged with it. Shared by the tree (picker + dimming) and
   // the map (dimming), so both surfaces answer the question together. Guarded
-  // against the registry: a slug that left the model (project switch, agent
-  // rename) silently deactivates instead of dimming everything.
+  // against the claims: a slug no claim carries any more (project switch, a
+  // retagged test) silently deactivates instead of dimming everything.
   const [concernLensRaw, setConcernLens] = useState<string | null>(null);
   const concernLens =
-    concernLensRaw && (model.concerns ?? []).some((c) => c.slug === concernLensRaw)
+    concernLensRaw && modelConcerns(model).some((c) => c.slug === concernLensRaw)
       ? concernLensRaw
       : null;
 

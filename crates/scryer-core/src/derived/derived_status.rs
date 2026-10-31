@@ -350,7 +350,7 @@ mod tests {
             external: None,
             technology: None,
             description: None,
-            responsibilities: Vec::new(),
+            claims: Vec::new(),
             properties: Vec::new(),
             icon: None,
             position: None,

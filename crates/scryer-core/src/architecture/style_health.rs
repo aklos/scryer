@@ -181,7 +181,7 @@ impl<'a> FileIndex<'a> {
         let mut component_files: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
         let mut resp_host: HashMap<&str, &str> = HashMap::new();
         for n in &model.nodes {
-            for r in &n.responsibilities {
+            for r in &n.claims {
                 resp_host.insert(r.id.as_str(), n.id.as_str());
             }
         }
@@ -584,7 +584,7 @@ pub fn check_code(
             other: Some(dst),
             file,
             container: breach.container.id.clone(),
-            detail: format!("declared link {}: {}", l.id, breach.detail),
+            detail: breach.detail.clone(),
         });
     }
 
@@ -975,13 +975,13 @@ mod tests {
         for (id, name, layer, file, sym) in comps {
             m.nodes.push(node(serde_json::json!({
                 "id": id, "kind": "component", "name": name, "parentId": "svc", "layer": layer,
-                "responsibilities": [{ "id": format!("r-{id}"), "statement": "does x" }]
+                "claims": [{ "id": format!("r-{id}"), "statement": "does x" }]
             })));
             anchor(&mut m, &format!("r-{id}"), file, sym);
         }
         m.nodes.push(node(serde_json::json!({
             "id": "page", "kind": "component", "name": "Page", "parentId": "ui", "layer": "pages",
-            "responsibilities": [{ "id": "r-page", "statement": "shows" }]
+            "claims": [{ "id": "r-page", "statement": "shows" }]
         })));
         anchor(&mut m, "r-page", "ui/pages/checkout.tsx", "CheckoutPage");
         m.boundaries.insert(
@@ -1054,7 +1054,7 @@ mod tests {
         ] {
             m.nodes.push(node(serde_json::json!({
                 "id": id, "kind": "component", "name": name, "parentId": "lib", "layer": layer,
-                "responsibilities": [{ "id": format!("r-{id}"), "statement": "does x" }]
+                "claims": [{ "id": format!("r-{id}"), "statement": "does x" }]
             })));
             anchor(&mut m, &format!("r-{id}"), file, sym);
         }
@@ -1079,7 +1079,7 @@ mod tests {
         let mut m = hex_service();
         m.nodes.push(node(serde_json::json!({
             "id": "boot", "kind": "component", "name": "Boot", "parentId": "svc", "layer": "composition",
-            "responsibilities": [{ "id": "r-boot", "statement": "wires" }]
+            "claims": [{ "id": "r-boot", "statement": "wires" }]
         })));
         anchor(&mut m, "r-boot", "svc/composition/main.rs", "main");
         let r = report(
@@ -1107,7 +1107,7 @@ mod tests {
         m.nodes.push(node(serde_json::json!({ "id": "lib", "kind": "container", "name": "Lib", "parentId": "sys", "style": "library" })));
         m.nodes.push(node(serde_json::json!({
             "id": "model", "kind": "component", "name": "Model", "parentId": "lib", "layer": "domain",
-            "responsibilities": [{ "id": "r-model", "statement": "holds" }]
+            "claims": [{ "id": "r-model", "statement": "holds" }]
         })));
         anchor(&mut m, "r-model", "lib/domain/model.rs", "Model");
         let r = report(
@@ -1136,7 +1136,7 @@ mod tests {
         m.nodes.push(node(serde_json::json!({ "id": "lib", "kind": "container", "name": "Lib", "parentId": "sys", "style": "library" })));
         m.nodes.push(node(serde_json::json!({
             "id": "entry", "kind": "component", "name": "Entry", "parentId": "lib", "layer": "composition",
-            "responsibilities": [{ "id": "r-entry", "statement": "opens" }]
+            "claims": [{ "id": "r-entry", "statement": "opens" }]
         })));
         anchor(&mut m, "r-entry", "lib/composition/open.rs", "open_project");
         let r = report(
@@ -1160,7 +1160,7 @@ mod tests {
         m.nodes.iter_mut().find(|n| n.id == "ui").unwrap().style = Some("feature-sliced".into());
         m.nodes.push(node(serde_json::json!({
             "id": "page2", "kind": "component", "name": "Other", "parentId": "ui", "layer": "pages",
-            "responsibilities": [{ "id": "r-page2", "statement": "shows" }]
+            "claims": [{ "id": "r-page2", "statement": "shows" }]
         })));
         anchor(&mut m, "r-page2", "ui/pages/other.tsx", "OtherPage");
         let r = report(
@@ -1308,7 +1308,7 @@ mod tests {
         ] {
             m.nodes.push(node(serde_json::json!({
                 "id": id, "kind": "component", "name": id, "parentId": parent, "layer": layer,
-                "responsibilities": [{ "id": format!("r-{id}"), "statement": "does x" }]
+                "claims": [{ "id": format!("r-{id}"), "statement": "does x" }]
             })));
             anchor(&mut m, &format!("r-{id}"), file, sym);
         }
@@ -1382,7 +1382,7 @@ mod tests {
         assert_eq!(r.forbidden_links, 1, "{:#?}", r.violations);
         let v = &r.violations[0];
         assert_eq!((v.node.as_str(), v.other.as_deref(), v.container.as_str()), ("dom", Some("infra"), "svc"));
-        assert!(v.detail.starts_with("declared link l-bad: 'Orders' (domain) → 'Postgres' (infrastructure) is illegal"), "{}", v.detail);
+        assert!(v.detail.starts_with("'Orders' (domain) → 'Postgres' (infrastructure) is illegal"), "{}", v.detail);
 
         // The code importing across the same pair is already the layer
         // violation; the declared link does not count it twice.
@@ -1402,7 +1402,7 @@ mod tests {
         for (id, name, file, sym) in [("film", "film", "demo/film/a.tsx", "Film"), ("shots", "shots", "demo/shots/b.tsx", "Shot")] {
             m.nodes.push(node(serde_json::json!({
                 "id": id, "kind": "component", "name": name, "parentId": "demo",
-                "responsibilities": [{ "id": format!("r-{id}"), "statement": "plays" }]
+                "claims": [{ "id": format!("r-{id}"), "statement": "plays" }]
             })));
             anchor(&mut m, &format!("r-{id}"), file, sym);
         }
@@ -1519,7 +1519,7 @@ mod tests {
     fn a_file_on_another_layers_path_is_misplaced() {
         let mut m = hex_service();
         // Orders (domain) gets a second anchored file that lives under infrastructure/.
-        m.nodes.iter_mut().find(|n| n.id == "dom").unwrap().responsibilities.push(
+        m.nodes.iter_mut().find(|n| n.id == "dom").unwrap().claims.push(
             serde_json::from_value(serde_json::json!({ "id": "r-dom2", "statement": "prices" })).unwrap(),
         );
         anchor(&mut m, "r-dom2", "svc/infrastructure/pricing.rs", "price");
@@ -1540,7 +1540,7 @@ mod tests {
             node(serde_json::json!({ "id": "sys", "kind": "system", "name": "S" })),
             node(serde_json::json!({ "id": "api", "kind": "container", "name": "Api", "parentId": "sys", "style": "hexagonal" })),
             node(serde_json::json!({ "id": "dom", "kind": "component", "name": "Orders", "parentId": "api", "layer": "domain",
-                                     "responsibilities": [{ "id": "r1", "statement": "x" }] })),
+                                     "claims": [{ "id": "r1", "statement": "x" }] })),
         ];
         m.boundaries.insert("api".into(), vec![crate::c4_model::Source { pattern: "api/**/*".into(), comment: None }]);
         anchor(&mut m, "r1", "api/domain/order.rs", "Order");

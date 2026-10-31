@@ -8,12 +8,14 @@
 //! against the project's derived tree and the session's log
 //! (`.scryer/sessions/<session_id>.jsonl`); the desktop app need not be open.
 //!
-//! - UserPromptSubmit  → bind the harness process to the session; the prompt
-//!                       is never read; say nothing
+//! - UserPromptSubmit  → bind the harness process to the session and note
+//!                       which harness it is; the prompt is never read; say
+//!                       nothing
 //! - PostToolUse read  → inject what the tree says about the file — its node,
 //!                       what its layer may import and how the file breaks
-//!                       that, description and claims (once per session
-//!                       until it changes)
+//!                       that, description and claims, and other sessions'
+//!                       uncommitted edits and todo tests in it (once per
+//!                       session until it changes)
 //! - PostToolUse edit… → record the touch, say nothing
 //! - Pre/PostToolUse shell → record the files the command modified; while a
 //!                       probe is open, refuse a git command that would
@@ -52,8 +54,10 @@ use std::path::{Path, PathBuf};
 ///   `additionalContext` on PostToolUse (only its PreToolUse
 ///   accepts either). One reply can't satisfy both without guessing.
 ///
-/// So the install records the harness in the registered command — `hook` or
-/// `hook --copilot` — and the client is told rather than left to sniff.
+/// So the install records the harness in the registered command — `hook`,
+/// `hook --codex` or `hook --copilot` — and the client is told rather than
+/// left to sniff. Codex shares Claude Code's vocabulary and envelope; its
+/// flag only names the harness another session reaches it through.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Harness {
     /// Claude Code and Codex: same vocabulary, same envelope.
@@ -127,6 +131,16 @@ pub fn run_hook_client(args: &[String]) -> Result<(), Box<dyn std::error::Error>
     } else {
         Harness::ClaudeLike
     };
+    // Which harness the session runs in, for how another session reaches it.
+    // A Codex hook installed before it named itself reads as Claude Code,
+    // which is then found in no Claude Code registry: reached by comment.
+    let harness_name = if harness == Harness::Copilot {
+        "copilot"
+    } else if args.iter().any(|a| a == "--codex") {
+        "codex"
+    } else {
+        "claude-code"
+    };
 
     let mut input = String::new();
     if std::io::stdin().read_to_string(&mut input).is_err() {
@@ -141,7 +155,7 @@ pub fn run_hook_client(args: &[String]) -> Result<(), Box<dyn std::error::Error>
     };
 
     match event["hook_event_name"].as_str().unwrap_or_default() {
-        "UserPromptSubmit" => user_prompt_submit(&r, &event),
+        "UserPromptSubmit" => user_prompt_submit(&r, &event, harness_name),
         "PreToolUse" => pre_tool_use(&r, &event, harness),
         "PostToolUse" => post_tool_use(&r, &event, harness),
         "Stop" => stop(&r, &event),
@@ -193,7 +207,8 @@ const OVERLAY_CLAIMS_CAP: usize = 8;
 fn overlay_text(r: &ModelRef, event: &serde_json::Value, file: &str) -> Option<String> {
     let rel = scryer_core::session::relativize(r.project_path(), file);
     let loaded = crate::derived::load(r).ok()?;
-    let report = crate::tools::read::file_report(&loaded, &rel, Some(OVERLAY_CLAIMS_CAP));
+    let mut report = crate::tools::read::file_report(&loaded, &rel, Some(OVERLAY_CLAIMS_CAP));
+    crate::tools::read::add_sessions(&mut report, &loaded, r, &rel, session_id(event));
     let overlay = scryer_core::session::overlay(r, session_id(event), file, report).ok()??;
     render_overlay(&overlay)
 }
@@ -414,8 +429,13 @@ fn render_overlay(overlay: &serde_json::Value) -> Option<String> {
     let rule = overlay["style"].as_str();
     let tooling = overlay["tooling"].as_str();
     let comments: Vec<&str> = overlay["comments"].as_array().into_iter().flatten().filter_map(|c| c.as_str()).collect();
-    overlay["node"].as_str()?;
-    if claims.is_empty()
+    // Another session's work in the file matters wherever the file sits.
+    let sessions: Vec<&str> = overlay["sessions"].as_array().into_iter().flatten().filter_map(|c| c.as_str()).collect();
+    if overlay["node"].as_str().is_none() && sessions.is_empty() {
+        return None;
+    }
+    if sessions.is_empty()
+        && claims.is_empty()
         && description.is_none()
         && violations.is_empty()
         && rule.is_none()
@@ -434,6 +454,9 @@ fn render_overlay(overlay: &serde_json::Value) -> Option<String> {
         (Some(rule), _) => out.push_str(&format!("layer: {rule}\n")),
         (None, Some(layer)) => out.push_str(&format!("layer: {layer}\n")),
         (None, None) => {}
+    }
+    for line in &sessions {
+        out.push_str(&format!("{line}\n"));
     }
     if let Some(t) = tooling {
         out.push_str(&format!("{t}\n"));
@@ -468,11 +491,12 @@ fn render_overlay(overlay: &serde_json::Value) -> Option<String> {
 /// Bind the harness process to the session, so an MCP server it spawned
 /// before a `/clear` follows the session to its new id. The prompt itself is
 /// never read: scryer does not record what the developer types. Silent.
-fn user_prompt_submit(r: &ModelRef, event: &serde_json::Value) {
+fn user_prompt_submit(r: &ModelRef, event: &serde_json::Value, harness: &str) {
     let Some(session) = session_id(event) else { return };
     for pid in ancestor_pids() {
         let _ = scryer_core::session::bind_pid(r, session, pid);
     }
+    let _ = scryer_core::session::record_harness(r, session, harness);
     // The first submit notes the todo tests already there and the claims
     // already proven, so what this session writes and proves can be told
     // apart from what was.
@@ -672,7 +696,7 @@ mod tests {
         let dir = crate::tools::fixture::project();
         let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
         let event = |hook: &str| serde_json::json!({ "hook_event_name": hook, "session_id": "s", "cwd": dir.path() });
-        user_prompt_submit(&r, &event("UserPromptSubmit"));
+        user_prompt_submit(&r, &event("UserPromptSubmit"), "claude-code");
 
         let draft = dir.path().join("crates/notes/src/draft.rs");
         let text = std::fs::read_to_string(&draft).unwrap().replace(
@@ -730,6 +754,44 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(text, "[scryer] demo/film.tsx\ntooling: not held to style rules");
+    }
+
+    /// When another session has uncommitted edits or todo tests in a file, the overlay names it and how to reach it.
+    #[test]
+    fn an_overlay_names_other_sessions_at_stake() {
+        let dir = crate::tools::fixture::project();
+        crate::tools::fixture::git_init(dir.path());
+        let r = ModelRef::ProjectLocal(dir.path().to_path_buf());
+        let draft = "crates/notes/src/draft.rs";
+        let read = |session: &str| {
+            let event = serde_json::json!({ "hook_event_name": "PostToolUse", "session_id": session, "cwd": dir.path() });
+            overlay_text(&r, &event, &dir.path().join(draft).to_string_lossy())
+        };
+        let quiet = read("mine").unwrap();
+        assert!(!quiet.contains("another session"), "{quiet}");
+
+        // Another session, in Codex, writes a todo test into the file and stops.
+        let theirs = |hook: &str| serde_json::json!({ "hook_event_name": hook, "session_id": "theirs", "cwd": dir.path() });
+        user_prompt_submit(&r, &theirs("UserPromptSubmit"), "codex");
+        scryer_core::session::record_task(&r, "theirs", "rename drafts").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let text = std::fs::read_to_string(dir.path().join(draft)).unwrap().replace(
+            "    fn merges() { todo!() }\n",
+            "    fn merges() { todo!() }\n\n    /// When a draft is renamed, keeps its text\n    #[test]\n    fn renames() { todo!() }\n",
+        );
+        crate::tools::fixture::write(dir.path(), draft, &text);
+        scryer_core::session::record_touch(&r, "theirs", draft).unwrap();
+        stop(&r, &theirs("Stop"));
+
+        let text = read("mine").unwrap();
+        assert!(
+            text.contains(
+                "another session (\"rename drafts\") has uncommitted edits here and owns the todo tests renames here: \
+                 don't revert or delete them; to change them, codex queue --thread theirs"
+            ),
+            "{text}"
+        );
+        assert!(!read("theirs").unwrap_or_default().contains("another session"), "never its own work");
     }
 
     /// When Copilot names a tool `view`, `create`, `edit` or `str_replace_editor` with the file under `path`, treats it as the read or write Claude Code names with `file_path`.

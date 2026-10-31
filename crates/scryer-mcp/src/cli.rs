@@ -89,10 +89,11 @@ pub(crate) fn statusline_start_dir(input: &str) -> Option<PathBuf> {
 /// Walk up from `start` to the first directory containing `.scryer/`. The
 /// first hit ends the walk — an empty `.scryer` is not a reason to keep
 /// climbing into a parent project (same rule as the hook client's discovery).
+/// The home directory's `~/.scryer/` is global settings, never a project.
 pub(crate) fn find_project(start: &Path) -> Option<PathBuf> {
     let mut dir = Some(start.to_path_buf());
     while let Some(d) = dir {
-        if d.join(".scryer").is_dir() {
+        if scryer_core::resolve_project(&d).is_some() {
             return Some(d);
         }
         dir = d.parent().map(Path::to_path_buf);
@@ -181,7 +182,7 @@ pub(crate) struct LintFinding {
 pub(crate) fn lint_tree(tree: &DerivedTree) -> Vec<LintFinding> {
     let mut out = Vec::new();
     for c in &tree.claims {
-        for issue in scryer_core::ears::lint(&c.description, &c.concerns) {
+        for issue in scryer_core::ears::lint(&c.description) {
             out.push(LintFinding {
                 at: format!("{}:{}", c.file, c.line),
                 code: issue.code,
@@ -298,6 +299,70 @@ pub(crate) fn export(project: &Path) -> Result<serde_json::Value, String> {
         "sessions": sessions,
         "layout": layout,
     }))
+}
+
+/// `scryer-mcp template export <node> [--project dir]` prints the template
+/// of the subtree at `<node>` (a node id, a container's directory, or a
+/// node's name) as JSON; `scryer-mcp template import <file> [--project dir]`
+/// scaffolds one into the project, or into the directory when it is none
+/// yet, and prints what it wrote; `--as <dir>` lands a one-container
+/// template in another directory. Exit 2 when either cannot be done.
+pub(crate) fn run_template(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    const USAGE: &str = "scryer-mcp template export <node> [--project dir]\n       scryer-mcp template import <file> [--as dir] [--project dir]";
+    let fail = |msg: String| -> ! {
+        eprintln!("{msg}");
+        std::process::exit(2);
+    };
+    let (verb, rest) = args.split_first().unwrap_or_else(|| fail(format!("usage: {USAGE}")));
+    let mut start: Option<PathBuf> = None;
+    let mut target: Option<&String> = None;
+    let mut at: Option<&String> = None;
+    let mut it = rest.iter();
+    while let Some(a) = it.next() {
+        match (a.as_str(), it.len()) {
+            ("--project", n) if n > 0 && start.is_none() => start = it.next().map(PathBuf::from),
+            ("--as", n) if n > 0 && at.is_none() && verb == "import" => at = it.next(),
+            (other, _) if !other.starts_with("--") && target.is_none() => target = Some(a),
+            (other, _) => fail(format!("unknown argument '{other}'\nusage: {USAGE}")),
+        }
+    }
+    let target = target.unwrap_or_else(|| fail(format!("usage: {USAGE}")));
+    let start = match start {
+        Some(p) => p,
+        None => std::env::current_dir()?,
+    };
+    match verb.as_str() {
+        "export" => {
+            let project = find_project(&start)
+                .unwrap_or_else(|| fail(format!("scryer template: no project (no .scryer/ at or above {})", start.display())));
+            match export_template(&project, target) {
+                Ok(t) => println!("{}", serde_json::to_string_pretty(&t)?),
+                Err(e) => fail(format!("scryer template: {e}")),
+            }
+        }
+        "import" => {
+            let text = std::fs::read_to_string(target).unwrap_or_else(|e| fail(format!("scryer template: {target}: {e}")));
+            let template: scryer_extract::template::Template =
+                serde_json::from_str(&text).unwrap_or_else(|e| fail(format!("scryer template: {target}: {e}")));
+            let template = match at {
+                Some(dir) => template.moved(dir).unwrap_or_else(|e| fail(format!("scryer template: {e}"))),
+                None => template,
+            };
+            let project = find_project(&start).unwrap_or(start);
+            match scryer_extract::claim_writing::scaffold(&project, &template) {
+                Ok(out) => println!("{}", serde_json::to_string_pretty(&out)?),
+                Err(e) => fail(format!("scryer template: {e}")),
+            }
+        }
+        other => fail(format!("unknown template command '{other}'\nusage: {USAGE}")),
+    }
+    Ok(())
+}
+
+pub(crate) fn export_template(project: &Path, node: &str) -> Result<scryer_extract::template::Template, String> {
+    let tree = scryer_extract::derived_tree::derived_tree(project)?;
+    let structure = scryer_extract::derived_tree::read_structure(project)?;
+    scryer_extract::template::template_of(&tree, &structure, node)
 }
 
 /// `scryer-mcp check [--fail-on-stale] [--fail-on-mutants] [path]` — the CI

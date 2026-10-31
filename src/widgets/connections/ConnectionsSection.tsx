@@ -211,12 +211,12 @@ function NodeRef({
 }
 
 /** A symbol node's source file: its own definition anchor, else the first of
- *  its responsibilities' anchors. Undefined when nothing anchors it. */
+ *  its claims' anchors. Undefined when nothing anchors it. */
 function symbolFile(model: ScryModel, node: Node): string | undefined {
   const sm = model.sourceMap ?? {};
   return (
     sm[node.id]?.[0]?.pattern ??
-    node.responsibilities?.map((r) => sm[r.id]?.[0]?.pattern).find(Boolean)
+    node.claims?.map((r) => sm[r.id]?.[0]?.pattern).find(Boolean)
   );
 }
 

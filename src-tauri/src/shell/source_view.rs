@@ -185,7 +185,7 @@ fn text_search_symbol(lines: &[&str], symbol: &str) -> Option<u32> {
 
 /// Read a span of a source file for the inspector's code view.
 ///
-/// `file` is the `SourceLocation.pattern`. The responsibility's *focus* is the
+/// `file` is the `SourceLocation.pattern`. The claim's *focus* is the
 /// explicit `line`/`end_line` range — the statements that do its work. `symbol`
 /// names the enclosing definition: it's the durable anchor (so the focus can be
 /// shown even as line numbers drift) and bounds what we render — the whole
@@ -238,7 +238,7 @@ pub(crate) fn read_source_span(
                 .or_else(|| text_search_symbol(&all, s).map(|st| (st, (st + DEFAULT_SPAN).min(total))))
         });
 
-    // Focus: the responsibility's specific lines if given, else the whole
+    // Focus: the claim's specific lines if given, else the whole
     // enclosing symbol, else the file head.
     let (focus_start, focus_end) = match line {
         Some(l) => {

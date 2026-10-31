@@ -12,9 +12,9 @@ use crate::code_map::{ContainerFacts, Edge, ExternalImport, FileContext};
 use crate::code_map::Member;
 use crate::structure::{ClaimLevel, Structure};
 use scryer_core::derived_tree::{DerivedClaim, DerivedTree};
-use scryer_core::style::Styles;
+use scryer_core::style::{Isolation, Styles};
 use scryer_core::{
-    Kind, Link, LinkKind, Node, Responsibility, SchemaProperty, ScryModel, Source, SourceLocation,
+    Kind, Link, LinkKind, Node, Claim, SchemaProperty, ScryModel, Source, SourceLocation,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -197,22 +197,53 @@ fn property(m: &Member) -> SchemaProperty {
 /// The component a product file belongs to: the first directory under the
 /// source root, or the file's own module when it sits at the root. A first
 /// directory named for one of the container's `layers` is a layer, not a
-/// component: each directory inside it is a component, and the files loose
-/// in it stay one component named for the layer.
-/// Returns (component path, display name).
-fn component_of(container_dir: &str, rel: &str, layers: &[String]) -> (String, String) {
+/// component: each directory inside it is a component, and so is each file
+/// loose in it, named for its job — never for the layer. (The folder's own
+/// root file is the container's wiring: `layer_root`.)
+/// Returns (component path, display name, whether the component is one file).
+fn component_of(container_dir: &str, rel: &str, layers: &[String], split: bool) -> (String, String, bool) {
     let (root, inner) = inner_path(container_dir, rel);
     let join = |seg: &str| if root.is_empty() { seg.to_string() } else { format!("{root}/{seg}") };
     match inner.split_once('/') {
-        Some((layer, rest)) if layers.iter().any(|l| l == layer) && rest.contains('/') => {
-            let dir = rest.split('/').next().unwrap_or(rest);
-            (join(&format!("{layer}/{dir}")), dir.to_string())
-        }
-        Some((dir, _)) => (join(dir), dir.to_string()),
+        Some((layer, rest)) if layers.iter().any(|l| l == layer) => match rest.split_once('/') {
+            Some((dir, _)) => (join(&format!("{layer}/{dir}")), dir.to_string(), false),
+            // A style that isolates its slices (feature-sliced) reads the files
+            // loose in a layer folder as the layer's one shared slice; the
+            // folder's own root is a component only when it is all the folder
+            // holds (else it is wiring).
+            None if !split || is_folder_root(rel) => (join(layer), layer.to_string(), false),
+            None => {
+                let stem = file_stem(rest);
+                (join(&format!("{layer}/{stem}")), stem.to_string(), true)
+            }
+        },
+        Some((dir, _)) => (join(dir), dir.to_string(), false),
         None => {
             let stem = file_stem(inner);
-            (join(stem), stem.to_string())
+            (join(stem), stem.to_string(), true)
         }
+    }
+}
+
+/// The file that speaks for a layer folder — `domain/mod.rs`, `domain/index.ts`,
+/// `domain/__init__.py`, or `domain.rs` beside `domain/` — in a container
+/// whose style has that layer: the folder's path (`crates/ledger/src/domain/`).
+/// When the folder holds other files, this one is the container's wiring
+/// like a crate root, part of no component: a component is named for a job,
+/// never for a layer. (A folder with nothing but its root stays one
+/// component, named for the folder; there is nothing else to name it for.)
+fn layer_root(container_dir: &str, rel: &str, layers: &[String], split: bool) -> Option<String> {
+    if !split {
+        return None;
+    }
+    let (_, inner) = inner_path(container_dir, rel);
+    let root = &rel[..rel.len() - inner.len()];
+    match inner.split_once('/') {
+        Some((layer, rest)) if layers.iter().any(|l| l == layer) && !rest.contains('/') && is_folder_root(rel) => {
+            Some(format!("{root}{layer}/"))
+        }
+        None if layers.iter().any(|l| l == file_stem(inner)) => Some(format!("{root}{}/", file_stem(inner))),
+        _ => None,
     }
 }
 
@@ -386,6 +417,34 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
             })
     };
 
+    // Whether a container's style reads the files loose in a layer folder as
+    // components of their own (named for their jobs) or, when it isolates
+    // its slices, as the layer's one shared slice.
+    let splits_loose = |dir: &str| -> bool {
+        let dir = s.package_owner(dir).unwrap_or(dir);
+        input
+            .containers
+            .iter()
+            .find(|c| c.dir == dir)
+            .and_then(|c| s.container(&c.name, &c.dir))
+            .and_then(|k| k.style.as_deref())
+            .and_then(|st| styles.get(st))
+            .is_none_or(|d| d.isolation != Isolation::Strict)
+    };
+    // A file that is wiring rather than a component: a crate root, or the
+    // root of a layer folder.
+    let layer_roots: HashSet<&str> = input
+        .lifts
+        .keys()
+        .map(String::as_str)
+        .filter(|rel| {
+            owner(rel)
+                .and_then(|c| layer_root(&c.dir, rel, &layers_of(&c.dir), splits_loose(&c.dir)))
+                .is_some_and(|folder| input.lifts.keys().any(|o| o.as_str() != *rel && o.starts_with(&folder)))
+        })
+        .collect();
+    let wiring = |rel: &str| crate_root(rel) || layer_roots.contains(rel);
+
     let mut edges_from: HashMap<&str, Vec<&str>> = HashMap::new();
     for e in input.file_edges.iter().filter(|e| !e.guessed) {
         edges_from.entry(e.src.as_str()).or_default().push(e.dst.as_str());
@@ -438,7 +497,8 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
             }
         }
         let layers = layers_of(&c.dir);
-        let paths = reached.iter().filter(|f| owned(f)).map(|f| component_of(&c.dir, f, &layers).0).collect();
+        let split = splits_loose(&c.dir);
+        let paths = reached.iter().filter(|f| owned(f)).map(|f| component_of(&c.dir, f, &layers, split).0).collect();
         product_paths.insert(c.dir.as_str(), paths);
     }
 
@@ -448,12 +508,12 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
     let mut file_component: HashMap<&str, String> = HashMap::new();
     let mut tooling: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for rel in input.lifts.keys() {
-        if is_test_file(rel) || crate_root(rel) {
+        if is_test_file(rel) || wiring(rel) {
             continue;
         }
         let Some(c) = owner(rel) else { continue };
         let Some(container_id) = container_ids.get(c.dir.as_str()) else { continue };
-        let (path, name) = component_of(&c.dir, rel, &layers_of(&c.dir));
+        let (path, name, one_file) = component_of(&c.dir, rel, &layers_of(&c.dir), splits_loose(&c.dir));
         let unreached = product_paths.get(c.dir.as_str()).is_some_and(|paths| !paths.contains(&path));
         if unreached || is_tool_config(&c.dir, rel) {
             tooling.entry(container_id.clone()).or_default().push(rel.clone());
@@ -467,8 +527,7 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
             patterns: BTreeSet::new(),
         });
         comp.files.push(rel.clone());
-        let (_, inner) = inner_path(&c.dir, rel);
-        comp.patterns.insert(if inner.contains('/') { format!("{path}/**") } else { rel.clone() });
+        comp.patterns.insert(if one_file { rel.clone() } else { format!("{path}/**") });
         file_component.insert(rel.as_str(), path);
     }
 
@@ -498,9 +557,9 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         let home = match (level, target_container) {
             (ClaimLevel::System, _) | (_, None) => Home::System,
             (ClaimLevel::Container, Some(dir)) => Home::Container(dir),
-            (ClaimLevel::Component, Some(dir)) if crate_root(rel) => Home::Container(dir),
+            (ClaimLevel::Component, Some(dir)) if wiring(rel) => Home::Container(dir),
             (ClaimLevel::Component, Some(dir)) => {
-                unit_home(rel, &dir, &layers_of(&dir), &components, &file_component, &edges_from)
+                unit_home(rel, &dir, &layers_of(&dir), splits_loose(&dir), &components, &file_component, &edges_from)
                     .unwrap_or_else(|| Home::TestStem(dir, tested_stem(file_name(rel))))
             }
         };
@@ -509,7 +568,8 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
 
     // A product file with a module doc is a sub-component of its directory
     // component: the doc declares it one, tested or not. Unless it is that
-    // directory's root, whose doc describes the directory itself.
+    // directory's root, whose doc describes the directory itself, or the
+    // component is that one file (a job file loose in a layer folder).
     let sub_files: BTreeSet<&str> = file_component
         .keys()
         .copied()
@@ -518,6 +578,7 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
             input.lifts[*f].module_description.is_some()
                 && inner_path(&comp.container_dir, f).1.contains('/')
                 && !is_folder_root(f)
+                && !comp.patterns.contains(*f)
         })
         .collect();
 
@@ -615,7 +676,7 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
     for f in input.files {
         let parent = match file_component.get(f.rel_path.as_str()) {
             Some(path) => sub_ids.get(f.rel_path.as_str()).unwrap_or(&components[path].id).clone(),
-            None if crate_root(&f.rel_path) => match owner(&f.rel_path).and_then(|c| container_ids.get(c.dir.as_str())) {
+            None if wiring(&f.rel_path) => match owner(&f.rel_path).and_then(|c| container_ids.get(c.dir.as_str())) {
                 Some(id) => id.clone(),
                 None => continue,
             },
@@ -693,12 +754,11 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
                     }
                 }
             }
-            let concern = t.concerns.iter().find(|c| !c.contains(':')).cloned();
             let idx = node_index[&node_id];
-            model.nodes[idx].responsibilities.push(Responsibility {
+            model.nodes[idx].claims.push(Claim {
                 id: id.clone(),
                 statement: t.description.clone(),
-                concern,
+                concerns: scryer_core::concerns::concern_tags(&t.concerns),
                 decisions: t.decisions.clone(),
             });
             model.test_map.insert(
@@ -740,7 +800,7 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
     let endpoint = |f: &str| -> Option<(&str, Option<&String>)> {
         match file_component.get(f) {
             Some(path) => Some((components[path].container_dir.as_str(), Some(&components[path].id))),
-            None if crate_root(f) => owner(f).map(|c| (c.dir.as_str(), None)),
+            None if wiring(f) => owner(f).map(|c| (c.dir.as_str(), None)),
             None => None,
         }
     };
@@ -889,11 +949,10 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         }
     }
 
-    scryer_core::concerns::register_concerns(&mut model);
     let planned_ids: HashSet<&str> = claims.iter().filter(|c| c.planned).map(|c| c.id.as_str()).collect();
     let mut committed = model.clone();
     for n in committed.nodes.iter_mut() {
-        n.responsibilities.retain(|r| !planned_ids.contains(r.id.as_str()));
+        n.claims.retain(|r| !planned_ids.contains(r.id.as_str()));
         n.exercised_by.retain(|id| !planned_ids.contains(id.as_str()));
     }
     committed.test_map.retain(|id, _| !planned_ids.contains(id.as_str()));
@@ -902,7 +961,7 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
     let file_nodes: BTreeMap<String, String> = file_component
         .iter()
         .map(|(f, path)| (f.to_string(), sub_ids.get(f).unwrap_or(&components[path].id).clone()))
-        .chain(input.lifts.keys().filter(|f| crate_root(f)).filter_map(|f| {
+        .chain(input.lifts.keys().filter(|f| wiring(f)).filter_map(|f| {
             let id = owner(f).and_then(|c| container_ids.get(c.dir.as_str()))?;
             Some((f.clone(), id.clone()))
         }))
@@ -1018,7 +1077,7 @@ fn absorb_packages(model: &mut ScryModel, claims: &mut [DerivedClaim], absorbed:
     let mut moved_claims = Vec::new();
     let mut technology = HashMap::new();
     for n in model.nodes.iter().filter(|n| absorbed.contains_key(&n.id)) {
-        moved_claims.extend(n.responsibilities.iter().cloned().map(|r| (to(&n.id), r)));
+        moved_claims.extend(n.claims.iter().cloned().map(|r| (to(&n.id), r)));
         if let Some(t) = &n.technology {
             technology.entry(to(&n.id)).or_insert_with(|| t.clone());
         }
@@ -1028,7 +1087,7 @@ fn absorb_packages(model: &mut ScryModel, claims: &mut [DerivedClaim], absorbed:
         if let Some(p) = n.parent_id.as_deref().filter(|p| absorbed.contains_key(*p)) {
             n.parent_id = Some(to(p));
         }
-        n.responsibilities.extend(moved_claims.iter().filter(|(into, _)| *into == n.id).map(|(_, r)| r.clone()));
+        n.claims.extend(moved_claims.iter().filter(|(into, _)| *into == n.id).map(|(_, r)| r.clone()));
         if n.technology.is_none() {
             n.technology = technology.get(&n.id).cloned();
         }
@@ -1140,6 +1199,7 @@ fn unit_home(
     rel: &str,
     container_dir: &str,
     layers: &[String],
+    split: bool,
     components: &BTreeMap<String, Component>,
     file_component: &HashMap<&str, String>,
     edges_from: &HashMap<&str, Vec<&str>>,
@@ -1160,7 +1220,7 @@ fn unit_home(
         return Some(Home::File(f.to_string()));
     }
     // A colocated test file sits in its component's directory.
-    let (own_path, _) = component_of(container_dir, rel, layers);
+    let (own_path, _, _) = component_of(container_dir, rel, layers, split);
     if inner_path(container_dir, rel).1.contains('/') && components.contains_key(&own_path) {
         return Some(Home::Component(own_path));
     }
@@ -1217,7 +1277,7 @@ fn node(id: &str, kind: Kind, name: &str, parent: Option<&str>) -> Node {
         external: None,
         technology: None,
         description: None,
-        responsibilities: Vec::new(),
+        claims: Vec::new(),
         properties: Vec::new(),
         icon: None,
         position: None,

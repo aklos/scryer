@@ -10,7 +10,7 @@ use crate::claim_text::{lift_file, sentence_case};
 use crate::derivation::set_container_field;
 use crate::claim_file_io::stub_target;
 use crate::tree_from_disk::derived_tree;
-use scryer_core::{Kind, Node, Responsibility, ScryModel, SourceLocation};
+use scryer_core::{Kind, Node, Claim, ScryModel, SourceLocation};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use tree_sitter::Parser;
@@ -180,7 +180,7 @@ pub fn migrate(project: &Path) -> Result<MigrationReport, String> {
     let mut report = MigrationReport::default();
 
     // The working view: the plan's copy of each claim and map entry wins.
-    let mut claims: BTreeMap<String, (Node, Responsibility)> = BTreeMap::new();
+    let mut claims: BTreeMap<String, (Node, Claim)> = BTreeMap::new();
     let mut test_map: BTreeMap<String, Vec<SourceLocation>> = committed.test_map.clone();
     let mut source_map: BTreeMap<String, Vec<SourceLocation>> = committed.source_map.clone();
     let mut boundaries = committed.boundaries.clone();
@@ -188,7 +188,7 @@ pub fn migrate(project: &Path) -> Result<MigrationReport, String> {
     for layer in std::iter::once(&committed).chain(planned.as_ref()) {
         for n in &layer.nodes {
             nodes.insert(n.id.clone(), n.clone());
-            for r in &n.responsibilities {
+            for r in &n.claims {
                 claims.insert(r.id.clone(), (n.clone(), r.clone()));
             }
         }
@@ -233,7 +233,7 @@ pub fn migrate(project: &Path) -> Result<MigrationReport, String> {
                     // one file, else the file of the directory they share.
                     let below: BTreeSet<String> = descendants(&nodes, &host.id)
                         .iter()
-                        .flat_map(|n| n.responsibilities.iter().map(|r| r.id.clone()).chain(std::iter::once(n.id.clone())))
+                        .flat_map(|n| n.claims.iter().map(|r| r.id.clone()).chain(std::iter::once(n.id.clone())))
                         .filter_map(|key| file_of(&key))
                         .collect();
                     match below.len() {

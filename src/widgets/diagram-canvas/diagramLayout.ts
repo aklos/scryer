@@ -70,7 +70,7 @@ export interface DiagramNode {
   /** The layer this node plays in its governing style (components; symbols
    *  inherit). Drives the card's layer tag and the styled layout. */
   layer?: string;
-  /** Carries responsibilities or a data shape of its own. A symbol without
+  /** Carries claims or a data shape of its own. A symbol without
    *  any reads hollow on the code tier — a hub nobody has described. */
   hasClaims: boolean;
   x: number;
@@ -332,7 +332,7 @@ export async function buildDiagramScene(
       symbolClass: previewable.has(n.id) ? "visual" : isDataShape(n) ? "model" : "code",
       style: n.style,
       layer: layerOf(model, n.id),
-      hasClaims: (n.responsibilities?.length ?? 0) > 0 || (n.properties?.length ?? 0) > 0,
+      hasClaims: (n.claims?.length ?? 0) > 0 || (n.properties?.length ?? 0) > 0,
     };
   };
 

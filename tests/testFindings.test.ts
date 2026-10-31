@@ -18,7 +18,7 @@ const node = (id: string, parentId: string | undefined, over: Partial<Node> = {}
   kind: "component",
   name: id,
   parentId,
-  responsibilities: [],
+  claims: [],
   ...over,
 });
 const model = (nodes: Node[], testMap: ScryModel["testMap"] = {}): ScryModel =>
@@ -47,21 +47,21 @@ const ubiquitous = { id: "r2", statement: "**Persist** every event" };
 describe("testFindings", () => {
   it("lists a committed testable claim with no test as untested, and nothing for a ubiquitous or plan-only one", () => {
     const leaf = node("leaf", undefined, {
-      responsibilities: [testable, ubiquitous, { id: "r3", statement: "**If** x, **then** y" }],
+      claims: [testable, ubiquitous, { id: "r3", statement: "**If** x, **then** y" }],
     });
-    const committed = model([node("leaf", undefined, { responsibilities: [testable, ubiquitous] })]);
+    const committed = model([node("leaf", undefined, { claims: [testable, ubiquitous] })]);
     const out = testFindings(model([leaf]), committed, {}, {});
     expect(out.map((f) => [f.kind, f.resp.id])).toEqual([["untested", "r1"]]);
   });
 
   it("never nags an external or person host for a missing test", () => {
-    const ext = node("ext", undefined, { external: true, responsibilities: [testable] });
+    const ext = node("ext", undefined, { external: true, claims: [testable] });
     expect(testFindings(model([ext]), model([ext]), {}, {})).toEqual([]);
   });
 
   it("reports a current failing verdict, and a probe survivor, but not passing or stale", () => {
     const leaf = node("leaf", undefined, {
-      responsibilities: [
+      claims: [
         { id: "a", statement: "**When** a, **do** a" },
         { id: "b", statement: "**When** b, **do** b" },
         { id: "c", statement: "**When** c, **do** c" },
@@ -94,7 +94,7 @@ describe("rollupTestFindings", () => {
     const nodes = [
       node("root", undefined),
       node("mid", "root"),
-      node("leaf", "mid", { responsibilities: [testable] }),
+      node("leaf", "mid", { claims: [testable] }),
       node("other", "root"),
     ];
     const m = model(nodes);

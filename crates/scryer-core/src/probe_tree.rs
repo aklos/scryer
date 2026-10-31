@@ -102,6 +102,18 @@ pub fn current_branch(dir: &Path) -> Option<String> {
     Some(out.trim().to_string()).filter(|b| !b.is_empty())
 }
 
+/// When `file` (relative to `dir`) has uncommitted changes, the unix second
+/// it was last committed, 0 for a file never committed; `None` when it is
+/// clean or `dir` is not a git repository.
+pub fn uncommitted_since(dir: &Path, file: &str) -> Option<u64> {
+    let status = git(dir, &["status", "--porcelain", "--", file]).ok()?;
+    if status.trim().is_empty() {
+        return None;
+    }
+    let last = git(dir, &["log", "-1", "--format=%ct", "--", file]).ok()?;
+    Some(last.trim().parse().unwrap_or(0))
+}
+
 /// The project's live git worktrees as `(path, branch)`, its main checkout
 /// first: every one whose directory still exists, leaving out scryer's own
 /// probe trees. The branch is `None` for a detached HEAD. Empty when the

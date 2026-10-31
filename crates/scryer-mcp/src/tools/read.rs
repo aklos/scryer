@@ -89,7 +89,7 @@ fn score_node(
 }
 
 /// The architecture overview: the model tree down to components (symbols
-/// excluded) with responsibility/property counts. Always small enough to read
+/// excluded) with claim/property counts. Always small enough to read
 /// whole, so an unqualified `read_model` can never bury the agent's context.
 fn overview_payload(model: &ScryModel) -> serde_json::Value {
     serde_json::json!({
@@ -97,11 +97,20 @@ fn overview_payload(model: &ScryModel) -> serde_json::Value {
         "view": "overview",
         "nodeCount": model.nodes.len(),
         "linkCount": model.links.len(),
-        // The concern registry — the tree's cross-cutting vocabulary, from
-        // the trailing [tags] on test descriptions.
-        "concerns": model.concerns,
+        // The concerns the claims are tagged with, each with its claim
+        // count: the tree's cross-cutting vocabulary.
+        "concerns": concern_counts(model),
         "overview": outline_tree(model, false),
     })
+}
+
+/// Each concern slug the model's claims carry → how many claims carry it.
+fn concern_counts(model: &ScryModel) -> std::collections::BTreeMap<&str, usize> {
+    let mut counts = std::collections::BTreeMap::new();
+    for slug in model.nodes.iter().flat_map(|n| &n.claims).flat_map(|r| &r.concerns) {
+        *counts.entry(slug.as_str()).or_default() += 1;
+    }
+    counts
 }
 
 /// Full detail of one node's subtree: the node, its descendants (including
@@ -168,12 +177,12 @@ fn subtree_payload(model: &ScryModel, node_id: &str) -> Result<serde_json::Value
         })
         .collect();
 
-    // Source map is keyed by responsibility id (entries for any responsibility
+    // Source map is keyed by claim id (entries for any claim
     // owned by a subtree node) or by a schema node id (entries for any schema
     // node in the subtree).
     let subtree_resp_ids: HashSet<&str> = subtree_nodes
         .iter()
-        .flat_map(|n| n.responsibilities.iter())
+        .flat_map(|n| n.claims.iter())
         .map(|r| r.id.as_str())
         .collect();
     let source_map: serde_json::Map<String, serde_json::Value> = model
@@ -224,20 +233,9 @@ fn subtree_payload(model: &ScryModel, node_id: &str) -> Result<serde_json::Value
         })
         .collect();
 
-    // Registry entries for the concerns tagged within this subtree, so a
-    // reader can resolve each responsibility's `concern` slug in place.
-    let used_concerns: HashSet<&str> = subtree_nodes
-        .iter()
-        .flat_map(|n| n.responsibilities.iter())
-        .filter_map(|r| r.concern.as_deref())
-        .collect();
-    let concerns: Vec<_> =
-        model.concerns.iter().filter(|c| used_concerns.contains(c.slug.as_str())).collect();
-
     Ok(serde_json::json!({
         "node": subtree_nodes.iter().find(|n| n.id == node_id),
         "descendants": subtree_nodes.iter().filter(|n| n.id != node_id).collect::<Vec<_>>(),
-        "concerns": concerns,
         "internalLinks": internal_links,
         "externalLinks": external_links,
         "contextNodes": context_nodes,
@@ -372,6 +370,19 @@ pub(crate) fn file_report(loaded: &derived::Loaded, file: &str, claims_cap: Opti
     v
 }
 
+/// Add to a file's report what other sessions have at stake in it: their
+/// uncommitted edits and the todo tests they own there, each with how to
+/// reach them. `me` is the caller's own session, never named.
+pub(crate) fn add_sessions(report: &mut serde_json::Value, loaded: &derived::Loaded, r: &ModelRef, file: &str, me: Option<&str>) {
+    let todo_now: Vec<String> =
+        loaded.tree.claims.iter().filter(|c| c.planned && c.file == file).map(|c| c.junit_name.clone()).collect();
+    let lines: Vec<String> =
+        scryer_core::session::stakes_in_file(r, file, me, &todo_now).iter().map(|s| s.line()).collect();
+    if !lines.is_empty() {
+        report["sessions"] = serde_json::json!(lines);
+    }
+}
+
 #[tool_router(router = tool_router_read, vis = "pub(crate)")]
 impl ScryerServer {
     #[tool(
@@ -423,7 +434,7 @@ impl ScryerServer {
                     "id": n.id,
                     "name": n.name,
                     "kind": kind_str(&n.kind),
-                    "nResp": n.responsibilities.len(),
+                    "nResp": n.claims.len(),
                     "nProps": n.properties.len(),
                 });
                 strip_fields_compact(&mut v);
@@ -531,6 +542,7 @@ impl ScryerServer {
         let tree = &loaded.tree;
         let file = normalize_project_rel(&model_ref, &req.file);
         let mut payload = file_report(&loaded, &file, Some(0));
+        add_sessions(&mut payload, &loaded, &model_ref, &file, self.session_id(&model_ref).as_deref());
         let node = derived::file_node(tree, &tree.planned, &file);
         let claims: Vec<serde_json::Value> = derived::file_claims(tree, node, &file)
             .into_iter()
@@ -579,8 +591,9 @@ impl ScryerServer {
             )]));
         }
         // The latest task this session orients on titles it.
-        if let (Some(task), Some(sid)) = (task, self.session_id(&model_ref)) {
-            let _ = scryer_core::session::record_task(&model_ref, &sid, task);
+        let me = self.session_id(&model_ref);
+        if let (Some(task), Some(sid)) = (task, me.as_deref()) {
+            let _ = scryer_core::session::record_task(&model_ref, sid, task);
         }
         let loaded = match load_or_err(&model_ref) {
             Ok(t) => t,
@@ -591,7 +604,12 @@ impl ScryerServer {
         let mut files_out: Vec<serde_json::Value> = files
             .iter()
             .take(ORIENT_FILES)
-            .map(|f| file_report(&loaded, &normalize_project_rel(&model_ref, f), Some(ORIENT_CLAIMS_PER_FILE)))
+            .map(|f| {
+                let file = normalize_project_rel(&model_ref, f);
+                let mut report = file_report(&loaded, &file, Some(ORIENT_CLAIMS_PER_FILE));
+                add_sessions(&mut report, &loaded, &model_ref, &file, me.as_deref());
+                report
+            })
             .collect();
         if files.len() > ORIENT_FILES {
             files_out.push(serde_json::json!({
@@ -629,7 +647,7 @@ impl ScryerServer {
                     "id": n.id,
                     "kind": kind_str(&n.kind),
                     "path": breadcrumb(model, &n.id),
-                    "claims": n.responsibilities.len(),
+                    "claims": n.claims.len(),
                     "planned": (planned > 0).then_some(planned),
                 });
                 strip_fields_compact(&mut v);
@@ -670,7 +688,7 @@ fn node_fields(n: &Node) -> Vec<(&'static str, String)> {
     if let Some(t) = &n.technology {
         fields.push(("technology", t.clone()));
     }
-    for r in &n.responsibilities {
+    for r in &n.claims {
         fields.push(("claim", r.statement.clone()));
     }
     for p in &n.properties {
@@ -834,24 +852,6 @@ mod tests {
         assert!(at("README.md")["note"].as_str().unwrap().contains("No container or component"));
     }
 
-    /// read_model reads the derived tree: the overview has the crate and its
-    /// components, and the committed layer leaves the todo stub out.
-    #[test]
-    fn read_model_reads_the_derived_tree_by_layer() {
-        let dir = project();
-        let server = ScryerServer::new();
-        let read = |node: Option<String>, layer: Layer| {
-            json_of(&server.read_model(Parameters(ReadModelRequest { project: project_arg(&dir), node, layer })).unwrap())
-        };
-        let text = read(None, Layer::Plan).to_string();
-        assert!(text.contains("\"draft\"") && text.contains("\"store\""), "{text}");
-        let tree = derived::load(&ModelRef::ProjectLocal(dir.path().to_path_buf())).unwrap().tree;
-        let draft = tree.planned.nodes.iter().find(|n| n.name == "draft").unwrap().id.clone();
-        let count = |layer| read(Some(draft.clone()), layer)["node"]["responsibilities"].as_array().unwrap().len();
-        assert_eq!(count(Layer::Plan), 2);
-        assert_eq!(count(Layer::Committed), 1);
-    }
-
     /// When a claim's test carries decisions, locate lists them with the claim.
     #[test]
     fn locate_lists_a_claims_decisions() {
@@ -868,6 +868,24 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(it["claims"][0]["decisions"], "Byte for byte: a normalised draft reads as an edit.", "{it}");
+    }
+
+    /// read_model reads the derived tree: the overview has the crate and its
+    /// components, and the committed layer leaves the todo stub out.
+    #[test]
+    fn read_model_reads_the_derived_tree_by_layer() {
+        let dir = project();
+        let server = ScryerServer::new();
+        let read = |node: Option<String>, layer: Layer| {
+            json_of(&server.read_model(Parameters(ReadModelRequest { project: project_arg(&dir), node, layer })).unwrap())
+        };
+        let text = read(None, Layer::Plan).to_string();
+        assert!(text.contains("\"draft\"") && text.contains("\"store\""), "{text}");
+        let tree = derived::load(&ModelRef::ProjectLocal(dir.path().to_path_buf())).unwrap().tree;
+        let draft = tree.planned.nodes.iter().find(|n| n.name == "draft").unwrap().id.clone();
+        let count = |layer| read(Some(draft.clone()), layer)["node"]["claims"].as_array().unwrap().len();
+        assert_eq!(count(Layer::Plan), 2);
+        assert_eq!(count(Layer::Committed), 1);
     }
 
     /// search_model finds a node by its claims' words.

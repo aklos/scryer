@@ -4,7 +4,7 @@
  * two layers: `committed` (implemented claims) and `planned` (plus the todo
  * stubs).
  *
- * Responsibilities:
+ * Claims:
  *  - load both layers (`read_planned` / `read_model`)
  *  - re-read them when the watcher reports a fresh derivation or a changed
  *    `structure.toml`, and every few seconds, since the tree follows the code

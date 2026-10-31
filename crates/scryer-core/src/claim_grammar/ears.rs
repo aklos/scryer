@@ -8,7 +8,7 @@
 //! forms count as testable — a test can arrange the condition and assert the
 //! response — which is what the health counters' testable/untested split reads.
 
-/// The EARS form of one responsibility statement.
+/// The EARS form of one claim statement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EarsPattern {
     /// No leading keyword — always-active, verb-led.
@@ -64,11 +64,11 @@ pub struct EarsIssue {
 }
 
 /// Lint a behaviour test's description as an EARS claim (concern tags
-/// already stripped into `concerns`). Only what the grammar decides
+/// already stripped). Only what the grammar decides
 /// mechanically: the clause shape, `shall`, a condition trailing the
-/// response, two patterns bundled in one test, more than one concern.
+/// response, two patterns bundled in one test.
 /// Wording quality stays a judgment.
-pub fn lint(description: &str, concerns: &[String]) -> Vec<EarsIssue> {
+pub fn lint(description: &str) -> Vec<EarsIssue> {
     let mut out = Vec::new();
     let mut flag = |code, message| out.push(EarsIssue { code, message });
     let text = description.trim();
@@ -99,9 +99,6 @@ pub fn lint(description: &str, concerns: &[String]) -> Vec<EarsIssue> {
     if [", else ", " otherwise ", ", otherwise"].iter().any(|kw| lower.contains(kw)) {
         flag("bundled-patterns", "a happy path and its rejection are two claims: split the test into the When and the If");
     }
-    if concerns.len() > 1 {
-        flag("several-concerns", "one concern per claim: a claim that needs two tags bundles two claims");
-    }
     out
 }
 
@@ -109,9 +106,8 @@ pub fn lint(description: &str, concerns: &[String]) -> Vec<EarsIssue> {
 mod tests {
     use super::*;
 
-    fn codes(description: &str, concerns: &[&str]) -> Vec<&'static str> {
-        let concerns: Vec<String> = concerns.iter().map(|c| c.to_string()).collect();
-        lint(description, &concerns).into_iter().map(|i| i.code).collect()
+    fn codes(description: &str) -> Vec<&'static str> {
+        lint(description).into_iter().map(|i| i.code).collect()
     }
 
     /// When a multibyte character falls where a keyword would end, classifies
@@ -133,20 +129,19 @@ mod tests {
             "If the signature is invalid, then rejects the request",
             "While a sync runs, when an edit arrives, queues it",
         ] {
-            assert!(codes(ok, &["persistence"]).is_empty(), "{ok}: {:?}", codes(ok, &[]));
+            assert!(codes(ok).is_empty(), "{ok}: {:?}", codes(ok));
         }
     }
 
     /// Each mechanical break of the grammar is named.
     #[test]
     fn lint_names_each_grammar_break() {
-        assert_eq!(codes("", &[]), ["empty"]);
-        assert_eq!(codes("When a save fails, the store shall keep the draft", &[]), ["shall"]);
-        assert_eq!(codes("When a save fails keep the draft", &[]), ["no-response-clause"]);
-        assert_eq!(codes("If the token is bad, reject it", &[]), ["if-without-then"]);
-        assert_eq!(codes("Keeps the draft when a save fails", &[]), ["trailing-condition"]);
-        assert_eq!(codes("When the token matches, echoes it, else rejects", &[]), ["bundled-patterns"]);
-        assert_eq!(codes("Keeps the draft", &["persistence", "auth"]), ["several-concerns"]);
+        assert_eq!(codes(""), ["empty"]);
+        assert_eq!(codes("When a save fails, the store shall keep the draft"), ["shall"]);
+        assert_eq!(codes("When a save fails keep the draft"), ["no-response-clause"]);
+        assert_eq!(codes("If the token is bad, reject it"), ["if-without-then"]);
+        assert_eq!(codes("Keeps the draft when a save fails"), ["trailing-condition"]);
+        assert_eq!(codes("When the token matches, echoes it, else rejects"), ["bundled-patterns"]);
     }
 
     #[test]

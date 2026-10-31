@@ -22,6 +22,7 @@ pub mod derived_tree;
 pub mod extract;
 pub mod tree_from_disk;
 pub mod verdict_cache;
+pub mod template;
 pub mod code_map;
 pub use code_map::{lang, context, anchors};
 pub mod claim_text;

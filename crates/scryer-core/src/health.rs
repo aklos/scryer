@@ -31,8 +31,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HealthCounts {
-    /// Responsibility statements in scope.
-    pub responsibilities: u32,
+    /// Claim statements in scope.
+    pub claims: u32,
     /// Data-shape properties in scope.
     pub properties: u32,
     /// Testable claims with at least one test attached (a `test_map` entry) —
@@ -47,7 +47,7 @@ pub struct HealthCounts {
     /// or on a host that is not code-backed — counted apart so `tested` never
     /// exceeds `testable`.
     pub tested_other: u32,
-    /// Responsibilities in a When/While/If form (rule 21) on code-backed hosts
+    /// Claims in a When/While/If form (rule 21) on code-backed hosts
     /// — the claims whose statement names a concrete trigger, state, or
     /// failure, so a test can arrange the condition and assert the response.
     /// Classified deterministically from the leading keyword
@@ -87,7 +87,7 @@ impl HealthCounts {
     }
 
     fn merge(&mut self, other: &HealthCounts) {
-        self.responsibilities += other.responsibilities;
+        self.claims += other.claims;
         self.properties += other.properties;
         self.anchorable += other.anchorable;
         self.anchored += other.anchored;
@@ -114,7 +114,7 @@ pub struct BoundaryCoverage {
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NodeHealth {
-    /// The node's own responsibilities/properties only.
+    /// The node's own claims/properties only.
     pub own: HealthCounts,
     /// The node plus everything below it.
     pub subtree: HealthCounts,
@@ -197,8 +197,8 @@ pub fn compute_health(
         let anchorable_node = is_leaf && code_backed;
         let mut h = HealthCounts::default();
 
-        for resp in &node.responsibilities {
-            h.responsibilities += 1;
+        for resp in &node.claims {
+            h.claims += 1;
             let has_test = model.test_map.get(&resp.id).is_some_and(|locs| !locs.is_empty());
             let testable = code_backed && crate::claim_grammar::classify(&resp.statement).testable();
             h.count_test(testable, has_test);
@@ -347,19 +347,19 @@ fn accumulate<'a>(
 }
 
 /// For every node: the set of files some anchor in its SUBTREE reads into —
-/// source_map entries keyed by the subtree's responsibility ids or node ids.
+/// source_map entries keyed by the subtree's claim ids or node ids.
 fn anchored_files_per_subtree<'a>(
     model: &'a ScryModel,
     children: &HashMap<&'a str, Vec<&'a str>>,
 ) -> HashMap<&'a str, BTreeSet<&'a str>> {
-    // Own anchored files per node: its definition entry + its responsibilities'.
+    // Own anchored files per node: its definition entry + its claims'.
     let mut own: HashMap<&str, BTreeSet<&str>> = HashMap::new();
     for node in &model.nodes {
         let mut set: BTreeSet<&str> = BTreeSet::new();
         if let Some(locs) = model.source_map.get(&node.id) {
             set.extend(locs.iter().map(|l| l.pattern.as_str()));
         }
-        for resp in &node.responsibilities {
+        for resp in &node.claims {
             if let Some(locs) = model.source_map.get(&resp.id) {
                 set.extend(locs.iter().map(|l| l.pattern.as_str()));
             }
@@ -433,17 +433,17 @@ fn boundary_coverage(
 /// so it is defined from greenfield onward — the denominator is intent, the
 /// numerator is what is anchored to code that actually exists. The unit is the
 /// anchorable PRIMITIVE: a node's own boundary box (a claimed territory), each
-/// LEAF responsibility, and each data shape. A structural node's own
-/// responsibilities are NOT primitives — they discharge through the subtree.
+/// LEAF claim, and each data shape. A structural node's own
+/// claims are NOT primitives — they discharge through the subtree.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Completeness {
     /// Anchored primitives in the subtree: boxes whose glob matches real files,
-    /// leaf responsibilities and data shapes whose anchor resolves to live code.
+    /// leaf claims and data shapes whose anchor resolves to live code.
     pub anchored: u32,
     /// Authored primitives in the subtree — the denominator (committed + planned).
     pub total: u32,
-    /// Leaf primitives (responsibilities + data shapes) in the subtree. When this
+    /// Leaf primitives (claims + data shapes) in the subtree. When this
     /// is zero the node has nothing but boxes beneath it, so it is UNMEASURED (a
     /// bare, undecomposed shell) and `pct` is None rather than a misleading 100%.
     pub leaf_total: u32,
@@ -454,7 +454,7 @@ pub struct Completeness {
 
 /// What the caller resolved against the real filesystem, passed in so this module
 /// stays pure (no I/O). `real_boxes`: ids of nodes whose boundary glob owns at
-/// least one real file. `live_anchors`: `source_map` keys (a responsibility id,
+/// least one real file. `live_anchors`: `source_map` keys (a claim id,
 /// or a node id for a data shape) whose anchor resolves to code that exists and
 /// is not broken/missing.
 pub struct AnchorFacts<'a> {
@@ -495,14 +495,14 @@ pub fn compute_completeness(
                 c.anchored += 1;
             }
         }
-        // Leaf claims. A structural node's own responsibilities discharge through
-        // its subtree, so only LEAF responsibilities (and a leaf's data shape) are
+        // Leaf claims. A structural node's own claims discharge through
+        // its subtree, so only LEAF claims (and a leaf's data shape) are
         // anchorable primitives.
         let is_leaf = children
             .get(node.id.as_str())
             .map_or(true, |c| c.is_empty());
         if is_leaf {
-            for r in &node.responsibilities {
+            for r in &node.claims {
                 c.total += 1;
                 c.leaf_total += 1;
                 if facts.live_anchors.contains(&r.id) {
@@ -637,7 +637,7 @@ pub fn is_structural(model: &ScryModel, node_id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::c4_model::{Kind, Node, Responsibility, SourceLocation};
+    use crate::c4_model::{Kind, Node, Claim, SourceLocation};
 
     fn node(id: &str, kind: Kind, parent: Option<&str>) -> Node {
         Node {
@@ -654,16 +654,16 @@ mod tests {
             external: None,
             technology: None,
             description: None,
-            responsibilities: Vec::new(),
+            claims: Vec::new(),
             properties: Vec::new(),
             icon: None,
             position: None,
         }
     }
 
-    fn resp(id: &str) -> Responsibility {
-        Responsibility {
-            concern: None,
+    fn resp(id: &str) -> Claim {
+        Claim {
+            concerns: Vec::new(),
             id: id.into(),
             statement: format!("does {id}"),
             decisions: None,
@@ -690,8 +690,8 @@ mod tests {
         // into a file that was never written.
         let mut planned = ScryModel::new();
         let mut agent = node("agent", Kind::Component, None);
-        agent.responsibilities.push(resp("r-real"));
-        agent.responsibilities.push(resp("r-fake"));
+        agent.claims.push(resp("r-real"));
+        agent.claims.push(resp("r-fake"));
         planned.nodes.push(agent);
         planned.source_map.insert("r-real".into(), vec![loc("agent/agent.py")]);
         planned.source_map.insert("r-fake".into(), vec![loc("agent/openers.py")]);
@@ -720,12 +720,12 @@ mod tests {
         };
         let mut m = ScryModel::new();
         let mut sys = node("sys", Kind::System, None);
-        sys.responsibilities.push(when("r-struct")); // structural: sys has a child
+        sys.claims.push(when("r-struct")); // structural: sys has a child
         m.nodes.push(sys);
         let mut leaf = node("leaf", Kind::Component, Some("sys"));
-        leaf.responsibilities.push(when("r-tested"));
-        leaf.responsibilities.push(when("r-untested"));
-        leaf.responsibilities.push(resp("r-plain")); // ubiquitous, with a test
+        leaf.claims.push(when("r-tested"));
+        leaf.claims.push(when("r-untested"));
+        leaf.claims.push(resp("r-plain")); // ubiquitous, with a test
         m.nodes.push(leaf);
         m.test_map.insert("r-struct".into(), vec![loc("tests/integration.rs")]);
         m.test_map.insert("r-tested".into(), vec![loc("tests/unit.rs")]);
@@ -761,12 +761,12 @@ mod tests {
         untested.statement = "If the signature is invalid, then reject the request".into();
         let mut plain = resp("r-plain");
         plain.statement = "Authenticate every inbound POST".into();
-        api.responsibilities.extend([tested, untested, plain]);
+        api.claims.extend([tested, untested, plain]);
         m.nodes.push(api);
         let mut visitor = node("visitor", Kind::Person, None);
         let mut actor_claim = resp("r-actor");
         actor_claim.statement = "When curious, opens the chat".into();
-        visitor.responsibilities.push(actor_claim);
+        visitor.claims.push(actor_claim);
         m.nodes.push(visitor);
         m.test_map.insert("r-tested".into(), vec![loc("tests/webhook.rs")]);
 
@@ -779,16 +779,16 @@ mod tests {
         assert_eq!(h.totals.untested, 1);
     }
 
-    /// The discharge rule: a System's implemented responsibility with no anchor
+    /// The discharge rule: a System's implemented claim with no anchor
     /// is NOT unmapped — its children discharge it. The same claim on a leaf IS.
     #[test]
     fn structural_responsibilities_are_never_unmapped() {
         let mut m = ScryModel::new();
         let mut sys = node("sys", Kind::System, None);
-        sys.responsibilities.push(resp("r-sys"));
+        sys.claims.push(resp("r-sys"));
         m.nodes.push(sys);
         let mut leaf = node("leaf", Kind::Symbol, Some("sys"));
-        leaf.responsibilities.push(resp("r-leaf"));
+        leaf.claims.push(resp("r-leaf"));
         m.nodes.push(leaf);
 
         let h = compute_health(&m, None, None);
@@ -798,7 +798,7 @@ mod tests {
         // The leaf's unanchored claim is the real blind spot, and it rolls up.
         assert_eq!(h.nodes["leaf"].own.unmapped, 1);
         assert_eq!(sys_h.subtree.unmapped, 1);
-        assert_eq!(sys_h.subtree.responsibilities, 2);
+        assert_eq!(sys_h.subtree.claims, 2);
     }
 
     /// A committed node whose children exist only in the PLAN (a layered,
@@ -809,7 +809,7 @@ mod tests {
     fn planned_children_make_a_node_structural() {
         let mut m = ScryModel::new();
         let mut container = node("box", Kind::Container, None);
-        container.responsibilities.push(resp("r-box"));
+        container.claims.push(resp("r-box"));
         m.nodes.push(container);
 
         // Committed alone: childless → the claim reads unmapped.
@@ -831,34 +831,34 @@ mod tests {
     fn cycle_trapped_nodes_count_in_totals() {
         let mut m = ScryModel::new();
         let mut a = node("a", Kind::Component, Some("b"));
-        a.responsibilities.push(resp("r-a"));
+        a.claims.push(resp("r-a"));
         m.nodes.push(a);
         let mut b = node("b", Kind::Component, Some("a"));
-        b.responsibilities.push(resp("r-b"));
+        b.claims.push(resp("r-b"));
         m.nodes.push(b);
 
         let h = compute_health(&m, None, None);
         assert_eq!(
-            h.totals.responsibilities, 2,
+            h.totals.claims, 2,
             "cycle-trapped claims reach the totals"
         );
     }
 
-    /// A person is an actor, not code. Its implemented responsibilities are
+    /// A person is an actor, not code. Its implemented claims are
     /// never anchorable, so they never count as unmapped.
     #[test]
     fn person_responsibilities_are_never_unmapped() {
         let mut m = ScryModel::new();
         let mut dev = node("dev", Kind::Person, None);
-        dev.responsibilities.push(resp("r-1"));
-        dev.responsibilities.push(resp("r-2"));
+        dev.claims.push(resp("r-1"));
+        dev.claims.push(resp("r-2"));
         m.nodes.push(dev);
 
         let h = compute_health(&m, None, None);
         let dev_h = &h.nodes["dev"];
         assert_eq!(dev_h.own.anchorable, 0, "a person's claims are not code-backed");
         assert_eq!(dev_h.own.unmapped, 0);
-        assert_eq!(dev_h.own.responsibilities, 2);
+        assert_eq!(dev_h.own.claims, 2);
     }
 
     /// Every committed leaf claim is anchorable; anchored ones count as coverage,
@@ -868,10 +868,10 @@ mod tests {
         let mut m = ScryModel::new();
         m.nodes.push(node("c", Kind::Component, None));
         let mut a = node("a", Kind::Symbol, Some("c"));
-        a.responsibilities.push(resp("r-a"));
+        a.claims.push(resp("r-a"));
         m.nodes.push(a);
         let mut b = node("b", Kind::Symbol, Some("c"));
-        b.responsibilities.push(resp("r-b"));
+        b.claims.push(resp("r-b"));
         m.nodes.push(b);
         m.source_map.insert("r-a".into(), vec![loc("src/a.ts")]);
 
@@ -911,7 +911,7 @@ mod tests {
         let mut m = ScryModel::new();
         m.nodes.push(node("api", Kind::Container, None));
         let mut s = node("s", Kind::Symbol, Some("api"));
-        s.responsibilities.push(resp("r-s"));
+        s.claims.push(resp("r-s"));
         m.nodes.push(s);
         m.source_map.insert("r-s".into(), vec![loc("api/src/handler.rs")]);
         m.boundaries.insert(
@@ -942,8 +942,8 @@ mod tests {
         m.nodes.push(node("api", Kind::Container, None));
         m.boundaries.insert("api".into(), boundary("api/**/*"));
         let mut s = node("s", Kind::Symbol, Some("api"));
-        s.responsibilities.push(resp("r1"));
-        s.responsibilities.push(resp("r2"));
+        s.claims.push(resp("r1"));
+        s.claims.push(resp("r2"));
         m.nodes.push(s);
 
         let rb = HashSet::new();
@@ -964,7 +964,7 @@ mod tests {
         m.boundaries.insert("api".into(), boundary("api/**/*"));
         let mut s = node("s", Kind::Symbol, Some("api"));
         for r in ["r1", "r2", "r3"] {
-            s.responsibilities.push(resp(r));
+            s.claims.push(resp(r));
         }
         m.nodes.push(s);
 
@@ -985,7 +985,7 @@ mod tests {
         m.nodes.push(node("api", Kind::Container, None));
         m.boundaries.insert("api".into(), boundary("api/**/*"));
         let mut s = node("s", Kind::Symbol, Some("api"));
-        s.responsibilities.push(resp("r1"));
+        s.claims.push(resp("r1"));
         m.nodes.push(s);
 
         let rb: HashSet<String> = ["api".to_string()].into_iter().collect();
@@ -1011,17 +1011,17 @@ mod tests {
         assert_eq!(comp["api"].pct, None);
     }
 
-    /// A structural node's OWN responsibilities are not primitives — they
+    /// A structural node's OWN claims are not primitives — they
     /// discharge through the subtree; only leaf claims count.
     #[test]
     fn completeness_excludes_structural_own_responsibilities() {
         let mut m = ScryModel::new();
         let mut api = node("api", Kind::Container, None);
-        api.responsibilities.push(resp("r-struct")); // must NOT count
+        api.claims.push(resp("r-struct")); // must NOT count
         m.nodes.push(api);
         m.boundaries.insert("api".into(), boundary("api/**/*"));
         let mut s = node("s", Kind::Symbol, Some("api"));
-        s.responsibilities.push(resp("r-leaf"));
+        s.claims.push(resp("r-leaf"));
         m.nodes.push(s);
 
         let rb: HashSet<String> = ["api".to_string()].into_iter().collect();
@@ -1039,7 +1039,7 @@ mod tests {
     fn completeness_person_carries_no_primitives() {
         let mut m = ScryModel::new();
         let mut p = node("user", Kind::Person, None);
-        p.responsibilities.push(resp("r-p"));
+        p.claims.push(resp("r-p"));
         m.nodes.push(p);
 
         let rb = HashSet::new();

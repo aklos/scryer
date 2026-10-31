@@ -440,7 +440,7 @@ pub struct ScaffoldSymbol {
     /// `type` when the symbol declares a data shape, else `behavior`.
     pub kind: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub responsibilities: Vec<String>,
+    pub claims: Vec<String>,
     /// `label: description` per declared field.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub properties: Vec<String>,
@@ -469,7 +469,7 @@ pub struct ScaffoldManifest {
     /// The only layers this file may import from.
     pub may_import: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub responsibilities: Vec<String>,
+    pub claims: Vec<String>,
     pub symbols: Vec<ScaffoldSymbol>,
     /// Files the model already anchors into this component.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -517,13 +517,13 @@ pub fn scaffold_manifest(
             node_id: n.id.clone(),
             name: n.name.clone(),
             kind: if n.properties.is_empty() { "behavior".into() } else { "type".into() },
-            responsibilities: n.responsibilities.iter().map(|r| strip_markup(&r.statement)).collect(),
+            claims: n.claims.iter().map(|r| strip_markup(&r.statement)).collect(),
             properties: n
                 .properties
                 .iter()
                 .map(|p| if p.description.is_empty() { p.label.clone() } else { format!("{}: {}", p.label, p.description) })
                 .collect(),
-            anchored: anchored(&n.id) || n.responsibilities.iter().any(|r| anchored(&r.id)),
+            anchored: anchored(&n.id) || n.claims.iter().any(|r| anchored(&r.id)),
         })
         .collect();
     let mut existing: Vec<String> = Vec::new();
@@ -536,12 +536,12 @@ pub fn scaffold_manifest(
             }
         }
     };
-    for r in &comp.responsibilities {
+    for r in &comp.claims {
         push_files(&r.id);
     }
     for n in model.nodes.iter().filter(|n| n.parent_id.as_deref() == Some(component_id)) {
         push_files(&n.id);
-        for r in &n.responsibilities {
+        for r in &n.claims {
             push_files(&r.id);
         }
     }
@@ -553,7 +553,7 @@ pub fn scaffold_manifest(
         dir: place.dir,
         basename: snake_case(&comp.name),
         may_import: place.may_import,
-        responsibilities: comp.responsibilities.iter().map(|r| strip_markup(&r.statement)).collect(),
+        claims: comp.claims.iter().map(|r| strip_markup(&r.statement)).collect(),
         symbols,
         existing_files: existing,
     })
@@ -1048,7 +1048,7 @@ mod tests {
         let mut comp = node("k", Kind::Component, Some("svc"));
         comp.layer = Some("application".into());
         comp.name = "Checkout Flow".into();
-        comp.responsibilities = vec![serde_json::from_value(
+        comp.claims = vec![serde_json::from_value(
             serde_json::json!({ "id": "r1", "statement": "**When** paid, **record** it" }),
         )
         .unwrap()];
@@ -1068,7 +1068,7 @@ mod tests {
 
         let sc = scaffold_manifest(&m, &styles, dir.path(), "k").unwrap();
         assert_eq!(sc.basename, "checkout_flow");
-        assert_eq!(sc.responsibilities, vec!["When paid, record it"]);
+        assert_eq!(sc.claims, vec!["When paid, record it"]);
         assert_eq!(sc.symbols.len(), 1);
         assert_eq!(sc.symbols[0].kind, "type");
         assert_eq!(sc.symbols[0].properties, vec!["id: order id"]);

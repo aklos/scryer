@@ -59,7 +59,7 @@ Inside a session scryer drives and never blocks: MCP tools, session hooks and a 
 
 **Run what the change reaches.** `get_test_radius` names the tests a change reaches by import, as the exact command to run. The agent runs them and hands scryer the JUnit report.
 
-**Several agents, one spec.** Each session's touched files and todo stubs are recorded. An agent orienting on a file sees that another session edited it, that a todo there belongs to someone else, or that their test radius overlaps. Awareness, not locks: coordination happens through the repo.
+**Several agents, one spec.** Each session's edits, todo stubs and verdicts are recorded. An agent about to change a file sees another session's uncommitted edits there and the todo tests it owns; a run that turns a proven claim red names the session that last verified it. Each comes with how to reach that session: a message in Claude Code, `codex queue` in Codex, or a comment thread when it has ended. Scryer carries no messages and holds no locks; it says whose work is at stake.
 
 **Decisions live with the code.** A node's description is its module's doc comment, and that is where an architectural decision goes: what was decided and why, beside the code it governs, read by every agent that orients there. A decision about one behaviour goes in its test's doc, after the claim. No separate ADR files to drift.
 

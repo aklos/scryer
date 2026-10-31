@@ -215,7 +215,7 @@ export function lintEars(plain: string): EarsLint[] {
     lints.push({
       code: "compound-response",
       excerpt: chain[0].trim(),
-      message: "Two actions in one claim — split it into two responsibilities.",
+      message: "Two actions in one claim — split it into two claims.",
     });
   }
   const bundle = resp.match(/\b(else|otherwise)\b/i);
