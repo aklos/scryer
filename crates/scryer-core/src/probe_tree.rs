@@ -44,7 +44,7 @@ fn probes_root() -> PathBuf {
 /// the codebase — std's `DefaultHasher` is documented unstable across
 /// releases, and an unstable name would orphan a warm worktree on every
 /// toolchain bump.
-fn slug_for(project: &Path) -> String {
+pub fn slug_for(project: &Path) -> String {
     let name = project
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -163,6 +163,92 @@ pub fn changes_against(checkout: &Path, base: Option<&str>) -> Result<(Vec<Strin
         ahead = it.next().unwrap_or(0);
     }
     Ok((files, ahead, behind))
+}
+
+/// The branch a checkout's work is read against: the one `origin/HEAD`
+/// names, else `main` or `master`, whichever exists locally; `None` when
+/// there is none.
+pub fn default_branch(dir: &Path) -> Option<String> {
+    let remote = git(dir, &["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"])
+        .ok()
+        .and_then(|r| r.trim().strip_prefix("refs/remotes/origin/").map(str::to_string));
+    remote
+        .into_iter()
+        .chain(["main".to_string(), "master".to_string()])
+        .find(|b| git(dir, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{b}")]).is_ok())
+}
+
+/// The commit a checkout's changes are read against, as `(commit, branch,
+/// ahead, dirty)`: on the default branch or a detached HEAD, HEAD itself,
+/// so the changes are what is uncommitted; on any other branch, its merge
+/// base with the default branch, with the commits it is ahead. `dirty` says
+/// whether anything is uncommitted.
+pub fn change_base(checkout: &Path) -> Result<(String, Option<String>, u32, bool), String> {
+    let dirty = !git(checkout, &["status", "--porcelain"])?.trim().is_empty();
+    let head = git(checkout, &["rev-parse", "HEAD"])?.trim().to_string();
+    let against = match (current_branch(checkout), default_branch(checkout)) {
+        (Some(on), Some(main)) if on != main => main,
+        _ => return Ok((head, None, 0, dirty)),
+    };
+    let base = git(checkout, &["merge-base", "HEAD", &against])?.trim().to_string();
+    let ahead = git(checkout, &["rev-list", "--count", &format!("{base}..HEAD")])?.trim().parse().unwrap_or(0);
+    Ok((base, Some(against), ahead, dirty))
+}
+
+/// HEAD's history along first parents, newest first: `limit` commits after
+/// skipping `skip`, each as `(commit, first parent, subject, author, unix
+/// seconds)`. Empty for a repository with no commits.
+pub fn log(dir: &Path, skip: usize, limit: usize) -> Result<Vec<(String, Option<String>, String, String, u64)>, String> {
+    if git(dir, &["rev-parse", "--verify", "--quiet", "HEAD"]).is_err() {
+        return Ok(Vec::new());
+    }
+    let out = git(
+        dir,
+        &["log", "--first-parent", &format!("--skip={skip}"), &format!("--max-count={limit}"), "--format=%H%x1f%P%x1f%s%x1f%an%x1f%ct"],
+    )?;
+    Ok(out
+        .lines()
+        .filter_map(|line| {
+            let mut f = line.split('\u{1f}');
+            let sha = f.next()?.to_string();
+            let parent = f.next()?.split_whitespace().next().map(str::to_string);
+            let subject = f.next()?.to_string();
+            let author = f.next()?.to_string();
+            let at = f.next()?.trim().parse().unwrap_or(0);
+            Some((sha, parent, subject, author, at))
+        })
+        .collect())
+}
+
+/// The git tree `rev` points at: the same files give the same tree, so it
+/// keys whatever is read off them.
+pub fn tree_of(project: &Path, rev: &str) -> Result<String, String> {
+    Ok(git(project, &["rev-parse", &format!("{rev}^{{tree}}")])?.trim().to_string())
+}
+
+/// Write the files `rev` holds into `dest`, through a private index, so
+/// the developer's index and working tree are never touched.
+pub fn export_revision(project: &Path, rev: &str, dest: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(dest).map_err(|e| format!("could not create {}: {e}", dest.display()))?;
+    let dest = dest.canonicalize().map_err(|e| e.to_string())?;
+    let index = dest.with_extension("index");
+    let run = |args: &[&str]| -> Result<(), String> {
+        let out = Command::new("git")
+            .args(args)
+            .env("GIT_INDEX_FILE", &index)
+            .current_dir(project)
+            .output()
+            .map_err(|e| format!("could not run git: {e}"))?;
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(format!("git {} failed: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim()))
+        }
+    };
+    let prefix = format!("{}/", dest.display());
+    let done = run(&["read-tree", rev]).and_then(|_| run(&["checkout-index", "-a", "-f", &format!("--prefix={prefix}")]));
+    let _ = std::fs::remove_file(&index);
+    done
 }
 
 /// Hand back a worktree synced to the project's CURRENT state — commits plus
@@ -439,6 +525,69 @@ mod tests {
         let (files, ahead, behind) = changes_against(&wt, None).unwrap();
         assert_eq!(files, ["m.rs", "new.rs"]);
         assert_eq!((ahead, behind), (0, 0));
+    }
+
+    /// While the checkout is on the default branch, reads its changes against HEAD; on another branch, against its merge base with the default branch, with the commits it is ahead.
+    #[test]
+    fn reads_changes_against_head_on_the_default_branch_and_the_merge_base_off_it() {
+        let dir = repo();
+        let p = dir.path();
+        git(p, &["branch", "-M", "main"]).unwrap();
+        let head = git(p, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
+        assert_eq!(change_base(p).unwrap(), (head.clone(), None, 0, false));
+        fs::write(p.join("m.rs"), "// edited\n").unwrap();
+        assert_eq!(change_base(p).unwrap(), (head.clone(), None, 0, true));
+        git(p, &["checkout", "-qb", "work"]).unwrap();
+        git(p, &["commit", "-qam", "work"]).unwrap();
+        git(p, &["checkout", "-q", "main"]).unwrap();
+        fs::write(p.join("b.rs"), "// b\n").unwrap();
+        git(p, &["add", "b.rs"]).unwrap();
+        git(p, &["commit", "-qm", "b"]).unwrap();
+        git(p, &["checkout", "-q", "work"]).unwrap();
+        assert_eq!(change_base(p).unwrap(), (head, Some("main".into()), 1, false));
+    }
+
+    /// Lists HEAD's commits along first parents, newest first, a page at a time, each with its first parent, subject, author and time.
+    #[test]
+    fn lists_head_history_a_page_at_a_time() {
+        let dir = repo();
+        let p = dir.path();
+        let first = git(p, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
+        fs::write(p.join("m.rs"), "// two\n").unwrap();
+        git(p, &["commit", "-qam", "second"]).unwrap();
+        let all = log(p, 0, 10).unwrap();
+        assert_eq!(all.iter().map(|c| c.2.as_str()).collect::<Vec<_>>(), ["second", "init"]);
+        assert_eq!(all[0].1.as_deref(), Some(first.as_str()));
+        assert_eq!((all[1].1.as_deref(), all[1].3.as_str()), (None, "t"));
+        assert_eq!(log(p, 1, 10).unwrap().len(), 1);
+        let empty = tempfile::tempdir().unwrap();
+        git(empty.path(), &["init", "-q"]).unwrap();
+        assert!(log(empty.path(), 0, 10).unwrap().is_empty());
+    }
+
+    /// Writes a revision's files into a directory without touching the developer's index or working tree.
+    #[test]
+    fn exports_a_revision_without_touching_the_checkout() {
+        let dir = repo();
+        let p = dir.path();
+        let first = git(p, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
+        fs::create_dir_all(p.join("src")).unwrap();
+        fs::write(p.join("src/a.rs"), "// a\n").unwrap();
+        git(p, &["add", "-A"]).unwrap();
+        git(p, &["commit", "-qm", "a"]).unwrap();
+        fs::write(p.join("m.rs"), "// uncommitted\n").unwrap();
+        git(p, &["add", "m.rs"]).unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let dest = out.path().join("proj");
+        export_revision(p, "HEAD", &dest).unwrap();
+        assert_eq!(fs::read_to_string(dest.join("src/a.rs")).unwrap(), "// a\n");
+        assert!(fs::read_to_string(dest.join("m.rs")).unwrap().contains("one"), "the commit, not the index");
+        let old = out.path().join("old");
+        export_revision(p, &first, &old).unwrap();
+        assert!(!old.join("src/a.rs").exists());
+        assert_eq!(git(p, &["diff", "--cached", "--name-only"]).unwrap().trim(), "m.rs", "the index is untouched");
+        assert_eq!(fs::read_to_string(p.join("m.rs")).unwrap(), "// uncommitted\n");
+        assert_ne!(tree_of(p, "HEAD").unwrap(), tree_of(p, &first).unwrap());
     }
 
     #[test]

@@ -69,17 +69,17 @@ Inside a session scryer drives and never blocks: MCP tools, session hooks and a 
 
 ### Deterministic checks
 
-**Status comes from test runs.** A claim is proven when its test passed and neither the test nor the code it exercises changed since; failing when it is red; todo when its test is a todo; stale when it has no current verdict, because something changed since its last run or it has never been run.
+**Status comes from test runs.** A claim is proven when its test passed and neither the test nor the code it exercises changed since; failing when it is red; todo when its test is a todo; outdated when it has no current verdict, because the test or the code it exercises changed since its last run, or it has never been run.
 
 **Probes ask whether a green test would notice.** `open_probe` lets an agent break the code a passing test exercises, in an isolated worktree, and run the test expecting red. A break that survives is a finding on the claim. Mutation reports from cargo-mutants or Stryker feed the same mark without an agent in the loop.
 
 **Styles are structural claims.** A container declares its architecture style in `.scryer/structure.toml` (hexagonal, library, feature-sliced, …) and the layers it has. The import graph is checked against it, and a file being edited shows the agent which layer it is on and what that layer may import. A violation is fixed by moving the code or, when the declared style was a guess, by declaring the shape the code actually has; never by loosening a rule to let one violation through. A container with no style yet is a decision still to make, not a violation. Tooling containers (`tooling = true`) are part of the codebase but held to no style.
 
-**The gate.** `scryer-mcp check` fails on failing claims, architecture violations and claim text that breaks the grammar. Stale claims and surviving mutants are notes by default and failures with `--fail-on-stale` and `--fail-on-mutants`.
+**The gate.** `scryer-mcp check` fails on failing claims, architecture violations and claim text that breaks the grammar. Outdated claims and surviving mutants are notes by default and failures with `--fail-on-outdated` and `--fail-on-mutants`.
 
 ### Reading the result
 
-**The map.** The desktop app shows the derived C4 map level by level, a page per node with its claims and their status, and its agent sessions, live ones first: follow one and the wiki and map go where it edits, with a feed of the files it edits, the todo tests it writes and the verdicts its claims get. An ended session shows what it newly proved, left todo, or made stale or failing, and which components more than one session touched. Health counts what needs attention: todo, stale and failing claims, components with no claims, files no test reaches, surviving mutants, architecture violations.
+**The map.** The desktop app shows the derived C4 map level by level, a page per node with its claims and their status, and an Activity page: the agents working now (follow one and the wiki and map go where it edits), then what is uncommitted and each commit, with the nodes and claims it added, changed or removed. Nodes changed since the branch's base are lettered in the tree and on the map, and a toggle shows the changes in full on their pages. Health counts what needs attention: todo, outdated and failing claims, components with no claims, files no test reaches, surviving mutants, architecture violations.
 
 **Concerns cut across.** A trailing `[persistence]` or `[auth]` on a claim tags it with a concern. The concern lens dims everything else, so you can read down a component or across a concern.
 
@@ -197,7 +197,7 @@ The server reads the C4 tree derived from your code — containers from packagin
 - `locate` — one file in full: every claim that speaks for it with status, test level and JUnit name, and where its stubs go.
 - `read_model` / `search_model` — the derived tree, as an overview, a subtree, or ranked text search.
 - `get_test_radius` — which tests a change reaches by import, at unit and integration level (e2e too with `radius = "all"` in `.scryer/structure.toml`), as the exact command to run.
-- `ingest_test_report` — record a run's JUnit XML against the claims; a later edit to the test or the code it exercises makes the verdict stale.
+- `ingest_test_report` — record a run's JUnit XML against the claims; a later edit to the test or the code it exercises makes the verdict outdated.
 - `ingest_mutation_report` — record a cargo-mutants or Stryker run; surviving mutants mark the code they landed in.
 - `open_probe` / `close_probe` — break the code a passing test exercises in an isolated worktree and see whether the test notices; a surviving break is a finding.
 - `comments` / `comment` — read the comment threads on a node, reply to one, close it as addressed, or open one to ask the user something.

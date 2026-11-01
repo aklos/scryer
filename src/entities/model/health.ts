@@ -251,7 +251,7 @@ export function probeMark(
 /** What the mark in front of a claim says: its state, with the probe's word
  *  on a proven one — `probed` (every deliberate break was caught: a sample,
  *  not a proof) or `hollow` (a break went uncaught, so the green test does
- *  not hold the claim). An unverified claim says why: `changed` since it last
+ *  not hold the claim). An outdated claim says why: `changed` since it last
  *  ran (its code or test, or `reworded` from what it passed as), or
  *  `unrun`. A failing or changed claim keeps its own mark: the probe
  *  is fingerprinted on the same anchors, and the red verdict is the louder
@@ -373,7 +373,7 @@ export function testLaneTitle(
           ? "FAILING"
           : "ERRORED (the runner never got to assert)";
   if (verdict.stale) {
-    return `${attached} — last verdict ${said}, but the code or tests changed since: UNVERIFIED. Re-run to refresh.`;
+    return `${attached} — last verdict ${said}, but the code or tests changed since: OUTDATED. Re-run to refresh.`;
   }
   return `${attached} — ${said} (${verdict.cases} case${verdict.cases === 1 ? "" : "s"}).`;
 }

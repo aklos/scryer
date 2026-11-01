@@ -28,10 +28,10 @@ export const GLOSSARY = {
     definition: "Its test was green, and neither the test nor the code it exercises has changed since.",
     docs: "concepts/status/",
   },
-  unverified: {
-    label: "unverified",
+  outdated: {
+    label: "outdated",
     definition:
-      "The test or the code it exercises changed since its verdict, or no report has covered it yet. Re-running the test settles it.",
+      "The test or the code it exercises changed since its verdict, so the verdict no longer covers the code as it is, or no report has covered it yet. Re-running the test settles it.",
     docs: "concepts/status/",
   },
   failing: {
@@ -106,7 +106,7 @@ export function docsUrl(id: TermId): string | undefined {
 /** The term for each claim state, by its wire name. */
 export const CLAIM_TERM = {
   proven: "proven",
-  stale: "unverified",
+  stale: "outdated",
   failing: "failing",
   planned: "todo",
 } as const satisfies Record<ClaimState, TermId>;

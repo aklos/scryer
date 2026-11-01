@@ -1,6 +1,6 @@
 /**
  * The claim-state vocabulary every surface colours by: a claim is proven
- * (its test passed on the code as it is), unverified (wire name `stale`: it passed, but the code or
+ * (its test passed on the code as it is), outdated (wire name `stale`: it passed, but the code or
  * test changed since, or it never ran), failing, or todo (a todo test: work
  * not done yet, or behaviour that exists with no test body written). The
  * wire name for todo is `planned`; every surface shows CLAIM_LABEL.
@@ -31,7 +31,7 @@ export const CLAIM_FILL: Record<ClaimState, string> = {
 export const CLAIM_LABEL: Record<ClaimState, string> = {
   proven: "proven",
   planned: "todo",
-  stale: "unverified",
+  stale: "outdated",
   failing: "failing",
 };
 
@@ -40,7 +40,7 @@ export const CLAIM_LABEL: Record<ClaimState, string> = {
 export const CLAIM_LETTER: Record<ClaimState, string> = {
   proven: "P",
   planned: "T",
-  stale: "U",
+  stale: "O",
   failing: "F",
 };
 
@@ -55,7 +55,7 @@ export function attentionState(c: DerivedCounts | undefined): "failing" | "plann
 }
 
 /** The one state a node reads as, from its subtree's counts: the most
- *  urgent its claims hold — failing, then todo, then unverified, then
+ *  urgent its claims hold — failing, then todo, then outdated, then
  *  proven. Null for a subtree with no claims. */
 export function overallState(c: DerivedCounts | undefined): ClaimState | null {
   if (!c) return null;
@@ -79,7 +79,7 @@ export function childTally(children: (DerivedCounts | undefined)[]): ChildTally 
   return { total: children.length, byState };
 }
 
-/** "3 failing · 12 unverified" — the non-zero states in a fixed order. */
+/** "3 failing · 12 outdated" — the non-zero states in a fixed order. */
 export function describeCounts(c: DerivedCounts): string {
   const parts = CLAIM_STATES.filter((s) => c[s] > 0).map((s) => `${c[s]} ${CLAIM_LABEL[s]}`);
   return parts.length ? parts.join(" · ") : "no claims";

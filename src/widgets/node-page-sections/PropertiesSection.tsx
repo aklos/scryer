@@ -1,5 +1,5 @@
 /**
- * A data-shape symbol's fields, listed as a diff against the committed tree
+ * A data-shape symbol's fields, listed as a diff against the base tree
  * (matched by exact label). Read-only: a field is edited in its code.
  */
 
@@ -17,7 +17,7 @@ import { PROP_ROW } from "./kit";
 
 // --- properties (data shapes) -----------------------------------------------
 
-/** A property's divergence from the committed model, matched by EXACT label
+/** A property's divergence from the base, matched by EXACT label
  *  (props carry no stable id), so a case-only relabel reads as
  *  delete-plus-add. */
 interface PropDiffRow extends Omit<ElementDiff<SchemaProperty>, "item"> {
@@ -76,7 +76,8 @@ export function PropertiesSection({
   prevProps,
 }: {
   node: Node;
-  /** The committed copy of this symbol's properties — the diff base. */
+  /** This symbol's properties at the base — the diff base; its own
+   *  properties while the changes are hidden. */
   prevProps: SchemaProperty[];
 }) {
   const properties = node.properties ?? [];

@@ -19,7 +19,7 @@ pub mod session_peers;
 pub mod c4_model;
 pub use c4_model::{model, concerns, model_ref};
 pub mod derived;
-pub use derived::{c4_tree, derived_status, landing, worktree_standing};
+pub use derived::{c4_tree, derived_status, landing, model_diff, worktree_standing};
 pub mod architecture;
 pub use architecture::{style, style_health, dependency_graph};
 pub mod claim_grammar;

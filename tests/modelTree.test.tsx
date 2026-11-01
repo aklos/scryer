@@ -1,7 +1,8 @@
 /** Todo claims for `ModelTree`. */
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ClaimMix, levelTitle, type ModelTree } from "../src/widgets/model-tree/ModelTree";
+import { ClaimMix, levelTitle, ModelTree } from "../src/widgets/model-tree/ModelTree";
+import type { ScryModel } from "../src/entities/model/viewmodel";
 import type { DerivedCounts } from "../src/entities/model/derived";
 
 const counts = (c: Partial<DerivedCounts>): DerivedCounts => ({
@@ -21,7 +22,7 @@ describe("ModelTree", () => {
     expect(levelTitle(["symbol", "symbol"])).toBe("Code");
   });
 
-  it("Draws a subtree's claims as one bar: failing first, then unverified, todo and proven, each state present at least a sliver", () => {
+  it("Draws a subtree's claims as one bar: failing first, then outdated, todo and proven, each state present at least a sliver", () => {
     const html = renderToStaticMarkup(<ClaimMix counts={counts({ proven: 206, stale: 2, planned: 3 })} empty />);
     expect(segments(html)).toEqual(["stale", "planned", "proven"]);
     // Two changed claims among two hundred still get a visible share.
@@ -36,5 +37,43 @@ describe("ModelTree", () => {
     expect(segments(bare)).toEqual(["empty"]);
     const none = renderToStaticMarkup(<ClaimMix counts={undefined} empty={false} />);
     expect(none).not.toContain("claim-mix");
+  });
+
+  it("Tints and letters a row changed since the base, A added and M modified, and dots a row holding changes below it", () => {
+    const store = new Map<string, string>();
+    globalThis.localStorage ??= {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+    } as unknown as Storage;
+    const model = {
+      version: 1,
+      nodes: [
+        { id: "sys", kind: "system", name: "Notes" },
+        { id: "app", kind: "container", name: "App", parentId: "sys" },
+        { id: "save", kind: "component", name: "save", parentId: "app" },
+        { id: "tags", kind: "component", name: "tags", parentId: "app" },
+      ],
+      links: [],
+    } as unknown as ScryModel;
+    const html = renderToStaticMarkup(
+      <ModelTree
+        model={model}
+        previewable={new Set()}
+        selected={null}
+        expanded={new Set(["sys", "app"])}
+        onSelectNode={() => {}}
+        onToggle={() => {}}
+        editor={undefined}
+        activeNodeIds={new Set()}
+        activeLevel={undefined}
+        changes={{ nodes: new Map([["save", "added"], ["tags", "modified"]]), holding: new Set(["sys", "app"]), removed: 0 }}
+      />,
+    );
+    const row = (name: string) => html.slice(html.lastIndexOf("data-rk", html.indexOf(`>${name}<`)), html.indexOf("data-rk", html.indexOf(`>${name}<`)));
+    expect(row("save")).toContain('data-change="added"');
+    expect(row("save")).toContain("text-emerald-700");
+    expect(row("tags")).toContain('data-change="modified"');
+    expect(row("App")).toContain('data-change="holding"');
   });
 });

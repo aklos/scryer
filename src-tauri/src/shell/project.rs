@@ -1,6 +1,5 @@
-//! The open project: its file watcher, and the derived tree's two layers as
-//! the app reads them — committed (implemented claims) and planned (plus the
-//! todo stubs) — and the developer's subagent settings.
+//! The open project: its file watcher, its derived tree, the model at the
+//! base its changes are read against, and the developer's subagent settings.
 
 use std::sync::Mutex;
 
@@ -100,29 +99,41 @@ pub(crate) fn watch_project(
     Ok(())
 }
 
-/// One layer of the derived tree as JSON.
-async fn layer(ref_str: String, planned: bool) -> Result<String, String> {
+/// The derived tree, every claim todo tests included, as JSON.
+#[tauri::command]
+pub(crate) async fn read_planned(ref_str: String) -> Result<String, String> {
     let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
     let project = model_ref.project_path().to_path_buf();
     tauri::async_runtime::spawn_blocking(move || {
         let tree = scryer_extract::derived_tree::derived_tree(&project)?;
-        serde_json::to_string(if planned { &tree.planned } else { &tree.committed }).map_err(|e| e.to_string())
+        serde_json::to_string(&tree.planned).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
-/// The derived tree's committed layer: every implemented claim.
+/// Where the project's changes are read from: HEAD on the default branch,
+/// the merge base off it. `None` outside a git repository.
 #[tauri::command]
-pub(crate) async fn read_model(ref_str: String) -> Result<String, String> {
-    layer(ref_str, false).await
+pub(crate) async fn read_change_base(ref_str: String) -> Result<Option<scryer_extract::base_model::ChangeBase>, String> {
+    let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
+    let project = model_ref.project_path().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || scryer_extract::base_model::change_base(&project).ok())
+        .await
+        .map_err(|e| e.to_string())
 }
 
-/// The derived tree's planned layer: the committed one plus the todo stubs,
-/// so the difference between them is the work still planned.
+/// The model at `commit` as JSON, derived once per git tree.
 #[tauri::command]
-pub(crate) async fn read_planned(ref_str: String) -> Result<String, String> {
-    layer(ref_str, true).await
+pub(crate) async fn read_base_model(ref_str: String, commit: String) -> Result<String, String> {
+    let model_ref = scryer_core::ModelRef::parse(&ref_str)?;
+    let project = model_ref.project_path().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || {
+        let model = scryer_extract::base_model::model_at(&project, &commit)?;
+        serde_json::to_string(&model).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -137,24 +148,35 @@ pub(crate) fn set_subagent_settings(settings: scryer_core::SubagentSettings) -> 
 
 #[cfg(test)]
 mod tests {
-    /// The two layers read the derived tree: a todo stub is in the planned
-    /// layer only.
+    /// When the project is a git repository, reads the commit its changes start from and the model at it; outside one, reads no base.
     #[test]
-    fn the_layers_differ_by_the_todo_stubs() {
+    fn reads_the_change_base_and_the_model_at_it() {
         let dir = tempfile::tempdir().unwrap();
-        let d = dir.path();
+        std::env::set_var("SCRYER_BASES_DIR", dir.path().join("bases"));
+        let d = dir.path().join("core");
         std::fs::create_dir_all(d.join("src")).unwrap();
         std::fs::write(d.join("Cargo.toml"), "[package]\nname = \"core\"\nversion = \"0.1.0\"\n").unwrap();
-        std::fs::write(
-            d.join("src/draft.rs"),
-            "pub fn save() {}\n#[cfg(test)]\nmod tests {\n    /// Saves\n    #[test]\n    fn saves() {}\n    /// Merges\n    #[test]\n    fn merges() { todo!() }\n}\n",
-        )
-        .unwrap();
+        std::fs::write(d.join("src/lib.rs"), "pub fn save() {}\n#[cfg(test)]\nmod tests {\n    /// Saves\n    #[test]\n    fn saves() {}\n}\n").unwrap();
         let ref_str = format!("project:{}", d.display());
-        let committed = tauri::async_runtime::block_on(super::read_model(ref_str.clone())).unwrap();
-        let planned = tauri::async_runtime::block_on(super::read_planned(ref_str)).unwrap();
-        assert!(committed.contains("Saves") && !committed.contains("Merges"));
-        assert!(planned.contains("Saves") && planned.contains("Merges"));
+        assert_eq!(tauri::async_runtime::block_on(super::read_change_base(ref_str.clone())).unwrap(), None);
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .current_dir(&d)
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "init"]);
+        std::fs::write(d.join("src/lib.rs"), "pub fn save() {}\n#[cfg(test)]\nmod tests {\n    /// Saves the note\n    #[test]\n    fn saves() {}\n}\n").unwrap();
+        let base = tauri::async_runtime::block_on(super::read_change_base(ref_str.clone())).unwrap().unwrap();
+        assert!(base.dirty && base.against.is_none());
+        let model = tauri::async_runtime::block_on(super::read_base_model(ref_str, base.commit)).unwrap();
+        assert!(model.contains("\"Saves\"") && !model.contains("Saves the note"));
     }
 
     /// When a different project is opened, replaces the previous project's watcher, and when the same project is opened again, keeps the running one.

@@ -1,7 +1,9 @@
 /**
  * The node page's claims: a node's claims grouped by concern, each
- * a diff row against the committed tree — its marker, statement (word-diffed
- * when reworded), and the test that states it, with its
+ * a diff row against the base the checkout's changes are read from — a
+ * + or ~ mark when it was added or reworded since, and with the changes
+ * shown, the reword word-diffed and the claims removed since listed struck
+ * through — its statement, and the test that states it, with its
  * recorded verdict and probe result. Edit mode is a list form, committed on
  * Done, with EARS lint and a live markup preview.
  */
@@ -37,22 +39,25 @@ import { CLAIM_TONE } from "../../entities/model/claimState";
 
 // --- claims (the diff view) ---------------------------------------
 
-/** How one claim diverges from the committed tree: `added` (a todo stub, not
- *  yet implemented), `reworded`, `deleted`, or `unchanged`. */
+/** How one claim diverges from the base: `added`, `reworded`, `deleted`, or
+ *  `unchanged`. */
 interface RespDiffRow extends Omit<ElementDiff<Claim>, "item"> {
   resp: Claim;
 }
 
-/** Build the diff rows for a node's claims: planned claims in order (each
- *  tagged added / reworded / unchanged against the committed copy), then any
- *  committed claims the plan dropped. */
-function buildRespDiff(planned: Claim[], committed: Claim[]): RespDiffRow[] {
-  return buildElementDiff(planned, committed, {
+/** Build the diff rows for a node's claims: its claims in order (each
+ *  tagged added / reworded / unchanged against its base copy), then, with
+ *  the changes shown, the base's claims since removed. `base` is aligned
+ *  (see `alignClaims`), so a reworded test keeps its pair. */
+export function buildRespDiff(claims: Claim[], base: Claim[], showChanges = true): RespDiffRow[] {
+  return buildElementDiff(claims, base, {
     key: (r) => r.id,
     // Statements compare stripped of display markup: a markup-only touch is
     // presentation, not a reword.
     changed: (prev, r) => stripMarkup(prev.statement) !== stripMarkup(r.statement),
-  }).map(({ item, ...row }) => ({ ...row, resp: item }));
+  })
+    .filter((row) => showChanges || row.kind !== "deleted")
+    .map(({ item, ...row }) => ({ ...row, resp: item }));
 }
 
 const MARK_ICON: Record<ClaimMark, LucideIcon> = {
@@ -153,6 +158,7 @@ export function ClaimsSection({
   nodeId,
   resps,
   prevResps,
+  showChanges = false,
   testMap,
   testStates,
   claimStatuses,
@@ -166,14 +172,18 @@ export function ClaimsSection({
 }: {
   nodeId: string;
   resps: Claim[];
-  /** The committed copy of this node's claims — the diff base for the rows. */
+  /** This node's claims at the base, aligned to their current ids — the
+   *  diff base for the rows. */
   prevResps: Claim[];
+  /** Word-diff reworded claims and list removed ones; off, a changed row
+   *  only carries its mark. */
+  showChanges?: boolean;
   /** respId → attached-test locations (the test dimension). */
   testMap: Record<string, SourceLocation[]>;
   /** respId → fingerprint state of the attached test, when it regressed. */
   testStates: Record<string, AnchorState>;
   /** respId → the claim's derived status: its row's marker (proven,
-   *  unverified, failing, todo), and the wording a reworded one passed as. */
+   *  outdated, failing, todo), and the wording a reworded one passed as. */
   claimStatuses?: Record<string, DerivedClaimStatus>;
   /** respId → recorded test verdict (with re-verified staleness), from the
    *  `get_test_statuses` feed. Colors the test lane. */
@@ -188,7 +198,7 @@ export function ClaimsSection({
   editing: boolean;
   onToggle: () => void;
 }) {
-  const diffRows = buildRespDiff(resps, prevResps);
+  const diffRows = buildRespDiff(resps, prevResps, showChanges);
   // "Add claim" from read mode opens the editor seeded with a fresh
   // row; nothing is written to the model until Done.
   const [seedNewRow, setSeedNewRow] = useState(false);
@@ -235,7 +245,7 @@ export function ClaimsSection({
             <RespDiffRow
               key={`${group ?? ""}:${row.resp.id}`}
               row={row}
-             
+              showChanges={showChanges}
               testLocations={testMap[row.resp.id] ?? []}
               testState={testStates[row.resp.id] ?? null}
               claimStatus={claimStatuses?.[row.resp.id]}
@@ -354,13 +364,14 @@ function ClaimsEditor({
 }
 
 /**
- * One claim, rendered as a diff row against the committed tree: a marker
- * (~ reworded / − deleted; a todo's state marker already says it is new), its
- * state marker, the statement (word-diffed when reworded), its decisions, and
- * the test that states it.
+ * One claim, rendered as a diff row against the base: a marker (+ added,
+ * ~ reworded, − removed), its state marker, the statement (word-diffed when
+ * reworded and the changes are shown), its decisions, and the test that
+ * states it.
  */
 function RespDiffRow({
   row,
+  showChanges,
   testLocations,
   testState,
   claimStatus,
@@ -369,6 +380,7 @@ function RespDiffRow({
   projectPath,
 }: {
   row: RespDiffRow;
+  showChanges: boolean;
   /** The claim's attached tests (test dimension). */
   testLocations: SourceLocation[];
   /** Fingerprint state of the attached test, when it regressed since reconcile. */
@@ -403,8 +415,7 @@ function RespDiffRow({
     >
       {/* The marker carries the claim's state; a reworded claim's words
           diff in red and green beside it. */}
-      {/* A todo claim's marker already says it is new. */}
-      {kind === "unchanged" || kind === "added" ? <span /> : <ChangeGlyph kind={CHANGE_OF[kind]} plain />}
+      {kind === "unchanged" ? <span /> : <ChangeGlyph kind={CHANGE_OF[kind]} />}
       <ClaimMarker
         mark={mark}
         label={mark && claimMarkLabel(mark, testVerdict ?? undefined, !!provenAs)}
@@ -415,7 +426,7 @@ function RespDiffRow({
           {resp.statement ? (
             provenAs ? (
               <WordDiffText from={stripMarkup(provenAs)} to={stripMarkup(resp.statement)} />
-            ) : kind === "reworded" && prev ? (
+            ) : kind === "reworded" && prev && showChanges ? (
               <WordDiffText from={stripMarkup(prev.statement)} to={stripMarkup(resp.statement)} />
             ) : kind === "added" ? (
               <StatementText text={resp.statement} />

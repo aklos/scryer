@@ -6,9 +6,13 @@ import type { Selected } from "../../entities/model/navigation";
 
 export interface PageProps {
   model: ScryModel;
-  /** The derived tree's committed layer — the diff base: a claim in `model`
-   *  and not here is a todo stub. Null only before it loads. */
-  committed: ScryModel | null;
+  /** The model at the base the checkout's changes are read against: HEAD on
+   *  the default branch, the merge base off it. `model` itself when there is
+   *  none, so nothing reads as changed. */
+  base: ScryModel;
+  /** Show the page's changes in full: word diffs and removed rows. Off, a
+   *  changed row only carries its mark. */
+  showChanges: boolean;
   selected: Selected;
   report: ModelHealthReport | null;
   /** respId → recorded test verdict (re-verified staleness), from the

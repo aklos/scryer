@@ -727,7 +727,7 @@ mod tests {
         assert_eq!(draft["path"], "notes / notes / draft", "{out}");
         assert_eq!(draft["description"], "Holds the user's draft.");
         let claims: Vec<&str> = draft["claims"].as_array().unwrap().iter().filter_map(|c| c.as_str()).collect();
-        assert!(claims.iter().any(|c| c.starts_with("[stale] When a save fails, keeps the draft [persistence]")), "{claims:?}");
+        assert!(claims.iter().any(|c| c.starts_with("[outdated] When a save fails, keeps the draft [persistence]")), "{claims:?}");
         assert!(claims.iter().any(|c| c.starts_with("[planned] Merges two drafts")), "{claims:?}");
         assert_eq!(draft["stubs"], "crates/notes/src/draft.rs", "Rust unit tests go in the file's own test module");
         assert_eq!(out["files"][1]["stubs"], "crates/notes/src/sync.rs");
@@ -846,7 +846,7 @@ mod tests {
         assert_eq!(claim["claim"], "Saves and reloads a draft unchanged", "{it}");
         assert_eq!(claim["level"], "integration");
         assert_eq!(claim["test"], "roundtrip");
-        assert_eq!(claim["status"], "stale", "no report has covered it yet");
+        assert_eq!(claim["status"], "outdated", "no report has covered it yet");
         let abs = format!("{}/crates/notes/src/draft.rs", dir.path().display());
         assert_eq!(at(&abs)["file"], "crates/notes/src/draft.rs", "an absolute path is accepted");
         assert!(at("README.md")["note"].as_str().unwrap().contains("No container or component"));

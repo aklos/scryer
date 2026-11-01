@@ -43,7 +43,7 @@ impl Loaded {
         self.status.claims.iter().find(|s| s.resp_id == c.id)
     }
 
-    /// A claim's status in words: `proven`, `stale`, `failing` or `planned`,
+    /// A claim's status in words: `proven`, `outdated`, `failing` or `planned`,
     /// and the probe mark when a probe or mutation run left one.
     pub(crate) fn claim_status(&self, c: &DerivedClaim) -> String {
         let s = self.status_of(c);
@@ -51,7 +51,7 @@ impl Loaded {
             (true, _) | (_, Some(ClaimState::Planned)) => "planned",
             (_, Some(ClaimState::Proven)) => "proven",
             (_, Some(ClaimState::Failing)) => "failing",
-            (_, Some(ClaimState::Stale)) | (_, None) => "stale",
+            (_, Some(ClaimState::Stale)) | (_, None) => "outdated",
         };
         match s.and_then(|s| s.probe) {
             Some(ProbeMark::Crosshair) => format!("{state}, a break survived"),

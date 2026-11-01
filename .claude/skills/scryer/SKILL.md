@@ -7,7 +7,7 @@ description: How to plan, build and verify code in a project Scryer reads. Scrye
 
 # Working in a Scryer project
 
-Scryer reads this repository and derives its C4 tree: containers from packaging, components from modules and directories, links from imports. Claims come from behaviour tests: **a test's description is a claim** about the code it tests, and its status (proven, stale, failing, todo) comes from test reports. You never edit a model. There is none. You write code and tests; Scryer reads them.
+Scryer reads this repository and derives its C4 tree: containers from packaging, components from modules and directories, links from imports. Claims come from behaviour tests: **a test's description is a claim** about the code it tests, and its status (proven, outdated, failing, todo) comes from test reports. You never edit a model. There is none. You write code and tests; Scryer reads them.
 
 The loop: **orient → write the claims as todo tests → build → run what the change reaches → ingest the report → probe what you doubt.**
 
@@ -110,7 +110,7 @@ No separate ADR files; the doc comment travels with the code it explains. A deci
 2. Have the runner write JUnit XML: vitest `--reporter=junit --outputFile=…`, pytest `--junitxml=…`, `dotnet test --logger junit`, cargo through nextest's JUnit output or a cargo-to-JUnit converter.
 3. `ingest_test_report {path}`, once per report file. That is what turns claims proven or failing; nothing else does.
 
-A later edit to a test or to the code it exercises makes its verdict **stale** until the next ingested run. Before saying you are done, your claims should be proven and current.
+A later edit to a test or to the code it exercises makes its verdict **outdated** until the next ingested run. Before saying you are done, your claims should be proven and current.
 
 ## 5. Probe what you doubt
 

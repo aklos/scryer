@@ -2,9 +2,11 @@
  * The application top bar: the scryer logo on the left is the app action menu
  * (open / close project, settings) with the project name beside it and, when
  * the project has several git worktrees, the open checkout's branch, a menu
- * that switches to another checkout; search sits
- * dead-centre; the Wiki / Map view switch (plus Recent, when the host passes a
- * session page), theme toggle and window controls are on the right. Page
+ * that switches to another checkout, and what the checkout changed — "Uncommitted
+ * changes" or "N commits ahead of main" — as a toggle that shows those changes
+ * on the wiki page; search sits
+ * dead-centre; the Wiki / Map view switch (plus Activity, when the host passes
+ * an activity page), theme toggle and window controls are on the right. Page
  * content lives below; this bar is app chrome only.
  *
  * The window is frameless (`decorations: false`), so this bar IS the titlebar:
@@ -26,6 +28,7 @@ import {
   Copy,
   FileText,
   GitBranch,
+  GitCompare,
   History,
   Minus,
   Moon,
@@ -39,6 +42,8 @@ import {
 } from "lucide-react";
 import { ContextMenu, type ContextMenuItem } from "../../features/search/ContextMenu";
 import { useWorktreeList } from "../../features/worktrees/useWorktrees";
+import type { ChangeBase } from "../../features/model-storage/useModelStorage";
+import type { ModelChanges } from "../../entities/model/changes";
 import { applyColorMode, loadTheme, saveTheme, type ColorMode } from "../../shared/theme/theme";
 
 export type WorkspaceView = "wiki" | "diagram";
@@ -66,6 +71,10 @@ export function TopBar({
   onOpenSession,
   treeOpen = true,
   onToggleTree,
+  changeBase = null,
+  changes,
+  showChanges = false,
+  onToggleChanges,
 }: {
   projectPath: string | null;
   view: WorkspaceView;
@@ -87,6 +96,13 @@ export function TopBar({
   treeOpen?: boolean;
   /** Show or hide the tree; the toggle draws only when a host passes this. */
   onToggleTree?: () => void;
+  /** Where the checkout's changes are read from; null outside git. */
+  changeBase?: ChangeBase | null;
+  /** What changed in the model since `changeBase`. */
+  changes?: ModelChanges;
+  /** The wiki page shows its changes in full. */
+  showChanges?: boolean;
+  onToggleChanges?: () => void;
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [worktreeMenu, setWorktreeMenu] = useState<{ x: number; y: number } | null>(null);
@@ -168,6 +184,10 @@ export function TopBar({
           </button>
         )}
 
+        {onToggleChanges && (
+          <ChangesToggle base={changeBase} changes={changes} on={showChanges} onToggle={onToggleChanges} />
+        )}
+
         {projectPath && (
           <span
             data-tauri-drag-region
@@ -196,8 +216,8 @@ export function TopBar({
       </button>
 
       <div data-tauri-drag-region className="flex min-w-max flex-1 items-center justify-end">
-        {/* Wiki / Map / Recent — three destinations, one joined control,
-            exactly one lit. Sessions is a wiki page underneath,
+        {/* Wiki / Map / Activity — three destinations, one joined control,
+            exactly one lit. Activity is a wiki page underneath,
             but to the user it is its own place: lighting Wiki too read as two
             selections. Its cell carries a badge when a caller passes one. */}
         <div className="ml-2 flex items-stretch overflow-hidden rounded-md border border-[var(--border)] divide-x divide-[var(--border)]">
@@ -207,9 +227,9 @@ export function TopBar({
             ...(onOpenSession
               ? [{
                   id: "session",
-                  label: "Sessions",
+                  label: "Activity",
                   Icon: History,
-                  title: `Sessions — what each agent session is doing and did${sessionLive ? " (a session is live)" : ""}`,
+                  title: `Activity — the agents working here and what each commit changed in the model${sessionLive ? " (an agent is working now)" : ""}`,
                 }]
               : []),
           ] as const).map(({ id, label, Icon, title }) => {
@@ -416,6 +436,57 @@ function ThemeToggle() {
       className="ml-1.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
     >
       {isDark ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
+    </button>
+  );
+}
+
+/** What the checkout changed, in words: the commits ahead of the branch it
+ *  diverged from, and whether anything is uncommitted; null when neither. */
+export function changesLabel(base: ChangeBase | null): string | null {
+  if (!base) return null;
+  const ahead = base.against && base.ahead > 0 ? `${base.ahead} commit${base.ahead === 1 ? "" : "s"} ahead of ${base.against}` : null;
+  if (ahead) return base.dirty ? `${ahead} · uncommitted` : ahead;
+  return base.dirty ? "Uncommitted changes" : null;
+}
+
+/** The checkout's changes as a toggle: lit, the wiki page shows them in
+ *  full. Drawn only while there is something to say. */
+export function ChangesToggle({
+  base,
+  changes,
+  on,
+  onToggle,
+}: {
+  base: ChangeBase | null;
+  changes?: ModelChanges;
+  on: boolean;
+  onToggle: () => void;
+}) {
+  const label = changesLabel(base);
+  if (!label) return null;
+  const changed = changes?.nodes.size ?? 0;
+  const removed = changes?.removed ?? 0;
+  const tally =
+    changed + removed === 0
+      ? "nothing in the model changed"
+      : [changed > 0 && `${changed} node${changed === 1 ? "" : "s"} changed`, removed > 0 && `${removed} removed`]
+          .filter(Boolean)
+          .join(", ");
+  return (
+    <button
+      type="button"
+      data-changes-toggle
+      onClick={onToggle}
+      aria-pressed={on}
+      title={`${label}: ${tally}. ${on ? "Hide" : "Show"} the changes on the page.`}
+      className={`ml-1 hidden min-w-0 items-center gap-1 rounded-md px-1.5 py-1 text-xs sm:flex ${
+        on
+          ? "bg-[var(--surface-active)] text-[var(--text)]"
+          : "text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+      }`}
+    >
+      <GitCompare className="h-3 w-3 shrink-0 text-amber-700 dark:text-amber-400" />
+      <span className="truncate">{label}</span>
     </button>
   );
 }

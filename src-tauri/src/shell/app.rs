@@ -60,7 +60,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             project::watch_project,
-            project::read_model,
+            project::read_change_base,
+            project::read_base_model,
             project::read_planned,
             source_view::open_in_editor,
             source_view::read_source_span,
@@ -82,6 +83,9 @@ pub fn run() {
             derived::get_derived_status,
             derived::get_landing,
             derived::get_worktrees,
+            derived::get_history,
+            derived::get_commit_diff,
+            derived::get_uncommitted_diff,
             derived::list_worktrees,
             derived::edit_claim_text,
             derived::add_claim_stub,

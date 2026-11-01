@@ -1,9 +1,11 @@
 /**
  * Left explorer — an IDE-style tree of the full derived hierarchy (persons,
  * systems, containers, components, symbols), each level framed and titled. Every row carries
- * the mix of its subtree's claims (proven, unverified, todo, failing) as one
- * thin bar, beside its structural violation count. Type-to-filter, the claim
- * state lenses (Todo / Unverified / Failing) and the concern lens narrow it. The structure is the code's, so right-click offers only what
+ * the mix of its subtree's claims (proven, outdated, todo, failing) as one
+ * thin bar, beside its structural violation count, and a node changed since
+ * the base its name tinted and lettered (A added, M modified), a node holding
+ * changes below it a dot. Type-to-filter, the claim
+ * state lenses (Todo / Outdated / Failing) and the concern lens narrow it. The structure is the code's, so right-click offers only what
  * lands in code: add a claim (a todo test), or rename a container.
  */
 
@@ -19,6 +21,8 @@ import type { ClaimState, DerivedCounts, DerivedNodeStatus } from "../../entitie
 import { kindIcon } from "../../entities/model/kindIcon";
 import { StyleGlyph } from "../../entities/model/styles/StyleGlyph";
 import { styleTable } from "../../entities/model/health";
+import { NO_CHANGES, type ModelChanges } from "../../entities/model/changes";
+import { NODE_CHANGE_TONE, NodeChangeMark } from "../../entities/model/diffkit";
 
 /** What a style or a layer IS, for the tree's tooltips — the built-in
  *  table (custom styles fall back to their name). */
@@ -55,7 +59,7 @@ const ROW = "group/row relative flex items-center gap-1 pr-3 h-[26px] cursor-poi
 const MIX_ORDER: readonly ClaimState[] = ["failing", "stale", "planned", "proven"];
 
 /** A subtree's claims as one thin bar: each state's share, failing first,
- *  then unverified, todo and proven, each present state at least a sliver so
+ *  then outdated, todo and proven, each present state at least a sliver so
  *  one changed claim among hundreds still shows. Proven and todo sit quiet;
  *  only what needs someone now is in full colour. `empty` draws the bar's
  *  bare track for a node that could hold claims and holds none: nobody has
@@ -144,6 +148,7 @@ export function ModelTree({
   previewable,
   structural,
   claimStatus,
+  changes = NO_CHANGES,
 }: {
   model: ScryModel;
   /** Symbol ids the preview sidecar can render — derived from its export list,
@@ -171,6 +176,8 @@ export function ModelTree({
   /** Claim states per node (own and subtree), from the derived status —
    *  drives the gutter letter. */
   claimStatus?: Record<string, DerivedNodeStatus>;
+  /** What changed since the base: tints and letters changed rows. */
+  changes?: ModelChanges;
 }) {
   const [width, setWidth] = useState(() => {
     const saved = Number(localStorage.getItem("scryer:treeWidth"));
@@ -215,7 +222,7 @@ export function ModelTree({
 
   // --- filter + lenses --------------------------------------------------------
   // Type-to-filter narrows by name; the lenses narrow by claim state (todo,
-  // unverified, failing). A branch stays visible when anything below it
+  // outdated, failing). A branch stays visible when anything below it
   // matches; matching auto-expands.
 
   const [filter, setFilter] = useState("");
@@ -510,6 +517,7 @@ export function ModelTree({
     const ramp = altitudeRamp(node);
     const Icon = lookupIcon(node.icon) ?? kindIcon(node, previewable.has(node.id));
     const active = activeNodeIds.has(node.id);
+    const change = changes.nodes.get(node.id);
 
     return (
       <div
@@ -547,7 +555,11 @@ export function ModelTree({
         ) : (
           <Icon className={`ml-1.5 h-3.5 w-3.5 shrink-0 ${ICON_COLOR}`} />
         )}
-        <span className={`min-w-0 flex-1 truncate text-sm ${ramp.weight} ${isSel ? "" : ramp.color}`}>
+        <span
+          className={`min-w-0 flex-1 truncate text-sm ${ramp.weight} ${
+            isSel ? "" : change ? NODE_CHANGE_TONE[change] : ramp.color
+          }`}
+        >
           {renaming === node.id && editor ? (
             <InlineText
               value={node.name}
@@ -585,6 +597,7 @@ export function ModelTree({
             {concernTally.get(node.id)}
           </span>
         )}
+        <NodeChangeMark change={change} holding={changes.holding.has(node.id)} />
         <StructuralCount violations={structural?.get(node.id)} />
         {active && (
           <Loader2 className="h-3 w-3 shrink-0 animate-spin text-violet-500 dark:text-violet-400" />
@@ -654,7 +667,7 @@ export function ModelTree({
             [
               { id: "all", label: "All", title: "Show the whole model" },
               { id: "planned", label: "Todo", title: "Where todo claims are: work planned, not built or not tested yet" },
-              { id: "stale", label: "Unverified", title: "Where claims changed since their test last passed, or never ran" },
+              { id: "stale", label: "Outdated", title: "Where the code or a test changed since the claim's last verdict, or it never ran" },
               { id: "failing", label: "Failing", title: "Where claims are failing" },
             ] as const
           ).map((opt) => (
@@ -706,7 +719,7 @@ export function ModelTree({
               : lens === "planned"
                 ? "No todo claims."
                 : lens === "stale"
-                  ? "Nothing unverified: every claim's verdict is current."
+                  ? "Nothing outdated: every claim's verdict covers the code as it is."
                   : "Nothing failing."}
           </div>
         ) : (

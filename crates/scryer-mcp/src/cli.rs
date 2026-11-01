@@ -365,17 +365,18 @@ pub(crate) fn export_template(project: &Path, node: &str) -> Result<scryer_extra
     scryer_extract::template::template_of(&tree, &structure, node)
 }
 
-/// `scryer-mcp check [--fail-on-stale] [--fail-on-mutants] [path]` — the CI
+/// `scryer-mcp check [--fail-on-outdated] [--fail-on-mutants] [path]` — the CI
 /// gate. Exit 0 clean, 1 findings, 2 when the tree cannot be derived. Failing
-/// claims, style violations and lint errors always fail it; stale claims and
+/// claims, style violations and lint errors always fail it; outdated claims and
 /// surviving mutants fail it when asked, and are reported as notes otherwise.
 pub(crate) fn run_check(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    const USAGE: &str = "scryer-mcp check [--fail-on-stale] [--fail-on-mutants] [path]";
+    const USAGE: &str = "scryer-mcp check [--fail-on-outdated] [--fail-on-mutants] [path]";
     let (project, flags) = gate_project(args, USAGE)?;
     let mut gates = Gates::default();
     for f in &flags {
         match f.as_str() {
-            "--fail-on-stale" => gates.stale = true,
+            // `--fail-on-stale` is the flag's name from before "outdated".
+            "--fail-on-outdated" | "--fail-on-stale" => gates.stale = true,
             "--fail-on-mutants" => gates.mutants = true,
             other => {
                 eprintln!("unknown argument '{other}'\nusage: {USAGE}");
@@ -436,9 +437,9 @@ pub(crate) fn check_report(tree: &DerivedTree, status: &DerivedStatus, gates: &G
     }
     let stale: Vec<String> = in_state(ClaimState::Stale).map(|c| at(&c.resp_id)).collect();
     if gates.stale {
-        failures.extend(stale.iter().map(|s| format!("stale: {s} — re-run it and ingest the report")));
+        failures.extend(stale.iter().map(|s| format!("outdated: {s} — re-run it and ingest the report")));
     } else if !stale.is_empty() {
-        notes.push(format!("{} stale claim(s) (not gating — pass --fail-on-stale)", stale.len()));
+        notes.push(format!("{} outdated claim(s) (not gating — pass --fail-on-outdated)", stale.len()));
     }
     // A surviving mutant marks the code a mutation run broke (per node), or
     // the test a probe or Stryker named (per claim).
@@ -526,10 +527,10 @@ pub(crate) fn run_setup(args: &[String]) -> Result<(), Box<dyn std::error::Error
 }
 
 /// The ambient one-liner: claims by status, then surviving mutants when there
-/// are any. "scryer: 120 proven · 3 stale · 0 failing · 2 todo".
+/// are any. "scryer: 120 proven · 3 outdated · 0 failing · 2 todo".
 pub(crate) fn status_line(t: &DerivedCounts) -> String {
     let mut line = format!(
-        "scryer: {} proven · {} stale · {} failing · {} todo",
+        "scryer: {} proven · {} outdated · {} failing · {} todo",
         t.proven, t.stale, t.failing, t.planned
     );
     if t.surviving_mutants > 0 {
@@ -611,12 +612,12 @@ mod tests {
     #[test]
     fn the_status_line_counts_claims_by_status() {
         let mut t = DerivedCounts { proven: 3, stale: 2, failing: 1, planned: 4, ..Default::default() };
-        assert_eq!(status_line(&t), "scryer: 3 proven · 2 stale · 1 failing · 4 todo");
+        assert_eq!(status_line(&t), "scryer: 3 proven · 2 outdated · 1 failing · 4 todo");
         t.surviving_mutants = 2;
         assert!(status_line(&t).ends_with(" · 2 surviving mutants"));
         let dir = project();
         let (_, s) = derived_status(dir.path()).unwrap();
-        assert_eq!(status_line(&s.totals), "scryer: 0 proven · 3 stale · 0 failing · 1 todo");
+        assert_eq!(status_line(&s.totals), "scryer: 0 proven · 3 outdated · 0 failing · 1 todo");
     }
 
     /// When the statusline is given a session, counts only what that session changed: a todo test already in the code its edits reach is not its own, and stale claims are left out.
@@ -639,7 +640,7 @@ mod tests {
     }
 
     /// With no report ingested, claims are stale: a note by default, a
-    /// failure under --fail-on-stale. A todo test is never a failure, and
+    /// failure under --fail-on-outdated. A todo test is never a failure, and
     /// neither is a container with no style chosen: both are notes.
     #[test]
     fn check_gates_stale_claims_only_when_asked() {
@@ -650,10 +651,10 @@ mod tests {
         assert_eq!(structural(&lenient), 0, "the unstyled crate is no failure: {:?}", lenient.failures);
         assert!(lenient.failures.is_empty(), "{:?}", lenient.failures);
         assert!(lenient.notes.iter().any(|n| n.starts_with("no style chosen yet")), "{:?}", lenient.notes);
-        assert!(lenient.notes.iter().any(|n| n.contains("3 stale")), "{:?}", lenient.notes);
+        assert!(lenient.notes.iter().any(|n| n.contains("3 outdated")), "{:?}", lenient.notes);
         assert!(lenient.notes.iter().any(|n| n.contains("1 todo test")), "{:?}", lenient.notes);
         let strict = check_report(&tree, &status, &Gates { stale: true, mutants: false });
-        assert_eq!(strict.failures.iter().filter(|f| f.starts_with("stale: ")).count(), 3, "{:?}", strict.failures);
+        assert_eq!(strict.failures.iter().filter(|f| f.starts_with("outdated: ")).count(), 3, "{:?}", strict.failures);
     }
 
     /// A description that breaks the claim grammar fails check and lint.

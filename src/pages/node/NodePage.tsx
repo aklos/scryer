@@ -24,12 +24,8 @@ import {
   Shapes,
 } from "lucide-react";
 import type { Node, ScryModel } from "../../entities/model/viewmodel";
-import {
-  effectiveSourceMap,
-  effectiveTestMap,
-  isDataShape,
-  nextClaimId,
-} from "../../entities/model/viewmodel";
+import { isDataShape, nextClaimId } from "../../entities/model/viewmodel";
+import { alignClaims } from "../../entities/model/changes";
 import {
   structuralBySubtree,
   noStyleNotice,
@@ -179,7 +175,8 @@ function Gone() {
 function NodePageBody(props: PageProps & { node: Node }) {
   const {
     model,
-    committed,
+    base,
+    showChanges,
     node,
     report,
     editor,
@@ -214,8 +211,8 @@ function NodePageBody(props: PageProps & { node: Node }) {
   };
   const tag = typeTag(node);
 
-  const sourceMap = effectiveSourceMap(committed, model);
-  const testMap = effectiveTestMap(committed, model);
+  const sourceMap = model.sourceMap ?? {};
+  const testMap = model.testMap ?? {};
   // Per-claim fingerprint state of the attached test (test: observations).
   const testStates = useMemo(() => testStatesOf(report), [report]);
   const structuralViolations = useMemo(
@@ -237,9 +234,10 @@ function NodePageBody(props: PageProps & { node: Node }) {
   // Each claim's derived status: its row's marker, and what a reworded one
   // last passed as.
   const claimStatuses = Object.fromEntries((report?.derivedStatus?.claims ?? []).map((c) => [c.respId, c]));
-  // The committed copy of this node's claims — the diff base for the Overview.
-  const committedResps =
-    committed?.nodes.find((n) => n.id === node.id)?.claims ?? [];
+  // This node at the base — what its sections diff against. Absent for a
+  // node added since.
+  const baseNode = base.nodes.find((n) => n.id === node.id);
+  const baseResps = alignClaims(baseNode?.claims ?? [], resps, base.testMap, model.testMap);
   const definition = sourceMap[node.id] ?? [];
   // Preview-ability is derived, never stored: the section exists iff the
   // sidecar reports a mountable export for the node's anchored source file.
@@ -423,7 +421,7 @@ function NodePageBody(props: PageProps & { node: Node }) {
               )}
               <DescriptionSection
                 value={node.description}
-                prevValue={committed?.nodes.find((n) => n.id === node.id)?.description}
+                prevValue={showChanges ? baseNode?.description : undefined}
                 // The description is written back where it is read from (a
                 // module doc, a manifest, ARCHITECTURE.md, structure.toml); a
                 // symbol's doc is edited in the code.
@@ -448,14 +446,15 @@ function NodePageBody(props: PageProps & { node: Node }) {
                 <ClaimsSection
                   nodeId={node.id}
                   resps={resps}
-                  prevResps={committedResps}
+                  prevResps={baseResps}
+                  showChanges={showChanges}
                   testMap={testMap}
                   testStates={testStates}
                   claimStatuses={claimStatuses}
                   testVerdicts={props.testVerdicts}
                   probeResults={props.probeResults}
                   projectPath={projectPath}
-                  mintId={(draft) => nextClaimId(draft, model, committed)}
+                  mintId={(draft) => nextClaimId(draft, model, base)}
                   editor={editor}
                   editing={ed.isEditing("claims")}
                   onToggle={() => ed.toggle("claims")}
@@ -487,13 +486,14 @@ function NodePageBody(props: PageProps & { node: Node }) {
               {node.kind === "symbol" && (
                 <PropertiesSection
                   node={node}
-                  prevProps={committed?.nodes.find((n) => n.id === node.id)?.properties ?? []}
+                  prevProps={showChanges ? (baseNode?.properties ?? []) : (node.properties ?? [])}
                 />
               )}
 
               <ConnectionsSection
                 model={model}
-                committed={committed}
+                base={base}
+                showChanges={showChanges}
                 node={node}
                 report={report}
                 // Links come from imports and structure.toml, not from here.

@@ -30,7 +30,7 @@ What comes out is the documentation: a [C4](https://c4model.com/) map derived fr
 - **Probes ask whether a green test would notice.** The code under a passing test is broken in an isolated worktree; a break the test misses is a finding.
 - **[Styles are structural claims.](/scryer/concepts/structure/)** A container declares its architecture style in `.scryer/structure.toml`, and the import graph is checked against it. A container with no style yet is a decision to make, not a violation.
 - **The level is the test level.** An e2e test claims for the system, an integration test for its container, a unit test for its component.
-- **[Status comes from test runs.](/scryer/concepts/status/)** A claim is proven when its test passed and nothing it exercises changed since; failing when red; todo when its test is a todo, whether the work is not done yet or the behaviour exists with no test body; unverified when it has no current verdict, because something changed since its last run or it has never run.
+- **[Status comes from test runs.](/scryer/concepts/status/)** A claim is proven when its test passed and nothing it exercises changed since; failing when red; todo when its test is a todo, whether the work is not done yet or the behaviour exists with no test body; outdated when it has no current verdict, because the test or the code it exercises changed since its last run, or it has never run.
 - **Several agents, one spec.** Each session's edits, todo stubs and verdicts are recorded, so an agent about to touch another session's uncommitted work, todo tests or proven claims is told whose they are and how to reach that session. No locks.
 
 ## The C4 hierarchy

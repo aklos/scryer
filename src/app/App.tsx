@@ -20,7 +20,7 @@ import { TopBar, type WorkspaceView } from "../widgets/top-bar/TopBar";
 import { DiagramView } from "../widgets/diagram-canvas/DiagramView";
 import { NodePage } from "../pages/node/NodePage";
 import type { Selected, SpecialPage } from "../entities/model/navigation";
-import { DarkCodePage, LandingPage } from "../pages";
+import { ActivityPage, DarkCodePage } from "../pages";
 import { makeDerivedEditor } from "../features/derived-tree/derivedEditor";
 import { ProjectPicker } from "../pages/project-picker/ProjectPicker";
 import { SearchPalette } from "../features/search/SearchPalette";
@@ -37,7 +37,8 @@ import { useTestStatuses } from "../features/health-feed/useTestStatuses";
 import { useFollow } from "../features/sessions/useFollow";
 import { sessionTitle, stepLine } from "../features/sessions/useSessions";
 import { structuralBySubtree } from "../entities/model/health";
-import { effectiveSourceMap, modelConcerns, type ScryModel } from "../entities/model/viewmodel";
+import { modelConcerns, type ScryModel } from "../entities/model/viewmodel";
+import { modelChanges } from "../entities/model/changes";
 import type { Editor } from "../entities/model/editor";
 
 /** Navigation a host sends through the event layer: the demo film, which
@@ -98,8 +99,36 @@ function AppBody() {
   return <Workspace model={model} storage={storage} />;
 }
 
+const SHOW_CHANGES_KEY = "scryer:show-changes";
+
+function readShowChanges(): boolean {
+  try {
+    return localStorage.getItem(SHOW_CHANGES_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeShowChanges(on: boolean) {
+  try {
+    localStorage.setItem(SHOW_CHANGES_KEY, on ? "1" : "0");
+  } catch {
+    /* localStorage unavailable: the toggle lasts the session */
+  }
+}
+
 function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage }) {
-  const { committed, projectPath, showEdit, externalGeneration, openProject, closeProject } = storage;
+  const { base, changeBase, projectPath, showEdit, externalGeneration, openProject, closeProject } = storage;
+  // What changed since the base: decorates the tree and the map, and marks
+  // the wiki page's rows; the toggle shows the page's changes in full.
+  const changes = useMemo(() => modelChanges(base, model), [base, model]);
+  const [showChanges, setShowChanges] = useState(() => readShowChanges());
+  const toggleChanges = useCallback(() => {
+    setShowChanges((on) => {
+      writeShowChanges(!on);
+      return !on;
+    });
+  }, []);
   const agent = useAgentSession();
   const { toast } = useToast();
   // One preview sidecar per open project; node pages derive their Preview
@@ -108,9 +137,9 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
   // Which symbols the sidecar can render — derived from its export list and
   // each node's anchored source, never a stored flag.
   const previewable = useMemo(() => {
-    const sourceMap = effectiveSourceMap(committed, model);
+    const sourceMap = model.sourceMap ?? {};
     return previewableNodeIds(model.nodes, preview.components, (id) => sourceMap[id]?.[0]?.pattern);
-  }, [model, committed, preview.components]);
+  }, [model, preview.components]);
 
   const writing = agent.running;
 
@@ -405,6 +434,10 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
         onOpenSession={() => openSpecial("session")}
         treeOpen={sidebar.open}
         onToggleTree={toggleTree}
+        changeBase={changeBase}
+        changes={changes}
+        showChanges={showChanges}
+        onToggleChanges={toggleChanges}
       />
       <ProjectNotices projectPath={projectPath} />
       <div className="relative flex min-h-0 flex-1">
@@ -440,6 +473,7 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
             onSetConcernLens={setConcernLens}
             structural={structural}
             claimStatus={healthReport?.derivedStatus?.nodes}
+            changes={changes}
           />
         </div>
         {view === "diagram" ? (
@@ -452,14 +486,17 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
             onFocus={drillDiagram}
             onSelectNode={selectFromDiagram}
             concernLens={concernLens}
+            changes={changes}
           />
         ) : selected?.kind === "special" ? (
           selected.id === "dark" ? (
             <DarkCodePage model={model} report={healthReport} onSelectNode={selectNode} />
           ) : (
-            <LandingPage
+            <ActivityPage
               projectPath={projectPath}
               model={model}
+              changeBase={changeBase}
+              generation={externalGeneration}
               following={follow.following}
               onFollow={follow.follow}
               onSelectNode={selectNode}
@@ -468,7 +505,8 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
         ) : selected ? (
           <NodePage
             model={model}
-            committed={committed}
+            base={base ?? model}
+            showChanges={showChanges}
             selected={selected}
             report={healthReport}
             testVerdicts={testVerdicts}

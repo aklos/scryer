@@ -119,9 +119,9 @@ describe("useFollow", () => {
   it.todo("When the followed session stops being live, stops following and says so");
 });
 
-describe("LandingPage", () => {
+describe("ActivityPage", () => {
   it("Says when a session ended as minutes or hours ago, else by its day", async () => {
-    const { ago } = await import("../src/pages/landing/LandingPage");
+    const { ago } = await import("../src/pages/landing/ActivityPage");
     expect(ago(1000, 1030)).toBe("just now");
     expect(ago(1000, 1000 + 12 * 60)).toBe("12m ago");
     expect(ago(1000, 1000 + 3 * 3600)).toBe("3h ago");

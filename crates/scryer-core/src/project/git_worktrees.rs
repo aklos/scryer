@@ -36,6 +36,74 @@ pub struct BranchChanges {
     pub behind: u32,
 }
 
+/// The commit a checkout's model changes are read against.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangeBase {
+    pub commit: String,
+    /// The branch the checkout diverged from; `None` when the base is HEAD
+    /// and the changes are what is uncommitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub against: Option<String>,
+    /// Commits ahead of `against`.
+    pub ahead: u32,
+    /// Something is uncommitted.
+    pub dirty: bool,
+}
+
+/// Where `checkout`'s changes start: HEAD on the default branch or a
+/// detached HEAD, the merge base with the default branch on any other.
+pub fn change_base(checkout: &Path) -> Result<ChangeBase, String> {
+    adapter::change_base(checkout).map(|(commit, against, ahead, dirty)| ChangeBase { commit, against, ahead, dirty })
+}
+
+/// A commit in the project's history.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Commit {
+    pub sha: String,
+    /// Its first parent; `None` for the first commit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    pub subject: String,
+    pub author: String,
+    /// Unix seconds.
+    pub at: u64,
+}
+
+/// HEAD's commits along first parents, newest first, `limit` after `skip`.
+pub fn history(project: &Path, skip: usize, limit: usize) -> Result<Vec<Commit>, String> {
+    adapter::log(project, skip, limit).map(|cs| {
+        cs.into_iter().map(|(sha, parent, subject, author, at)| Commit { sha, parent, subject, author, at }).collect()
+    })
+}
+
+/// Where the models derived at past commits are cached:
+/// `~/.scryer/bases`, or `SCRYER_BASES_DIR` when set, as for tests that
+/// must not write into the home directory of whoever runs them.
+pub fn bases_root() -> PathBuf {
+    match std::env::var_os("SCRYER_BASES_DIR") {
+        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
+        _ => crate::settings_file::global_dir().join("bases"),
+    }
+}
+
+/// A stable directory name for `project`'s caches outside it: its name
+/// and a hash of its path.
+pub fn project_slug(project: &Path) -> String {
+    adapter::slug_for(project)
+}
+
+/// The git tree `rev` points at.
+pub fn tree_of(project: &Path, rev: &str) -> Result<String, String> {
+    adapter::tree_of(project, rev)
+}
+
+/// Write the files `rev` holds into `dest`, leaving the checkout alone.
+pub fn export_revision(project: &Path, rev: &str, dest: &Path) -> Result<(), String> {
+    adapter::export_revision(project, rev, dest)
+}
+
 /// Where the project's probe tree lives, whether or not it exists yet.
 pub fn worktree_path(project: &Path) -> PathBuf {
     adapter::worktree_path(project)

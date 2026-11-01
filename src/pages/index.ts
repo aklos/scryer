@@ -12,4 +12,4 @@
  */
 
 export { DarkCodePage } from "./coverage-gaps/DarkCodePage";
-export { LandingPage } from "./landing/LandingPage";
+export { ActivityPage } from "./landing/ActivityPage";

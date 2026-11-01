@@ -1,7 +1,8 @@
 /**
  * The bottom-of-page Connections section — Wikipedia's "See also" for the
  * graph. Each of the node's links gets a full-width diff row against the
- * committed tree: the peer as a wikilink, the link label, the protocol, the
+ * base the checkout's changes are read from (a + or ~ mark; with the changes
+ * shown, relabels word-diffed and removed links struck through): the peer as a wikilink, the link label, the protocol, the
  * import-evidence count, and an expandable ladder of the code paths behind it.
  * Grouped by direction — Uses (outgoing) / Used by (incoming) — plus the
  * code-suggested candidates. `ImpliedConnectionsSection`, its read-only
@@ -11,7 +12,6 @@
 import { useMemo, useState } from "react";
 import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight } from "lucide-react";
 import type { ScryModel, Node, Link } from "../../entities/model/viewmodel";
-import { effectiveSourceMap } from "../../entities/model/viewmodel";
 import type { ModelHealthReport, ImpliedConn, LinkPath } from "../../entities/model/health";
 import { linkEvidence, impliedFor, impliedPaths, pathsForLink } from "../../entities/model/health";
 import { kindIcon } from "../../entities/model/kindIcon";
@@ -22,9 +22,8 @@ import { usePageMenu, useCopyId, copyIdItem } from "../../features/search/pageMe
 // Row grid: marker | index | content.
 const CONN_ROW = "relative grid grid-cols-[18px_22px_1fr] items-baseline";
 
-/** How a declared link diverges from the committed model: `added` (new in the
- *  plan), `reworded` (label/method/endpoint changed), `deleted` (committed but
- *  dropped), or `unchanged` — classified by the shared diff kit, so a "+" here
+/** How a declared link diverges from the base: `added`, `reworded`
+ *  (label/method/endpoint changed), `deleted` (removed since), or `unchanged` — classified by the shared diff kit, so a "+" here
  *  is the same glyph and hue as a "+" on a claim row or the History timeline. */
 type LinkDiffKind = ElementDiffKind;
 
@@ -65,8 +64,10 @@ interface ConnDiffRow {
   link: Link;
   peer: Node;
   kind: LinkDiffKind;
-  /** The committed copy, for word-diffing a relabeled link. */
+  /** The base copy, for word-diffing a relabeled link. */
   prev?: Link;
+  /** Draw the change in full: tint, word diff. */
+  shown?: boolean;
 }
 
 /** A code-suggested but undeclared edge to this node. */
@@ -96,7 +97,7 @@ function ConnRow({
   expand?: { open: boolean; onToggle: () => void };
   onSelectNode: (id: string) => void;
 }) {
-  const { link, peer, kind, prev } = row;
+  const { link, peer, kind, prev, shown } = row;
   const openMenu = usePageMenu();
   const copyId = useCopyId();
   // A link the plan drops reads red + struck — deletion is the only thing link
@@ -108,7 +109,7 @@ function ConnRow({
   // (light: quiet wash; dark: coloured text).
   const peerColor = struck
     ? DIFF_TINT.delete
-    : kind === "added"
+    : kind === "added" && shown
       ? `${DIFF_TINT.add} hover:underline`
       : "text-blue-700 dark:text-blue-400";
   return (
@@ -140,10 +141,10 @@ function ConnRow({
         >
           {peer.name || "Untitled"}
         </button>
-        {(link.label || (kind === "reworded" && prev?.label)) && (
+        {(link.label || (kind === "reworded" && shown && prev?.label)) && (
           <span className="text-[var(--text-tertiary)]">
             &nbsp;—{" "}
-            {kind === "reworded" && prev && prev.label !== link.label ? (
+            {kind === "reworded" && shown && prev && prev.label !== link.label ? (
               <WordDiffText from={prev.label ?? ""} to={link.label ?? ""} />
             ) : (
               link.label
@@ -640,42 +641,41 @@ function ConnGroup({ title, children }: { title: string; children: React.ReactNo
 }
 
 export function ConnectionsSection({
-  model: rawModel,
-  committed,
+  model,
+  base,
+  showChanges = false,
   node,
   report,
   onSelectNode,
 }: {
   model: ScryModel;
-  /** The committed model — the diff base for declared links. */
-  committed: ScryModel | null;
+  /** The model at the base — the diff base for declared links. */
+  base: ScryModel;
+  /** Strike removed links and word-diff relabels; off, a changed row only
+   *  carries its mark. */
+  showChanges?: boolean;
   node: Node;
   report: ModelHealthReport | null;
   onSelectNode: (id: string) => void;
 }) {
-  // Code-side anchors live in the committed model; the plan overlays only the
-  // anchors it adds. Merge for display so symbol files resolve regardless of
-  // which layer owns the anchor (the dedup invariant) — display-only, never
-  // persisted back to the plan.
-  const model = { ...rawModel, sourceMap: effectiveSourceMap(committed, rawModel) };
   const byId = (id: string) => model.nodes.find((n) => n.id === id);
-  const committedLinks = committed?.links ?? [];
+  const baseLinks = base.links;
 
-  // Planned links in each direction, tagged against their committed copies by
-  // the shared classifier; then committed links the plan dropped, as `deleted`
-  // rows so the removal still reads on the page.
+  // Links in each direction, tagged against their base copies by the shared
+  // classifier; then, with the changes shown, base links since removed, as
+  // `deleted` rows so the removal still reads on the page.
   const buildDir = (dir: "out" | "in"): ConnDiffRow[] => {
     const isMember = (l: Link) => (dir === "out" ? l.src === node.id : l.dst === node.id);
     const peerOf = (l: Link) => byId(dir === "out" ? l.dst : l.src);
     const rows: ConnDiffRow[] = [];
-    for (const r of buildElementDiff(model.links.filter(isMember), committedLinks.filter(isMember), {
+    for (const r of buildElementDiff(model.links.filter(isMember), baseLinks.filter(isMember), {
       key: (l) => l.id,
       changed: (prev, l) =>
         prev.label !== l.label || prev.method !== l.method || prev.src !== l.src || prev.dst !== l.dst,
     })) {
       const peer = peerOf(r.item);
-      if (peer)
-        rows.push({ link: r.item, peer, kind: r.kind, prev: r.kind === "deleted" ? r.item : r.prev });
+      if (peer && (showChanges || r.kind !== "deleted"))
+        rows.push({ link: r.item, peer, kind: r.kind, prev: r.kind === "deleted" ? r.item : r.prev, shown: showChanges });
     }
     return rows;
   };

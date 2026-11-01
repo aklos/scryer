@@ -83,4 +83,14 @@ describe("DiagramCard", () => {
     expect(draw({ attention: "planned" })).not.toContain("stroke-sky");
     expect(draw({ attention: "planned" })).toContain("stroke-[var(--map-card-stroke)]");
   });
+
+  it("Marks a card changed since the base with its letter in the hue its name takes, and a card holding changes below it with a dot", () => {
+    const added = draw({ change: "added" });
+    expect(added).toContain('data-change="added"');
+    expect(added).toMatch(/text-emerald-700[^"]*">Desktop App UI/);
+    expect(draw({ change: "modified" })).toContain('data-change="modified"');
+    expect(draw({ holdsChanges: true })).toContain('data-change="holding"');
+    expect(draw({})).not.toContain("data-change");
+    expect(draw({ change: "added", node: { ...node, reference: true } as DiagramNode })).not.toContain("data-change");
+  });
 });

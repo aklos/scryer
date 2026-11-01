@@ -20,6 +20,6 @@ describe("Term", () => {
   });
 
   it("Names each claim state by the word every surface shows for it", () => {
-    expect(Object.values(CLAIM_TERM).map((t) => GLOSSARY[t].label)).toEqual(["proven", "unverified", "failing", "todo"]);
+    expect(Object.values(CLAIM_TERM).map((t) => GLOSSARY[t].label)).toEqual(["proven", "outdated", "failing", "todo"]);
   });
 });

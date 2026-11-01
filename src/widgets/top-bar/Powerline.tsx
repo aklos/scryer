@@ -90,7 +90,7 @@ export function Powerline({ model, agent, health, launch, onOpenSpecial, onOpenS
             <span className="pl-strong font-medium">{counts.proven}</span>
             <Term id="proven" above className="text-[var(--text-secondary)]" />
             <span className="text-[var(--text-tertiary)]">
-              · {counts.stale} <Term id="unverified" above /> · {counts.failing} <Term id="failing" above /> ·{" "}
+              · {counts.stale} <Term id="outdated" above /> · {counts.failing} <Term id="failing" above /> ·{" "}
               {counts.planned} <Term id="todo" above />
             </span>
           </>

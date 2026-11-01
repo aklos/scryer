@@ -32,8 +32,8 @@ describe("WorktreesSection", () => {
     expect(standing(work({ base: "main", ahead: 1, behind: 14, files: ["a"] }))[0].label).toBe("touches no claims");
     expect(standing(work({ files: ["a"], ready: true }))[0].label).toBe("touches no claims");
     expect(standing(work({ files: ["a"], ready: true, claims: [claim("a", "proven")] }))[0].label).toBe("ready to merge");
-    expect(standing(work({ files: ["a"], claims: [claim("a", "failing"), claim("b", "stale")] })).map((p) => p.label)).toEqual(["1 failing", "1 unverified"]);
-    expect(standing(work({ files: ["a"], claims: [claim("a", "planned"), claim("b", "stale"), claim("c", "proven")] })).map((p) => [p.label, p.tone])).toEqual([["1 unverified", "stale"], ["1 todo", "planned"]]);
+    expect(standing(work({ files: ["a"], claims: [claim("a", "failing"), claim("b", "stale")] })).map((p) => p.label)).toEqual(["1 failing", "1 outdated"]);
+    expect(standing(work({ files: ["a"], claims: [claim("a", "planned"), claim("b", "stale"), claim("c", "proven")] })).map((p) => [p.label, p.tone])).toEqual([["1 outdated", "stale"], ["1 todo", "planned"]]);
     expect(standing(work({ error: "git failed" }))[0].label).toBe("could not be read");
   });
 
@@ -57,7 +57,7 @@ describe("WorktreesSection", () => {
     const html = renderToStaticMarkup(<WorktreesSection data={data} onOpenWorktree={() => {}} onOpenClaim={() => {}} />);
     expect(html).toContain("feature");
     expect(html).toContain("↑2 ↓1 main");
-    expect(html).toContain("1 unverified");
+    expect(html).toContain("1 outdated");
     expect(html).not.toContain("claim a");
     expect(html).toContain("1 component changed in more than one worktree");
   });

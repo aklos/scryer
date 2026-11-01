@@ -1,5 +1,5 @@
 //! The derived tree's own commands: every claim's status, the landing view,
-//! and writing claims back into the code.
+//! the activity feed, and writing claims back into the code.
 
 fn model_ref(cwd: &str) -> scryer_core::ModelRef {
     scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(cwd))
@@ -24,6 +24,37 @@ pub(crate) async fn get_landing(cwd: String, since: u64) -> Result<scryer_core::
     })
     .await
     .map_err(|e| format!("landing task failed: {e}"))?
+}
+
+/// HEAD's commits along first parents, newest first, `limit` after `skip`.
+#[tauri::command]
+pub(crate) async fn get_history(cwd: String, skip: usize, limit: usize) -> Result<Vec<scryer_extract::activity::Commit>, String> {
+    tauri::async_runtime::spawn_blocking(move || scryer_extract::activity::history(std::path::Path::new(&cwd), skip, limit))
+        .await
+        .map_err(|e| format!("history task failed: {e}"))?
+}
+
+/// What `sha` changed in the model against `parent`. Derives each commit
+/// once, so a commit not read before takes seconds.
+#[tauri::command]
+pub(crate) async fn get_commit_diff(
+    cwd: String,
+    sha: String,
+    parent: Option<String>,
+) -> Result<scryer_core::model_diff::ModelDiff, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        scryer_extract::activity::commit_diff(std::path::Path::new(&cwd), &sha, parent.as_deref())
+    })
+    .await
+    .map_err(|e| format!("commit diff task failed: {e}"))?
+}
+
+/// What the working tree changed in the model against HEAD.
+#[tauri::command]
+pub(crate) async fn get_uncommitted_diff(cwd: String) -> Result<scryer_core::model_diff::ModelDiff, String> {
+    tauri::async_runtime::spawn_blocking(move || scryer_extract::activity::uncommitted_diff(std::path::Path::new(&cwd)))
+        .await
+        .map_err(|e| format!("uncommitted diff task failed: {e}"))?
 }
 
 /// Each of the project's git worktrees against its base branch: the claims

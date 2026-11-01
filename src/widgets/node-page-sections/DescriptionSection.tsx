@@ -1,6 +1,6 @@
 /**
  * The page's lede: the description paragraph under the header, shown
- * word-diffed against the committed text when reworded, and edited in place.
+ * word-diffed against the base's text when reworded and the changes are shown, and edited in place.
  */
 
 import type { Editor } from "../../entities/model/editor";
@@ -27,7 +27,7 @@ export function DescriptionSection({
   onCommit,
 }: {
   value: string | undefined;
-  /** The committed description — when it differs from `value`, the lede shows
+  /** The description at the base, while the changes are shown — when it differs from `value`, the lede shows
    *  the reword inline (word-diff), like a claim. */
   prevValue?: string;
   editor: Editor | undefined;

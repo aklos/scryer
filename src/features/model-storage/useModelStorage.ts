@@ -1,11 +1,13 @@
 /**
- * The open project's tree, read from its code. One project open at a time.
- * The backend derives the C4 tree from packaging and tests and serves it in
- * two layers: `committed` (implemented claims) and `planned` (plus the todo
- * stubs).
+ * The open project's tree, read from its code, and the tree at the base its
+ * changes are read against. One project open at a time.
  *
  * Claims:
- *  - load both layers (`read_planned` / `read_model`)
+ *  - load the tree (`read_planned`), every claim todo tests included
+ *  - read where its changes start (`read_change_base`: HEAD on the default
+ *    branch, the merge base off it) and the tree at that commit
+ *    (`read_base_model`), which the backend derives once per commit; the
+ *    base is fetched again only when its commit moves
  *  - re-read them when the watcher reports a fresh derivation or a changed
  *    `structure.toml`, and every few seconds, since the tree follows the code
  *    and the watcher only covers `.scryer/`
@@ -19,6 +21,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { ScryModel } from "../../entities/model/viewmodel";
+
+/** Where the project's changes are read from. */
+export interface ChangeBase {
+  commit: string;
+  /** The branch the checkout diverged from; absent when the base is HEAD. */
+  against?: string;
+  /** Commits ahead of `against`. */
+  ahead: number;
+  /** Something is uncommitted. */
+  dirty: boolean;
+}
 
 const RECENT_KEY = "scryer:recent-projects";
 const RECENT_CAP = 8;
@@ -58,10 +71,12 @@ export interface ModelStorage {
   status: ProjectStatus;
   projectPath: string | null;
   modelRef: string | null;
-  /** The planned layer: every claim, todo stubs included. */
+  /** The tree: every claim, todo tests included. */
   model: ScryModel | null;
-  /** The committed layer: implemented claims only. */
-  committed: ScryModel | null;
+  /** The tree at `changeBase`; null outside git or until it is read. */
+  base: ScryModel | null;
+  /** Where the changes are read from; null outside a git repository. */
+  changeBase: ChangeBase | null;
   error: string | null;
   recentProjects: string[];
   /** Bumped each time a re-read changed the tree — the signal for consumers
@@ -73,9 +88,9 @@ export interface ModelStorage {
   openProject: (path: string, opts?: { remember?: boolean }) => Promise<void>;
   /** Forget the project; UI returns to the picker. */
   closeProject: () => void;
-  /** Re-read both layers; true when either changed. */
+  /** Re-read the tree and its base; true when the tree changed. */
   reloadFromDisk: () => Promise<boolean>;
-  /** Show an edit over both layers until the re-read after `write` lands,
+  /** Show an edit over the tree until the re-read after `write` lands,
    *  so the page never flashes back to the old text meanwhile. */
   showEdit: (apply: (m: ScryModel) => ScryModel, write: Promise<unknown>) => Promise<void>;
   /** Drop a recent project from localStorage. */
@@ -87,18 +102,43 @@ export function useModelStorage(): ModelStorage {
   const [projectPath, setProjectPath] = useState<string | null>(null);
   const [modelRef, setModelRef] = useState<string | null>(null);
   const [model, setModel] = useState<ScryModel | null>(null);
-  const [committed, setCommitted] = useState<ScryModel | null>(null);
+  const [base, setBase] = useState<ScryModel | null>(null);
+  const [changeBase, setChangeBase] = useState<ChangeBase | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [externalGeneration, setExternalGeneration] = useState(0);
   const [recentProjects, setRecentProjects] = useState<string[]>(() => readRecent());
   // Edits written but not yet re-read, applied in order over the disk layers.
   const [shown, setShown] = useState<readonly { apply: (m: ScryModel) => ScryModel }[]>([]);
 
-  // The bytes last applied per layer: an unchanged re-read must not re-render.
+  // The bytes last applied: an unchanged re-read must not re-render.
   const plannedRaw = useRef<string | null>(null);
-  const committedRaw = useRef<string | null>(null);
+  // The base commit last read, and the one being read.
+  const baseCommit = useRef<string | null>(null);
   const modelRefRef = useRef<string | null>(null);
   modelRefRef.current = modelRef;
+
+  // Where the changes start, and the tree there when that commit moved. A
+  // base read for a project since closed or switched is dropped.
+  const readBase = useCallback(async (ref: string) => {
+    const at = await invoke<ChangeBase | null>("read_change_base", { refStr: ref }).catch(() => undefined);
+    if (at === undefined || modelRefRef.current !== ref) return;
+    setChangeBase((prev) =>
+      prev && at && prev.commit === at.commit && prev.against === at.against && prev.ahead === at.ahead && prev.dirty === at.dirty
+        ? prev
+        : at,
+    );
+    const commit = at?.commit ?? null;
+    if (commit === baseCommit.current) return;
+    baseCommit.current = commit;
+    if (!commit) {
+      setBase(null);
+      return;
+    }
+    const json = await invoke<string>("read_base_model", { refStr: ref, commit }).catch(() => null);
+    if (modelRefRef.current !== ref || baseCommit.current !== commit) return;
+    if (json === null) baseCommit.current = null;
+    else setBase(JSON.parse(json) as ScryModel);
+  }, []);
 
   const reloadFromDisk = useCallback(async (): Promise<boolean> => {
     const ref = modelRefRef.current;
@@ -111,18 +151,13 @@ export function useModelStorage(): ModelStorage {
         setModel(JSON.parse(planned) as ScryModel);
         changed = true;
       }
-      const base = await invoke<string>("read_model", { refStr: ref });
-      if (base !== committedRaw.current) {
-        committedRaw.current = base;
-        setCommitted(JSON.parse(base) as ScryModel);
-        changed = true;
-      }
     } catch {
       /* transient — the next re-read tries again */
     }
     if (changed) setExternalGeneration((g) => g + 1);
+    void readBase(ref);
     return changed;
-  }, []);
+  }, [readBase]);
 
   // The watcher reports a fresh derivation or an edited structure.toml.
   useEffect(() => {
@@ -164,9 +199,10 @@ export function useModelStorage(): ModelStorage {
     const ref = `project:${path}`;
     try {
       const planned = await invoke<string>("read_planned", { refStr: ref });
-      const base = await invoke<string>("read_model", { refStr: ref });
       plannedRaw.current = planned;
-      committedRaw.current = base;
+      baseCommit.current = null;
+      setBase(null);
+      setChangeBase(null);
       if (opts?.remember !== false) {
         const next = bumpRecent(path);
         writeRecent(next);
@@ -174,26 +210,27 @@ export function useModelStorage(): ModelStorage {
       }
       setModelRef(ref);
       setModel(JSON.parse(planned) as ScryModel);
-      setCommitted(JSON.parse(base) as ScryModel);
       setStatus("ready");
+      modelRefRef.current = ref;
+      void readBase(ref);
     } catch (e) {
       setModelRef(null);
       setModel(null);
-      setCommitted(null);
       setStatus("error");
       setError(String(e));
     }
-  }, []);
+  }, [readBase]);
 
   const closeProject = useCallback(() => {
     setStatus("idle");
     setProjectPath(null);
     setModelRef(null);
     setModel(null);
-    setCommitted(null);
+    setBase(null);
+    setChangeBase(null);
     setError(null);
     plannedRaw.current = null;
-    committedRaw.current = null;
+    baseCommit.current = null;
     setShown([]);
   }, []);
 
@@ -204,17 +241,14 @@ export function useModelStorage(): ModelStorage {
   }, []);
 
   const shownModel = useMemo(() => model && shown.reduce((m, e) => e.apply(m), model), [model, shown]);
-  const shownCommitted = useMemo(
-    () => committed && shown.reduce((m, e) => e.apply(m), committed),
-    [committed, shown],
-  );
 
   return {
     status,
     projectPath,
     modelRef,
     model: shownModel,
-    committed: shownCommitted,
+    base,
+    changeBase,
     error,
     recentProjects,
     externalGeneration,

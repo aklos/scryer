@@ -51,6 +51,8 @@ import { buildDiagramScene, CARD_W, CARD_H, type DiagramScene, type DiagramNode 
 import { useDotSim } from "./useDotSim";
 import { drawingBounds, StyleRegions } from "./StyleRegions";
 import { structuralBySubtree, type ModelHealthReport } from "../../entities/model/health";
+import { NO_CHANGES, type ModelChanges } from "../../entities/model/changes";
+import { NODE_CHANGE_TONE, NodeChangeMark } from "../../entities/model/diffkit";
 
 type DotData = CardData;
 type RFDot = RFNode<DotData, "dot">;
@@ -115,15 +117,18 @@ export function DotNode({ data }: NodeProps<RFDot>) {
         <CenterHandle />
       </span>
       <span
-        className={`mt-1.5 max-w-[130px] truncate text-center text-xs leading-tight ${
+        className={`mt-1.5 flex max-w-[130px] items-baseline gap-1 text-center text-xs leading-tight ${
           ghost
             ? "italic text-[var(--text-muted)]"
             : selected
               ? "font-medium text-[var(--text)]"
-              : "text-[var(--text-secondary)]"
+              : data.change
+                ? NODE_CHANGE_TONE[data.change]
+                : "text-[var(--text-secondary)]"
         }`}
       >
-        {node.name || "·"}
+        <span className="truncate">{node.name || "·"}</span>
+        {!ghost && <NodeChangeMark change={data.change} holding={data.holdsChanges} />}
       </span>
     </div>
   );
@@ -149,10 +154,13 @@ export function DiagramView({
   pendingIds,
   concernLens,
   previewable,
+  changes = NO_CHANGES,
 }: {
   model: ScryModel;
   /** Symbol ids the preview sidecar can render — derived, drives the `visual` class. */
   previewable: ReadonlySet<string>;
+  /** What changed since the base: each card carries its node's mark. */
+  changes?: ModelChanges;
   /** Health report — its derived edges drive the ghosts (cards outside the level),
    *  its derived status the claim bar on each card. */
   report: ModelHealthReport | null;
@@ -181,6 +189,7 @@ export function DiagramView({
         pendingIds={pendingIds}
         concernLens={concernLens}
         previewable={previewable}
+        changes={changes}
       />
     </ReactFlowProvider>
   );
@@ -196,10 +205,12 @@ function DiagramInner({
   pendingIds,
   concernLens,
   previewable,
+  changes,
 }: {
   model: ScryModel;
   /** Symbol ids the preview sidecar can render — derived, drives the `visual` class. */
   previewable: ReadonlySet<string>;
+  changes: ModelChanges;
   report: ModelHealthReport | null;
   focusId: string | null;
   selectedId: string | null;
@@ -347,11 +358,13 @@ function DiagramInner({
             pending: pendingIds?.has(n.id),
             structural: structural.get(n.id),
             styled: scene.mode === "styled",
+            change: changes.nodes.get(n.id),
+            holdsChanges: changes.holding.has(n.id),
           },
         };
       }) as Array<RFCard | RFDot>;
     });
-  }, [scene, selectedId, claimsOf, highlight, pendingIds, structural, concernLit, dotSim.live]);
+  }, [scene, selectedId, claimsOf, highlight, pendingIds, structural, concernLit, dotSim.live, changes]);
 
   // Each card's box, at its measured size once React Flow has measured it, and
   // each edge's ends and turns over them (as the layout-quality score reads

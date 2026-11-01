@@ -1,13 +1,16 @@
 /**
  * The diffing design language — the shared primitives every surface that
- * renders a diff of a node's claims, properties or links against the
- * committed tree goes through, so "added / reworded / deleted" looks the same
+ * renders a diff of a node's claims, properties or links against the base
+ * the checkout's changes are read from goes through, and the mark a changed
+ * node carries in the tree and on the map, so "added / reworded / deleted" looks the same
  * on every section of the node page.
  *
  * Two primitives, one palette ({@link CHANGE_COLOR}):
  *   - {@link ChangeGlyph} — the per-change marker glyph (+ ~ −) in its hue.
  *   - {@link DIFF_TINT}   — the whole-element add/delete fill.
  */
+
+import type { NodeChange } from "./changes";
 
 export { WordDiffText } from "../../shared/ui/pagekit";
 
@@ -61,7 +64,7 @@ export const DIFF_TINT: Record<"add" | "delete", string> = {
     "rounded-xs bg-red-500/10 px-0.5 decoration-clone text-red-800 line-through decoration-red-400/60 dark:bg-transparent dark:text-red-300/90",
 };
 
-/** How one element diverges from its committed copy — the shared vocabulary
+/** How one element diverges from its base copy — the shared vocabulary
  *  behind the claim, property, and link diff views. */
 export type ElementDiffKind = "added" | "reworded" | "deleted" | "unchanged";
 
@@ -76,35 +79,69 @@ export const CHANGE_OF: Record<Exclude<ElementDiffKind, "unchanged">, ChangeKind
 export interface ElementDiff<T> {
   item: T;
   kind: ElementDiffKind;
-  /** The committed copy, for word-diffing a reworded element. */
+  /** The base copy, for word-diffing a reworded element. */
   prev?: T;
   /** Display number — null for deleted rows (outside the numbered list). */
   index: number | null;
 }
 
 /** The one classifier behind every element diff view: planned elements in
- *  order (each tagged added / reworded / unchanged against the committed copy
- *  by `key`), then any committed elements the plan dropped. Claims key by id,
+ *  order (each tagged added / reworded / unchanged against the base copy
+ *  by `key`), then any base elements since removed. Claims key by id,
  *  properties by exact label, links by id. */
 export function buildElementDiff<T>(
-  planned: readonly T[],
-  committed: readonly T[],
+  current: readonly T[],
+  base: readonly T[],
   opts: {
     key: (t: T) => string;
-    /** Whether a surviving element was reworded relative to its committed copy. */
+    /** Whether a surviving element was reworded relative to its base copy. */
     changed: (prev: T, next: T) => boolean;
   },
 ): ElementDiff<T>[] {
-  const prevByKey = new Map(committed.map((t) => [opts.key(t), t]));
-  const liveKeys = new Set(planned.map((t) => opts.key(t)));
+  const prevByKey = new Map(base.map((t) => [opts.key(t), t]));
+  const liveKeys = new Set(current.map((t) => opts.key(t)));
   const rows: ElementDiff<T>[] = [];
   let n = 0;
-  for (const t of planned) {
+  for (const t of current) {
     const prev = prevByKey.get(opts.key(t));
     const kind: ElementDiffKind = !prev ? "added" : opts.changed(prev, t) ? "reworded" : "unchanged";
     rows.push({ item: t, kind, prev, index: ++n });
   }
-  for (const t of committed)
+  for (const t of base)
     if (!liveKeys.has(opts.key(t))) rows.push({ item: t, kind: "deleted", index: null });
   return rows;
+}
+
+/** A changed node's name colour, the source-control explorer idiom: green
+ *  added, amber modified. */
+export const NODE_CHANGE_TONE: Record<NodeChange, string> = {
+  added: CHANGE_COLOR.add,
+  modified: CHANGE_COLOR.modified,
+};
+
+const NODE_CHANGE_LETTER: Record<NodeChange, string> = { added: "A", modified: "M" };
+
+/** A node's change since the base, as the tree and the map mark it: its
+ *  letter (A added, M modified) in its hue, or, for a node that only holds
+ *  changes below it, a dot. Nothing for an unchanged node. */
+export function NodeChangeMark({ change, holding = false }: { change?: NodeChange; holding?: boolean }) {
+  if (change)
+    return (
+      <span
+        data-change={change}
+        title={change === "added" ? "Added since the base" : "Modified since the base"}
+        className={`shrink-0 select-none font-mono text-2xs font-semibold ${NODE_CHANGE_TONE[change]}`}
+      >
+        {NODE_CHANGE_LETTER[change]}
+      </span>
+    );
+  if (holding)
+    return (
+      <span
+        data-change="holding"
+        title="Holds changes since the base"
+        className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-600 dark:bg-amber-400"
+      />
+    );
+  return null;
 }

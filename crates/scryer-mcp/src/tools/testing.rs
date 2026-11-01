@@ -109,7 +109,7 @@ impl ScryerServer {
     #[tool(
         description = "Report a finished test run: point at the JUnit XML file the runner wrote and each \
          test's result is recorded against its claim — ONE call per report file. Verdicts are \
-         fingerprint-keyed, so a later edit to the code or the test makes them stale. Call after \
+         fingerprint-keyed, so a later edit to the code or the test makes them outdated. Call after \
          every run."
     )]
     fn ingest_test_report(
@@ -341,7 +341,7 @@ A survivor is a finding: locate the files it names and strengthen their tests.")
         description = "Open a falsification probe on one `test` (its JUnit name): would it FAIL if the code \
          stopped doing what its description claims? Syncs an isolated git worktree and returns \
          its path, the claim and the files to break. Run it yourself, never through a subagent; \
-         close with close_probe. Refused for a todo test, a failing or stale one, or outside a \
+         close with close_probe. Refused for a todo test, a failing or outdated one, or outside a \
          git repo."
     )]
     fn open_probe(

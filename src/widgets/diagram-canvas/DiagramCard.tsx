@@ -6,7 +6,8 @@
  * external dashed frame, the C4 kind line, the claim states inside the node
  * in words along its foot (outlined red when any fails, blue when any is a
  * todo test), its style's glyph in the corner, the count of structural
- * violations inside it, and the drill affordance on select. Ghosts (nodes that live elsewhere) render
+ * violations inside it, its change since the base (A added, M modified, a
+ * dot when it only holds changes), and the drill affordance on select. Ghosts (nodes that live elsewhere) render
  * dimmed with no drill. Dropped from the canvas: contracts, advisor hints,
  * member chips, and all drag-to-edit.
  */
@@ -16,6 +17,8 @@ import type { DiagramNode } from "./diagramLayout";
 import type { StyleViolation } from "../../entities/model/health";
 import { CLAIM_LABEL, CLAIM_LETTER, CLAIM_TONE, type ChildTally } from "../../entities/model/claimState";
 import { StructuralCount } from "../../entities/model/StructuralCount";
+import { NODE_CHANGE_TONE, NodeChangeMark } from "../../entities/model/diffkit";
+import type { NodeChange } from "../../entities/model/changes";
 import { NodeHandles } from "../../shared/diagram/NodeHandles";
 import { ShapeBackground, resolveShape, getContentInsets } from "../../entities/model/shapes";
 import { builtinStyles } from "../../entities/model/styles";
@@ -40,6 +43,10 @@ export interface CardData extends Record<string, unknown> {
   /** The level is drawn in a style: every card sits inside its layer's
    *  region, so the card's own layer tag would only repeat the region label. */
   styled?: boolean;
+  /** How the node changed since the base. */
+  change?: NodeChange;
+  /** A node below it changed since the base. */
+  holdsChanges?: boolean;
 }
 export type RFCard = RFNode<CardData, "card">;
 
@@ -296,8 +303,19 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
                 {node.layer}
               </div>
             )}
-            <div className="line-clamp-2 w-full break-words text-center text-sm font-semibold leading-tight text-[var(--map-title)]">
+            <div
+              className={`line-clamp-2 w-full break-words text-center text-sm font-semibold leading-tight ${
+                data.change && !isGhost ? NODE_CHANGE_TONE[data.change] : "text-[var(--map-title)]"
+              }`}
+            >
               {node.name || "Untitled"}
+              {/* Its change since the base, beside its name; a ghost's is
+                  told at home. */}
+              {!isGhost && (data.change || data.holdsChanges) && (
+                <span className="ml-1 inline-flex items-center align-middle">
+                  <NodeChangeMark change={data.change} holding={data.holdsChanges} />
+                </span>
+              )}
             </div>
             {typeLine && (
               <div

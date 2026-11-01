@@ -36,7 +36,7 @@ pub use discovery::{walk, manifest, tsconfig};
 pub mod claim_writing;
 pub use claim_writing::{claim_file_io, migrate};
 pub mod standing;
-pub use standing::{landing, test_status, worktrees};
+pub use standing::{activity, base_model, landing, test_status, worktrees};
 
 // The public surface, spelled the way consumers use it today.
 pub use extract::{
