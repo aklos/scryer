@@ -18,6 +18,7 @@ Before touching code, call `orient` with the task in 3–5 words and the files y
 - where it sits (`system / container / component`), its **layer** with what that layer may import, and any style violation already charged to the file,
 - the module description and the claims that already speak for it, with status,
 - `stubs`: the test file where a new claim for this code goes.
+- `untested`, when no running test reaches the file: write the claim for what you change as a todo test before touching it.
 
 `locate {file}` is the one-file form with every claim. `search_model` and `read_model` find and read nodes when you don't know the file yet.
 
@@ -111,6 +112,8 @@ No separate ADR files; the doc comment travels with the code it explains. A deci
 3. `ingest_test_report {path}`, once per report file. That is what turns claims proven or failing; nothing else does.
 
 A later edit to a test or to the code it exercises makes its verdict **outdated** until the next ingested run. Before saying you are done, your claims should be proven and current.
+
+**Which lines each claim runs.** In a Rust project, wrap the radius command once in a while: `scryer-mcp coverage run -- cargo nextest run …` runs it with per-test coverage and prints an LCOV path; `ingest_test_report` it like a JUnit file. `locate` and `orient` then list a file's lines no claim runs: behaviour nothing states. Before relying on such code, write the claim it should meet; code nothing needs can go.
 
 ## 5. Probe what you doubt
 

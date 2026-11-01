@@ -592,7 +592,7 @@ export function ModelTree({
         {concernTally && concernTally.has(node.id) && (
           <span
             className="shrink-0 rounded bg-[var(--accent-soft)] px-1 font-mono text-2xs tabular-nums text-[var(--accent)]"
-            title={`${concernTally.get(node.id)} claim${concernTally.get(node.id) === 1 ? "" : "s"} tagged "${concernLens}" in this subtree`}
+            title={`${concernTally.get(node.id)} claim${concernTally.get(node.id) === 1 ? "" : "s"} tagged "${concernLens}" live or run here`}
           >
             {concernTally.get(node.id)}
           </span>

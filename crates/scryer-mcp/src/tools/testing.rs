@@ -20,7 +20,7 @@ use scryer_core::test_results::TestOutcome;
 use scryer_core::worktree;
 use scryer_core::ModelRef;
 use scryer_extract::test_status::{
-    ingest_mutation_report, ingest_report, record_probe_result, render_test_command, reports_dir, set_test_command,
+    ingest_coverage_report, ingest_mutation_report, ingest_report, record_probe_result, render_test_command, reports_dir, set_test_command,
     test_command, RadiusTest,
 };
 
@@ -104,13 +104,43 @@ fn read_report(model_ref: &ModelRef, path: &str) -> Result<String, String> {
     std::fs::read_to_string(&abs).map_err(|e| format!("Failed to read report '{}': {e}", abs.display()))
 }
 
+/// Whether a report is LCOV rather than JUnit XML: its records start `TN:`
+/// or `SF:`, never `<`.
+fn is_lcov(report: &str) -> bool {
+    report.lines().map(str::trim).find(|l| !l.is_empty()).is_some_and(|l| l.starts_with("TN:") || l.starts_with("SF:"))
+}
+
+/// Record a per-test coverage report against the claims its tests state.
+fn ingest_coverage(model_ref: &ModelRef, path: &str, lcov: &str) -> Result<CallToolResult, McpError> {
+    let _lock = match lock_or_err(model_ref) {
+        Ok(l) => l,
+        Err(e) => return Ok(e),
+    };
+    let s = match ingest_coverage_report(model_ref, lcov) {
+        Ok(s) => s,
+        Err(e) => return error(format!("Failed to ingest '{path}': {e}")),
+    };
+    let mut msg = format!(
+        "Ingested coverage of {} test(s) from {path}: lines recorded for {} claim(s) across {} product file(s).",
+        s.tests, s.claims, s.files
+    );
+    if s.tests == 0 {
+        msg.push_str("\nNo section names a test, so no claim got lines: the report must have one `TN:` section per test.");
+    } else if s.unmatched > 0 {
+        msg.push_str(&format!("\n{} test(s) matched no claim's test.", s.unmatched));
+    }
+    msg.push_str("\nlocate {file} lists the lines no claim runs.");
+    Ok(CallToolResult::success(vec![Content::text(msg)]))
+}
+
 #[tool_router(router = tool_router_testing, vis = "pub(crate)")]
 impl ScryerServer {
     #[tool(
         description = "Report a finished test run: point at the JUnit XML file the runner wrote and each \
          test's result is recorded against its claim — ONE call per report file. Verdicts are \
          fingerprint-keyed, so a later edit to the code or the test makes them outdated. Call after \
-         every run."
+         every run. A per-test LCOV file (`scryer-mcp coverage run` writes one) records the lines \
+         each claim's test runs the same way."
     )]
     fn ingest_test_report(
         &self,
@@ -121,6 +151,9 @@ impl ScryerServer {
             Ok(x) => x,
             Err(e) => return error(e),
         };
+        if is_lcov(&xml) {
+            return ingest_coverage(&model_ref, &req.path, &xml);
+        }
         // To name the claims in the answer by their tests, and to tell which
         // were proven before this run.
         let loaded = load(&model_ref).ok();
@@ -662,6 +695,26 @@ mod tests {
         );
         let again = ingest("mine", &case(r#"<failure message="no"/>"#));
         assert!(!again.contains("proven before"), "already failing: {again}");
+    }
+
+    /// When a per-test LCOV report is ingested, records the product lines each claim's test runs, leaving test code out.
+    #[test]
+    fn a_coverage_report_records_each_claims_lines() {
+        let dir = project();
+        write_coverage_report(&dir);
+        let text = text_of(
+            &ScryerServer::new()
+                .ingest_test_report(Parameters(IngestReportRequest { project: project_arg(&dir), path: "coverage.lcov".into() }))
+                .unwrap(),
+        );
+        assert!(text.contains("coverage of 3 test(s)"), "{text}");
+        assert!(text.contains("lines recorded for 2 claim(s) across 3 product file(s)"), "{text}");
+        assert!(text.contains("1 test(s) matched no claim"), "{text}");
+        let cache = scryer_core::derived_tree::read_coverage_at(&scryer_core::ModelRef::ProjectLocal(dir.path().into()));
+        assert_eq!(cache.executable["crates/notes/src/draft.rs"].lines, [3, 4], "the test's own line is test code");
+        let ran: Vec<&Vec<u32>> =
+            cache.claims.values().filter_map(|files| files.get("crates/notes/src/draft.rs")).map(|f| &f.lines).collect();
+        assert_eq!(ran, [&vec![4]]);
     }
 
     /// An unreadable report answers with what went wrong.

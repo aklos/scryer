@@ -363,8 +363,34 @@ pub(crate) fn file_report(loaded: &derived::Loaded, file: &str, claims_cap: Opti
         "moreComments": (threads.len() > COMMENTS_SHOWN)
             .then(|| format!("{} more open — comments {{on}}", threads.len() - COMMENTS_SHOWN)),
     });
+    // Current per-test coverage says it by line; without it, imports say
+    // whether any test reaches the file at all.
+    use scryer_core::coverage::{line_ranges, FileCoverage};
+    let coverage = if node.is_some() { loaded.file_coverage(file) } else { FileCoverage::Unknown };
+    let untested = match &coverage {
+        FileCoverage::Current { claims, .. } => *claims == 0,
+        _ => tree.dark_files.iter().any(|f| f == file),
+    };
+    match &coverage {
+        FileCoverage::Current { uncovered, executable, claims } if *claims > 0 && !uncovered.is_empty() => {
+            v["coverage"] = serde_json::json!(format!(
+                "{} of {executable} lines run by no claim: {}",
+                uncovered.len(),
+                clip(&line_ranges(uncovered), 160)
+            ));
+        }
+        FileCoverage::Outdated => {
+            v["coverage"] = serde_json::json!("outdated: the file changed since its coverage run");
+        }
+        _ => {}
+    }
     if node.is_none() {
-        v["note"] = serde_json::json!("No container or component holds this file — dark code, or not product code.");
+        v["note"] = serde_json::json!("No container or component holds this file — not product code.");
+    } else if untested {
+        // Asked for, unlike the read overlay, which stays silent on it.
+        v["untested"] = serde_json::json!(
+            "No running test reaches this file. Before changing it, write the claim for what it should do as a todo test in `stubs`."
+        );
     }
     strip_fields_compact(&mut v);
     v
@@ -850,6 +876,66 @@ mod tests {
         let abs = format!("{}/crates/notes/src/draft.rs", dir.path().display());
         assert_eq!(at(&abs)["file"], "crates/notes/src/draft.rs", "an absolute path is accepted");
         assert!(at("README.md")["note"].as_str().unwrap().contains("No container or component"));
+    }
+
+    /// When no running test reaches a file, says so and asks for the claim first.
+    #[test]
+    fn an_untested_file_asks_for_the_claim_first() {
+        let dir = project();
+        let at = |file: &str| {
+            json_of(
+                &ScryerServer::new()
+                    .locate(Parameters(LocateRequest { project: project_arg(&dir), file: file.into() }))
+                    .unwrap(),
+            )
+        };
+        let sync = at("crates/notes/src/sync.rs");
+        assert!(sync["untested"].as_str().unwrap().contains("todo test"), "{sync}");
+        assert!(at("crates/notes/src/draft.rs").get("untested").is_none(), "its own tests reach it");
+        let out = json_of(&orient(&dir, None, &["crates/notes/src/sync.rs"]));
+        assert!(out["files"][0]["untested"].is_string(), "{out}");
+    }
+
+    fn ingest_fixture_coverage(dir: &tempfile::TempDir) {
+        write_coverage_report(dir);
+        let lcov = std::fs::read_to_string(dir.path().join("coverage.lcov")).unwrap();
+        scryer_extract::test_status::ingest_coverage_report(&ModelRef::ProjectLocal(dir.path().into()), &lcov).unwrap();
+    }
+
+    /// When coverage is current, lists a file's lines no claim runs, and a file no claim runs is untested.
+    #[test]
+    fn current_coverage_lists_the_lines_no_claim_runs() {
+        let dir = project();
+        ingest_fixture_coverage(&dir);
+        let at = |file: &str| {
+            json_of(
+                &ScryerServer::new()
+                    .locate(Parameters(LocateRequest { project: project_arg(&dir), file: file.into() }))
+                    .unwrap(),
+            )
+        };
+        let draft = at("crates/notes/src/draft.rs");
+        assert_eq!(draft["coverage"], "1 of 2 lines run by no claim: 3", "{draft}");
+        assert!(draft.get("untested").is_none());
+        let store = at("crates/notes/src/store/mod.rs");
+        assert!(store.get("coverage").is_none() && store.get("untested").is_none(), "fully run: {store}");
+        assert!(at("crates/notes/src/sync.rs")["untested"].is_string(), "only an unmatched test ran it");
+    }
+
+    /// If a file changed since its coverage run, then says its coverage is outdated.
+    #[test]
+    fn a_changed_file_has_outdated_coverage() {
+        let dir = project();
+        ingest_fixture_coverage(&dir);
+        let path = dir.path().join("crates/notes/src/draft.rs");
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&path, format!("{text}\npub fn later() {{}}\n")).unwrap();
+        let draft = json_of(
+            &ScryerServer::new()
+                .locate(Parameters(LocateRequest { project: project_arg(&dir), file: "crates/notes/src/draft.rs".into() }))
+                .unwrap(),
+        );
+        assert!(draft["coverage"].as_str().unwrap().starts_with("outdated"), "{draft}");
     }
 
     /// When a claim's test carries decisions, locate lists them with the claim.

@@ -122,6 +122,16 @@ pub fn write_mutations_at(r: &ModelRef, cache: &MutationCache) -> Result<(), Str
     verdict_store::write_mutations(&r.mutations_path(), cache)
 }
 
+/// The stored per-test coverage.
+pub fn read_coverage_at(r: &ModelRef) -> crate::evidence::CoverageCache {
+    verdict_store::read_coverage(&r.coverage_path())
+}
+
+/// Replace the stored per-test coverage.
+pub fn write_coverage_at(r: &ModelRef, cache: &crate::evidence::CoverageCache) -> Result<(), String> {
+    verdict_store::write_coverage(&r.coverage_path(), cache)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

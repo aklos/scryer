@@ -92,3 +92,23 @@ pub(crate) fn text_of(result: &CallToolResult) -> String {
 pub(crate) fn json_of(result: &CallToolResult) -> serde_json::Value {
     serde_json::from_str(&text_of(result)).unwrap()
 }
+
+/// Write a per-test coverage report for [`project`] at `coverage.lcov`:
+/// `keeps_draft` runs `save` (line 4) and its own body (line 10, test code);
+/// `roundtrip` runs `Store::put`; nothing runs `Draft` (line 3), and only a
+/// test no claim states runs `sync`.
+pub(crate) fn write_coverage_report(dir: &tempfile::TempDir) {
+    let abs = dir.path().display();
+    write(
+        dir.path(),
+        "coverage.lcov",
+        &format!(
+            "TN:\nSF:{abs}/crates/notes/src/draft.rs\nDA:3,0\nDA:4,0\nDA:10,0\nend_of_record\n\
+             TN:\nSF:crates/notes/src/store/mod.rs\nDA:3,0\nend_of_record\n\
+             TN:\nSF:crates/notes/src/sync.rs\nDA:1,0\nend_of_record\n\
+             TN:notes$draft::tests::keeps_draft\nSF:{abs}/crates/notes/src/draft.rs\nDA:4,1\nDA:10,1\nend_of_record\n\
+             TN:roundtrip$roundtrip\nSF:crates/notes/src/store/mod.rs\nDA:3,2\nend_of_record\n\
+             TN:notes$nobody::tests::gone\nSF:crates/notes/src/sync.rs\nDA:1,1\nend_of_record\n"
+        ),
+    );
+}

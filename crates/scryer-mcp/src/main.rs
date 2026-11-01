@@ -1,8 +1,10 @@
 //! scryer-mcp: the stdio MCP server through which an agent reads the derived
 //! C4 tree and runs the test loop, and — by subcommand — the CLI: `setup`,
-//! `hook`, `status`, `statusline`, `lint`, `migrate` and `check`.
+//! `hook`, `status`, `statusline`, `lint`, `migrate`, `export`, `template`,
+//! `coverage` and `check`.
 
 mod cli;
+mod coverage_run;
 mod derived;
 mod helpers;
 mod hook_client;
@@ -60,6 +62,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some("template") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
             return cli::run_template(&args);
+        }
+        // A Rust test command run with per-test coverage, written as the
+        // LCOV report `ingest_test_report` reads.
+        Some("coverage") => {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            return coverage_run::run_coverage(&args);
         }
         // Opt-in CI gate: exit 0 clean, 1 findings, 2 unusable.
         Some("check") => {

@@ -4,7 +4,7 @@
 use crate::verdict_cache as store;
 
 // Declared in the domain, named here so the crate has one public path per area.
-pub use crate::test_evidence::MutationSummary;
+pub use crate::test_evidence::{CoverageSummary, MutationSummary};
 pub use crate::test_evidence::{
     render_test_command, ClaimProbeStatus, ClaimRecord, ClaimTestStatus, IngestSummary, ProbeRecord, RadiusTest,
     TestStatusCache, SLOW_TEST_MILLIS,
@@ -25,6 +25,11 @@ pub fn derived_status(
 /// test killed what.
 pub fn ingest_mutation_report(r: &ModelRef, report: &str) -> Result<MutationSummary, String> {
     store::ingest_mutation_file(r, report)
+}
+
+/// Ingest a per-test LCOV report: the lines each claim's test runs.
+pub fn ingest_coverage_report(r: &ModelRef, lcov: &str) -> Result<CoverageSummary, String> {
+    store::ingest_coverage_file(r, lcov)
 }
 
 /// Every claim's current test verdict, with staleness resolved against the code.

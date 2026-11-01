@@ -4,7 +4,8 @@
 //! is checked cheaply against file mtimes first and re-hashed only where a
 //! file was touched. Claims resolve against the derived tree. Verdicts live in
 //! `.scryer/.test-results.json`; mutation reports are merged into
-//! `.scryer/.mutations.json`. [infrastructure]
+//! `.scryer/.mutations.json`, per-test coverage into `.scryer/.coverage.json`.
+//! [infrastructure]
 
 use crate::code_map::{is_glob_pattern, resolve_span, span_hash};
 use crate::test_evidence::{parse_mutation_report, MutationSummary};
@@ -557,6 +558,90 @@ pub fn read_derived_status(
 /// Ingest a cargo-mutants `outcomes.json` or Stryker `mutation.json`. Each
 /// file and test the report covers replaces what an earlier report said
 /// about it; the rest is kept, so reports from several tools add up.
+/// Ingest a per-test LCOV report: each section's test is matched to its
+/// claim the way a JUnit case is, and the claim keeps the product lines its
+/// test ran, each file with its content hash. Lines in test files and inside
+/// any test's own span are test code, not what the claim speaks for. Merged
+/// per claim and per file, so a radius run updates only what it ran.
+pub fn ingest_coverage_file(r: &ModelRef, lcov: &str) -> Result<CoverageSummary, String> {
+    use scryer_core::coverage::{content_hash, FileLines};
+    use scryer_core::derived_tree::{read_coverage_at, write_coverage_at};
+    use scryer_core::test_results::{TestCase, TestOutcome};
+    let parsed = parse_lcov(lcov)?;
+    let project = r.project_path();
+    let tree = crate::tree_from_disk::derived_tree(project)?;
+    let test_map = &tree.planned.test_map;
+    let prefix = format!("{}/", project.display());
+    let resolve = |path: &str| -> String {
+        path.strip_prefix(&prefix).unwrap_or(path).trim_start_matches("./").replace('\\', "/")
+    };
+    // Test code: every test's own span, by file.
+    let mut test_spans: HashMap<&str, Vec<(u32, u32)>> = HashMap::new();
+    for loc in test_map.values().flatten() {
+        if let (Some(start), Some(end)) = (loc.line, loc.end_line) {
+            test_spans.entry(loc.pattern.as_str()).or_default().push((start, end));
+        }
+    }
+    let product = |file: &str, n: u32| {
+        tree.file_nodes.contains_key(file)
+            && !test_spans.get(file).is_some_and(|spans| spans.iter().any(|&(a, b)| (a..=b).contains(&n)))
+    };
+    let mut hashes: HashMap<String, Option<String>> = HashMap::new();
+    let mut hash_of = |file: &str| -> Option<String> {
+        hashes
+            .entry(file.to_string())
+            .or_insert_with(|| std::fs::read(project.join(file)).ok().map(|b| content_hash(&b)))
+            .clone()
+    };
+
+    let mut cache = read_coverage_at(r);
+    let mut summary = CoverageSummary { tests: parsed.tests.len(), ..Default::default() };
+    for (raw, lines) in &parsed.executable {
+        let file = resolve(raw);
+        let kept: Vec<u32> = lines.iter().copied().filter(|&n| product(&file, n)).collect();
+        if kept.is_empty() {
+            continue;
+        }
+        let Some(hash) = hash_of(&file) else { continue };
+        cache.executable.insert(file, FileLines { hash, lines: kept });
+        summary.files += 1;
+    }
+    let mut matched: BTreeSet<String> = BTreeSet::new();
+    for t in &parsed.tests {
+        let case = TestCase {
+            classname: t.classname.clone(),
+            name: t.name.clone(),
+            outcome: TestOutcome::Passed,
+            message: None,
+            millis: 0,
+        };
+        let claims: Vec<String> = match_report(test_map, std::slice::from_ref(&case)).claims.into_keys().collect();
+        if claims.is_empty() {
+            summary.unmatched += 1;
+            continue;
+        }
+        let mut files: BTreeMap<String, FileLines> = BTreeMap::new();
+        for (raw, lines) in &t.files {
+            let file = resolve(raw);
+            let kept: Vec<u32> = lines.iter().copied().filter(|&n| product(&file, n)).collect();
+            if kept.is_empty() {
+                continue;
+            }
+            if let Some(hash) = hash_of(&file) {
+                files.insert(file, FileLines { hash, lines: kept });
+            }
+        }
+        for id in claims {
+            cache.claims.insert(id.clone(), files.clone());
+            matched.insert(id);
+        }
+    }
+    summary.claims = matched.len();
+    cache.ingested_at = now_secs();
+    write_coverage_at(r, &cache)?;
+    Ok(summary)
+}
+
 pub fn ingest_mutation_file(r: &ModelRef, report: &str) -> Result<MutationSummary, String> {
     use scryer_core::derived_tree::{read_mutations_at, write_mutations_at};
     let parsed = parse_mutation_report(report)?;

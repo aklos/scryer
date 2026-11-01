@@ -17,9 +17,24 @@ pub(crate) struct Loaded {
     pub styles: scryer_core::style::Styles,
     /// The project's comment threads, open ones first.
     pub threads: Vec<scryer_core::comments::Thread>,
+    /// The lines each claim's test ran, from the last per-test coverage.
+    pub coverage: scryer_core::coverage::CoverageCache,
+    pub project: std::path::PathBuf,
 }
 
 impl Loaded {
+    /// What the last per-test coverage says about `file` as it is now.
+    pub(crate) fn file_coverage(&self, file: &str) -> scryer_core::coverage::FileCoverage {
+        use scryer_core::coverage::{content_hash, FileCoverage};
+        if !self.coverage.executable.contains_key(file) {
+            return FileCoverage::Unknown;
+        }
+        match std::fs::read(self.project.join(file)) {
+            Ok(bytes) => self.coverage.file(file, &content_hash(&bytes)),
+            Err(_) => FileCoverage::Unknown,
+        }
+    }
+
     /// The open threads on `node` and on every node above it: what people
     /// and other agents asked of the code this file belongs to.
     pub(crate) fn open_threads_on(&self, node: &str) -> Vec<&scryer_core::comments::Thread> {
@@ -81,7 +96,14 @@ impl Loaded {
 pub(crate) fn load(r: &ModelRef) -> Result<Loaded, String> {
     let (tree, status) = scryer_extract::test_status::derived_status(r)?;
     let threads = scryer_core::comments::threads(r.project_path());
-    Ok(Loaded { tree, status, styles: scryer_core::load_styles(r.project_path()), threads })
+    Ok(Loaded {
+        tree,
+        status,
+        styles: scryer_core::load_styles(r.project_path()),
+        threads,
+        coverage: scryer_core::derived_tree::read_coverage_at(r),
+        project: r.project_path().to_path_buf(),
+    })
 }
 
 /// How many of a file's style violations a file entry lists before pointing

@@ -1,9 +1,10 @@
-//! The evidence caches read straight off disk: test verdicts, probes and
-//! mutation results. The extractor writes them; this side only reads,
-//! except for the mutation cache, which is plain data with no fingerprints.
+//! The evidence caches read straight off disk: test verdicts, probes,
+//! mutation results and per-test coverage. The extractor writes them; this side
+//! only reads, except for the mutation and coverage caches: plain data, which
+//! carries its own content hashes where it has any.
 
 use crate::c4_model::{test_key, ScryModel};
-use crate::evidence::{MutationCache, TestStatusCache};
+use crate::evidence::{CoverageCache, MutationCache, TestStatusCache};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -22,6 +23,21 @@ pub fn read_mutations(path: &Path) -> MutationCache {
 }
 
 pub fn write_mutations(path: &Path, cache: &MutationCache) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let json = serde_json::to_string(cache).map_err(|e| e.to_string())?;
+    std::fs::write(path, json).map_err(|e| e.to_string())
+}
+
+pub fn read_coverage(path: &Path) -> CoverageCache {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+pub fn write_coverage(path: &Path, cache: &CoverageCache) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }

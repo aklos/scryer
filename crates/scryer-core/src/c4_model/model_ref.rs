@@ -74,6 +74,15 @@ impl ModelRef {
         }
     }
 
+    /// The lines each claim's test ran, from the last ingested per-test
+    /// coverage (see `scryer_extract::test_status::ingest_coverage_report`).
+    /// Regenerable.
+    pub fn coverage_path(&self) -> PathBuf {
+        match self {
+            ModelRef::ProjectLocal(path) => path.join(".scryer").join(".coverage.json"),
+        }
+    }
+
     /// Per-session logs, one append-only `<session_id>.jsonl` each (see
     /// `crate::session_log`). Local to this checkout, never committed.
     pub fn sessions_dir(&self) -> PathBuf {

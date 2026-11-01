@@ -223,10 +223,6 @@ export const STANDARD_CONCERNS: ReadonlyMap<string, { description: string; icon:
     ],
   ]);
 
-/** Per-node subtree tally for one concern: node id → how many claims
- *  tagged `slug` live on the node or anywhere beneath it. Nodes with zero
- *  matches are absent — `counts.has(id)` IS the lens predicate ("does this
- *  concern live here?"). */
 /** The concerns the model's claims are tagged with, A to Z, each with how
  *  many claims carry it: the concern lens's options. A concern exists only
  *  as a claim's tag, so this is the whole vocabulary. */
@@ -240,26 +236,44 @@ export function modelConcerns(model: ScryModel): { slug: string; count: number }
     .map(([slug, count]) => ({ slug, count }));
 }
 
+/** Per-node subtree tally for one concern: node id → how many claims
+ *  tagged `slug` speak for the node or anything beneath it. A claim speaks
+ *  for the node it lives on and for each symbol its test exercises, so the
+ *  lens also lights code a tagged claim runs from elsewhere; each claim
+ *  counts once per subtree. Nodes with zero matches are absent —
+ *  `counts.has(id)` IS the lens predicate ("does this concern live here?"). */
 export function concernCounts(model: ScryModel, slug: string): Map<string, number> {
-  const own = new Map<string, number>();
-  for (const node of model.nodes) {
-    const n = (node.claims ?? []).filter((r) => r.concerns?.includes(slug)).length;
-    if (n > 0) own.set(node.id, n);
-  }
+  const tagged = new Set<string>();
+  const touched = new Map<string, string[]>(); // node id → tagged claim ids
+  const touch = (nodeId: string, claimId: string) => {
+    const ids = touched.get(nodeId) ?? [];
+    ids.push(claimId);
+    touched.set(nodeId, ids);
+  };
+  for (const node of model.nodes)
+    for (const r of node.claims ?? [])
+      if (r.concerns?.includes(slug)) {
+        tagged.add(r.id);
+        touch(node.id, r.id);
+      }
+  for (const node of model.nodes)
+    for (const id of node.exercisedBy ?? []) if (tagged.has(id)) touch(node.id, id);
 
-  // Roll each node's own count up its ancestor chain.
+  // Roll each node's claims up its ancestor chain, as sets.
   const byId = new Map(model.nodes.map((n) => [n.id, n]));
-  const out = new Map<string, number>();
-  for (const [id, count] of own) {
+  const claimsAt = new Map<string, Set<string>>();
+  for (const [id, ids] of touched) {
     let cur: Node | undefined = byId.get(id);
     const seen = new Set<string>();
     while (cur && !seen.has(cur.id)) {
       seen.add(cur.id);
-      out.set(cur.id, (out.get(cur.id) ?? 0) + count);
+      const set = claimsAt.get(cur.id) ?? new Set<string>();
+      for (const c of ids) set.add(c);
+      claimsAt.set(cur.id, set);
       cur = cur.parentId ? byId.get(cur.parentId) : undefined;
     }
   }
-  return out;
+  return new Map([...claimsAt].map(([id, set]) => [id, set.size]));
 }
 
 export function updateNode(

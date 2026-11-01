@@ -27,6 +27,11 @@ pkgs.mkShell {
     # per-claim verdicts. Plain `cargo test` emits no machine-readable report,
     # so without this the model's test lane can never be filled in.
     cargo-nextest
+    # llvm-profdata and llvm-cov from the LLVM rustc itself was built with:
+    # `scryer-mcp coverage run` turns each test's coverage profile into the
+    # per-test LCOV report `ingest_test_report` reads, and the profile format
+    # only reads right with the matching LLVM.
+    rustc.llvmPackages.llvm
 
     # Image tools
     imagemagick

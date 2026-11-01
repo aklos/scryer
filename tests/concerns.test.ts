@@ -43,6 +43,22 @@ describe("concernCounts", () => {
     expect(counts.has("ui")).toBe(false);
   });
 
+  it("Lights the symbols a tagged claim's test exercises and their components, counting each claim once", () => {
+    const login = resp("auth");
+    const m = modelWith([
+      node("sys", undefined, []),
+      node("api", "sys", [login]),
+      node("session", "sys", []),
+      { ...node("verify", "session", []), kind: "symbol", exercisedBy: [login.id] },
+      { ...node("own", "api", []), kind: "symbol", exercisedBy: [login.id] },
+    ]);
+    const counts = concernCounts(m, "auth");
+    expect(counts.get("verify")).toBe(1);
+    expect(counts.get("session")).toBe(1);
+    expect(counts.get("api")).toBe(1);
+    expect(counts.get("sys")).toBe(1);
+  });
+
   it("Counts a claim under each concern it is tagged with", () => {
     const m = modelWith([node("webhook", undefined, [resp("auth", "idempotency"), resp("auth")])]);
     expect(concernCounts(m, "auth").get("webhook")).toBe(2);

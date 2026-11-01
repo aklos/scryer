@@ -25,7 +25,7 @@ pub use architecture::{style, style_health, dependency_graph};
 pub mod claim_grammar;
 pub use claim_grammar::{ears, rules};
 pub mod evidence;
-pub use evidence::{test_results, verdicts};
+pub use evidence::{coverage, test_results, verdicts};
 pub mod agent_integration;
 pub use agent_integration::{agent_entries, agent_settings};
 pub mod stores;
