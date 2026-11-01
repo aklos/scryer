@@ -113,7 +113,7 @@ No separate ADR files; the doc comment travels with the code it explains. A deci
 
 A later edit to a test or to the code it exercises makes its verdict **outdated** until the next ingested run. Before saying you are done, your claims should be proven and current.
 
-**Which lines each claim runs.** In a Rust project, wrap the radius command once in a while: `scryer-mcp coverage run -- cargo nextest run …` runs it with per-test coverage and prints an LCOV path; `ingest_test_report` it like a JUnit file. `locate` and `orient` then list a file's lines no claim runs: behaviour nothing states. Before relying on such code, write the claim it should meet; code nothing needs can go.
+**Which lines each claim runs.** In a Rust project, wrap the radius command once in a while: `scryer-mcp coverage run -- cargo nextest run …` runs it with per-test coverage and prints an LCOV path; `ingest_test_report` it like a JUnit file. `locate` and `orient` then list a file's lines no claim runs: behaviour nothing states. Before relying on such code, write the claim it should meet; code nothing needs can go. They also name concern gaps: lines only claims tagged `[auth]` (or another concern) from elsewhere run, so the code serves that concern where nothing says so; write the tagged claim beside the code.
 
 ## 5. Probe what you doubt
 

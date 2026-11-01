@@ -23,6 +23,59 @@ pub(crate) struct Loaded {
 }
 
 impl Loaded {
+    /// The concern gaps of `file`, held by `node`, each as a line: the
+    /// concern, the lines only claims from elsewhere tagged with it run, and
+    /// whose claims they are. Own claims sit on `node` or below it. Empty
+    /// unless the file's coverage is current.
+    pub(crate) fn concern_gaps(&self, file: &str, node: &str) -> Vec<String> {
+        use scryer_core::coverage::{content_hash, line_ranges};
+        if !self.coverage.executable.contains_key(file) {
+            return Vec::new();
+        }
+        let Ok(bytes) = std::fs::read(self.project.join(file)) else { return Vec::new() };
+        let model = &self.tree.planned;
+        let parent: HashMap<&str, &str> =
+            model.nodes.iter().filter_map(|n| Some((n.id.as_str(), n.parent_id.as_deref()?))).collect();
+        let name: HashMap<&str, &str> = model.nodes.iter().map(|n| (n.id.as_str(), n.name.as_str())).collect();
+        let home: HashMap<&str, &str> = self.tree.claims.iter().map(|c| (c.id.as_str(), c.node_id.as_str())).collect();
+        let concerns: HashMap<&str, &Vec<String>> =
+            model.nodes.iter().flat_map(|n| &n.claims).map(|c| (c.id.as_str(), &c.concerns)).collect();
+        fn under<'a>(parent: &HashMap<&'a str, &'a str>, mut id: &'a str, node: &str) -> bool {
+            loop {
+                if id == node {
+                    return true;
+                }
+                match parent.get(id) {
+                    Some(p) => id = p,
+                    None => return false,
+                }
+            }
+        }
+        let is_own = |claim: &str| home.get(claim).is_some_and(|n| under(&parent, n, node));
+        let concerns_of = |claim: &str| concerns.get(claim).map(|c| c.to_vec()).unwrap_or_default();
+        self.coverage
+            .concern_gaps(file, &content_hash(&bytes), &is_own, &concerns_of)
+            .into_iter()
+            .map(|g| {
+                let mut from: Vec<&str> =
+                    g.claims.iter().filter_map(|c| home.get(c.as_str())).filter_map(|n| name.get(n).copied()).collect();
+                from.sort_unstable();
+                from.dedup();
+                let more = from.len().saturating_sub(2);
+                let mut whose = from.iter().take(2).copied().collect::<Vec<_>>().join(", ");
+                if more > 0 {
+                    whose.push_str(&format!(" and {more} more"));
+                }
+                let (lines, these) = if g.lines.len() == 1 { ("line", "it") } else { ("lines", "these") };
+                format!(
+                    "[{c}] {lines} {}: only {whose}'s [{c}] claims run {these}; write the [{c}] claim here",
+                    line_ranges(&g.lines),
+                    c = g.concern
+                )
+            })
+            .collect()
+    }
+
     /// What the last per-test coverage says about `file` as it is now.
     pub(crate) fn file_coverage(&self, file: &str) -> scryer_core::coverage::FileCoverage {
         use scryer_core::coverage::{content_hash, FileCoverage};

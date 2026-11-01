@@ -1,5 +1,6 @@
-//! What each claim's test ran, from the last ingested per-test coverage, and
-//! which of a file's lines no claim runs.
+//! What each claim's test ran, from the last ingested per-test coverage:
+//! which of a file's lines no claim runs, and which only tagged claims from
+//! elsewhere run (a concern gap).
 //!
 //! Every record carries the hash of the file's content when it was run, so
 //! an edit outdates exactly the files it touched: a line number only means
@@ -63,6 +64,52 @@ impl CoverageCache {
     }
 }
 
+/// Lines of a file that serve a concern nobody states there: only claims
+/// from elsewhere tagged with it run them, and none of the file's own claims.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConcernGap {
+    pub concern: String,
+    pub lines: Vec<u32>,
+    /// The claims from elsewhere that run them.
+    pub claims: Vec<String>,
+}
+
+impl CoverageCache {
+    /// The file's concern gaps, against its current content hash: for each
+    /// concern, the lines claims tagged with it run that no claim `is_own`
+    /// runs. Lines an untagged claim from elsewhere runs are not a gap of
+    /// any concern; they are only not stated here.
+    pub fn concern_gaps(
+        &self,
+        file: &str,
+        current_hash: &str,
+        is_own: &dyn Fn(&str) -> bool,
+        concerns_of: &dyn Fn(&str) -> Vec<String>,
+    ) -> Vec<ConcernGap> {
+        let fresh = |id: &String| -> Option<&FileLines> {
+            self.claims.get(id)?.get(file).filter(|fl| fl.hash == current_hash)
+        };
+        let own: BTreeSet<u32> =
+            self.claims.keys().filter(|id| is_own(id)).filter_map(fresh).flat_map(|fl| fl.lines.iter().copied()).collect();
+        let mut gaps: BTreeMap<String, (BTreeSet<u32>, Vec<String>)> = BTreeMap::new();
+        for id in self.claims.keys().filter(|id| !is_own(id)) {
+            let Some(fl) = fresh(id) else { continue };
+            let borrowed: Vec<u32> = fl.lines.iter().copied().filter(|n| !own.contains(n)).collect();
+            if borrowed.is_empty() {
+                continue;
+            }
+            for concern in concerns_of(id) {
+                let gap = gaps.entry(concern).or_default();
+                gap.0.extend(&borrowed);
+                gap.1.push(id.clone());
+            }
+        }
+        gaps.into_iter()
+            .map(|(concern, (lines, claims))| ConcernGap { concern, lines: lines.into_iter().collect(), claims })
+            .collect()
+    }
+}
+
 /// A stable hash of a file's content (FNV-1a, 64-bit, hex): the same bytes
 /// hash the same on every machine and toolchain.
 pub fn content_hash(bytes: &[u8]) -> String {
@@ -115,6 +162,33 @@ mod tests {
         c.claims.insert("old".into(), BTreeMap::from([("src/a.rs".into(), fl("h1", &[1, 2]))]));
         assert_eq!(c.file("src/a.rs", "h3"), FileCoverage::Outdated);
         assert_eq!(c.file("src/a.rs", "h2"), FileCoverage::Current { uncovered: vec![1, 2], executable: 2, claims: 0 });
+    }
+
+    /// Groups the lines only claims from elsewhere run by the concerns those claims carry, leaving out lines the file's own claims run.
+    #[test]
+    fn groups_borrowed_lines_by_concern() {
+        let mut c = CoverageCache::default();
+        c.executable.insert("src/session.rs".into(), fl("h", &[1, 2, 3, 4]));
+        let at = |lines: &[u32]| BTreeMap::from([("src/session.rs".to_string(), fl("h", lines))]);
+        c.claims.insert("own".into(), at(&[1]));
+        c.claims.insert("login".into(), at(&[1, 2, 3]));
+        c.claims.insert("retry".into(), at(&[3]));
+        c.claims.insert("plain".into(), at(&[4]));
+        c.claims.insert("stale".into(), BTreeMap::from([("src/session.rs".to_string(), fl("old", &[4]))]));
+        let concerns = |id: &str| match id {
+            "login" => vec!["auth".to_string()],
+            "retry" => vec!["auth".to_string(), "idempotency".to_string()],
+            "stale" => vec!["auth".to_string()],
+            _ => vec![],
+        };
+        let gaps = c.concern_gaps("src/session.rs", "h", &|id| id == "own", &concerns);
+        assert_eq!(
+            gaps,
+            vec![
+                ConcernGap { concern: "auth".into(), lines: vec![2, 3], claims: vec!["login".into(), "retry".into()] },
+                ConcernGap { concern: "idempotency".into(), lines: vec![3], claims: vec!["retry".into()] },
+            ]
+        );
     }
 
     /// Writes line numbers as ranges.

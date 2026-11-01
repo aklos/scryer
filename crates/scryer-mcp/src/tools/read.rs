@@ -384,6 +384,12 @@ pub(crate) fn file_report(loaded: &derived::Loaded, file: &str, claims_cap: Opti
         }
         _ => {}
     }
+    if let Some(n) = node {
+        let gaps = loaded.concern_gaps(file, &n.id);
+        if !gaps.is_empty() {
+            v["concernGaps"] = serde_json::json!(gaps);
+        }
+    }
     if node.is_none() {
         v["note"] = serde_json::json!("No container or component holds this file — not product code.");
     } else if untested {
@@ -936,6 +942,29 @@ mod tests {
                 .unwrap(),
         );
         assert!(draft["coverage"].as_str().unwrap().starts_with("outdated"), "{draft}");
+    }
+
+    /// When only tagged claims from elsewhere run a file's lines, names the concern gap and asks for the claim here.
+    #[test]
+    fn names_a_concern_gap() {
+        let dir = project();
+        ingest_fixture_coverage(&dir);
+        let at = |file: &str| {
+            json_of(
+                &ScryerServer::new()
+                    .locate(Parameters(LocateRequest { project: project_arg(&dir), file: file.into() }))
+                    .unwrap(),
+            )
+        };
+        let store = at("crates/notes/src/store/mod.rs");
+        assert_eq!(
+            store["concernGaps"],
+            serde_json::json!([
+                "[persistence] line 3: only draft's [persistence] claims run it; write the [persistence] claim here"
+            ]),
+            "{store}"
+        );
+        assert!(at("crates/notes/src/draft.rs").get("concernGaps").is_none(), "its own claim runs it");
     }
 
     /// When a claim's test carries decisions, locate lists them with the claim.
