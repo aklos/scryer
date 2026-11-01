@@ -551,7 +551,14 @@ pub fn read_derived_status(
         scryer_core::derived_tree::anchors_untouched_since(&tree.planned, project, id, fp, at)
             || claim_fingerprints(&tree.planned, id, project, &mut files, &mut project_files) == *fp
     };
-    let status = compute_derived_status(&tree, &cache, &mutations, &mut fresh);
+    let mut status = compute_derived_status(&tree, &cache, &mutations, &mut fresh);
+    let coverage = scryer_core::derived_tree::read_coverage_at(r);
+    let mut hash_of = |file: &str| std::fs::read(project.join(file)).ok().map(|b| scryer_core::coverage::content_hash(&b));
+    for (node, gaps) in scryer_core::derived_tree::node_concern_gaps(&tree, &coverage, &mut hash_of) {
+        if let Some(n) = status.nodes.get_mut(&node) {
+            n.concern_gaps = gaps;
+        }
+    }
     Ok((tree, status))
 }
 

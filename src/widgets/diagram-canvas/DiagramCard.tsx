@@ -16,6 +16,7 @@ import type { NodeProps, Node as RFNode } from "@xyflow/react";
 import type { DiagramNode } from "./diagramLayout";
 import type { StyleViolation } from "../../entities/model/health";
 import { CLAIM_LABEL, CLAIM_LETTER, CLAIM_TONE, type ChildTally } from "../../entities/model/claimState";
+import { ConcernGapMark } from "../../entities/model/ConcernGapMark";
 import { StructuralCount } from "../../entities/model/StructuralCount";
 import { NODE_CHANGE_TONE, NodeChangeMark } from "../../entities/model/diffkit";
 import type { NodeChange } from "../../entities/model/changes";
@@ -47,6 +48,9 @@ export interface CardData extends Record<string, unknown> {
   change?: NodeChange;
   /** A node below it changed since the base. */
   holdsChanges?: boolean;
+  /** Under the concern lens: lines in its subtree that serve the concern
+   *  with no claim of its own stated there. */
+  concernGap?: { concern: string; lines: number };
 }
 export type RFCard = RFNode<CardData, "card">;
 
@@ -242,12 +246,13 @@ export function DiagramCard({ id, data }: NodeProps<RFCard>) {
         {/* Its children by state, along the foot. Ghosts are counted at home. */}
         {!isGhost && !data.pending && expandable && data.children && <ChildCounts t={data.children} />}
 
-        {/* Structural violations inside, top-left. Ghosts are counted at home. */}
+        {/* Structural violations and the lens's concern gap inside,
+            top-left. Ghosts are counted at home. */}
         {!isGhost && !data.pending && (
-          <StructuralCount
-            violations={data.structural}
-            className="pointer-events-auto absolute left-2.5 top-1.5 z-10"
-          />
+          <div className="pointer-events-auto absolute left-2.5 top-1.5 z-10 flex items-center gap-1.5">
+            <StructuralCount violations={data.structural} />
+            {data.concernGap && <ConcernGapMark lines={data.concernGap.lines} concern={data.concernGap.concern} />}
+          </div>
         )}
 
         {/* The style's glyph, top-right: what shape the inside takes. Gives

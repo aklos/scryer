@@ -35,6 +35,10 @@ export interface DerivedNodeStatus {
   subtree: DerivedCounts;
   probe?: ProbeMark;
   darkFiles?: string[];
+  /** Concern → lines of this node's own files that only claims tagged with it
+   *  from elsewhere run: the concern is served here, its claim stated
+   *  elsewhere. Present only with current per-test coverage. */
+  concernGaps?: Record<string, number>;
 }
 
 export interface DerivedStatus {

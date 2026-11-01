@@ -39,7 +39,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import { ChevronRight, CornerLeftUp, Maximize, Spline } from "lucide-react";
 import type { ScryModel } from "../../entities/model/viewmodel";
-import { concernCounts } from "../../entities/model/viewmodel";
+import { concernCounts, concernGapCounts } from "../../entities/model/viewmodel";
 import { attentionState, childTally, CLAIM_TONE } from "../../entities/model/claimState";
 import { SYMBOL_ICON } from "../../entities/model/kindIcon";
 import { placeLabels } from "../../shared/diagram/labelPlacement";
@@ -310,6 +310,12 @@ function DiagramInner({
     if (!concernLens) return null;
     return concernCounts(model, concernLens);
   }, [model, concernLens]);
+  // Where the concern is served with no claim of its own stated: lit too,
+  // and marked on the card.
+  const concernGaps = useMemo(() => {
+    if (!concernLens) return null;
+    return concernGapCounts(model, report?.derivedStatus?.nodes, concernLens);
+  }, [model, report, concernLens]);
 
   // Structural violations per subtree — each card counts what lies inside it.
   const structural = useMemo(() => structuralBySubtree(model, report ?? null), [model, report]);
@@ -354,7 +360,8 @@ function DiagramInner({
             attention: attentionState(claimsOf?.[n.id]?.subtree),
             dimmed:
               (highlight.active && !highlight.neighbors.has(n.id)) ||
-              (concernLit !== null && !concernLit.has(n.id)),
+              (concernLit !== null && !concernLit.has(n.id) && !concernGaps?.has(n.id)),
+            concernGap: concernLens && concernGaps?.has(n.id) ? { concern: concernLens, lines: concernGaps.get(n.id)! } : undefined,
             pending: pendingIds?.has(n.id),
             structural: structural.get(n.id),
             styled: scene.mode === "styled",
@@ -364,7 +371,7 @@ function DiagramInner({
         };
       }) as Array<RFCard | RFDot>;
     });
-  }, [scene, selectedId, claimsOf, highlight, pendingIds, structural, concernLit, dotSim.live, changes]);
+  }, [scene, selectedId, claimsOf, highlight, pendingIds, structural, concernLit, concernGaps, concernLens, dotSim.live, changes]);
 
   // Each card's box, at its measured size once React Flow has measured it, and
   // each edge's ends and turns over them (as the layout-quality score reads

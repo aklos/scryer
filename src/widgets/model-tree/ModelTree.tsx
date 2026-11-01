@@ -14,7 +14,8 @@ import { Braces, ChevronRight, Loader2 } from "lucide-react";
 import type { StyleViolation } from "../../entities/model/health";
 import { StructuralCount } from "../../entities/model/StructuralCount";
 import type { ScryModel, Node } from "../../entities/model/viewmodel";
-import { concernCounts, modelConcerns } from "../../entities/model/viewmodel";
+import { concernCounts, concernGapCounts, modelConcerns } from "../../entities/model/viewmodel";
+import { ConcernGapMark } from "../../entities/model/ConcernGapMark";
 import type { Editor } from "../../entities/model/editor";
 import { CLAIM_LABEL } from "../../entities/model/claimState";
 import type { ClaimState, DerivedCounts, DerivedNodeStatus } from "../../entities/model/derived";
@@ -242,6 +243,10 @@ export function ModelTree({
   // never hides: the dark rows ARE the finding). Registry totals label the
   // picker options.
   const concernTally = concernLens ? concernCounts(model, concernLens) : null;
+  // And where it is served with no claim of its own stated: lit as well,
+  // marked hollow.
+  const gapTally = concernLens ? concernGapCounts(model, claimStatus, concernLens) : null;
+  const lit = (id: string) => concernTally === null || concernTally.has(id) || !!gapTally?.has(id);
   const concerns = modelConcerns(model);
 
   const q = filter.trim().toLowerCase();
@@ -336,7 +341,7 @@ export function ModelTree({
       // wait for a manual drill-down.
       const isOpen = filterActive
         ? hasChildren && !closedInFilter.has(node.id)
-        : expanded.has(node.id) || (concernTally !== null && concernTally.has(node.id));
+        : expanded.has(node.id) || (concernTally !== null && concernTally.has(node.id)) || !!gapTally?.has(node.id);
       const parent = ancestors[ancestors.length - 1] ?? null;
       rows.push({ id: node.id, depth, hasChildren, isOpen, parent, ancestors, node });
       if (isOpen && hasChildren) pushLevel(node.id, depth + 1, [...ancestors, { id: node.id }]);
@@ -532,7 +537,7 @@ export function ModelTree({
             ? "bg-[var(--accent-soft)] text-[var(--text)]"
             : "text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
         } ${
-          concernTally && !concernTally.has(node.id) && !isSel
+          !lit(node.id) && !isSel
             ? "opacity-40 transition-opacity"
             : ""
         }`}
@@ -597,6 +602,7 @@ export function ModelTree({
             {concernTally.get(node.id)}
           </span>
         )}
+        {concernLens && <ConcernGapMark lines={gapTally?.get(node.id)} concern={concernLens} />}
         <NodeChangeMark change={change} holding={changes.holding.has(node.id)} />
         <StructuralCount violations={structural?.get(node.id)} />
         {active && (

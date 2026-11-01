@@ -7,7 +7,7 @@
 
 use crate::c4_tree::{DerivedClaim, DerivedTree};
 use crate::c4_model::Kind;
-use crate::evidence::TestOutcome;
+use crate::evidence::{ConcernGap, CoverageCache, TestOutcome};
 use crate::evidence::{
     predecessor, ClaimProbeStatus, ClaimTestStatus, MutantTally, MutationCache, TestStatusCache,
 };
@@ -93,6 +93,11 @@ pub struct NodeStatus {
     pub probe: Option<ProbeMark>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dark_files: Vec<String>,
+    /// Concern → how many lines of this node's own files only claims from
+    /// elsewhere tagged with it run (see [`file_concern_gaps`]). Empty
+    /// without current per-test coverage.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub concern_gaps: BTreeMap<String, u32>,
 }
 
 /// The derived tree's status: per claim, per node, and in total. `tests` and
@@ -106,6 +111,55 @@ pub struct DerivedStatus {
     pub probes: Vec<ClaimProbeStatus>,
     pub nodes: BTreeMap<String, NodeStatus>,
     pub totals: DerivedCounts,
+}
+
+/// The concern gaps of `file`, held by `node`, against its current content
+/// hash: lines only claims from elsewhere tagged with a concern run. A claim
+/// on `node` or below it is the file's own.
+pub fn file_concern_gaps(
+    tree: &DerivedTree,
+    cache: &CoverageCache,
+    file: &str,
+    node: &str,
+    current_hash: &str,
+) -> Vec<ConcernGap> {
+    let parent: HashMap<&str, &str> =
+        tree.planned.nodes.iter().filter_map(|n| Some((n.id.as_str(), n.parent_id.as_deref()?))).collect();
+    let claims: HashMap<&str, &DerivedClaim> = tree.claims.iter().map(|c| (c.id.as_str(), c)).collect();
+    let is_own = |id: &str| {
+        let Some(c) = claims.get(id) else { return false };
+        let mut at = c.node_id.as_str();
+        loop {
+            if at == node {
+                return true;
+            }
+            match parent.get(at) {
+                Some(p) => at = p,
+                None => return false,
+            }
+        }
+    };
+    let concerns_of =
+        |id: &str| claims.get(id).map(|c| crate::concerns::concern_tags(&c.concerns)).unwrap_or_default();
+    cache.concern_gaps(file, current_hash, &is_own, &concerns_of)
+}
+
+/// Each node's concern gaps over the files it holds: node → concern → lines.
+/// `hash_of` gives a file's current content hash, `None` when unreadable.
+pub fn node_concern_gaps(
+    tree: &DerivedTree,
+    cache: &CoverageCache,
+    hash_of: &mut dyn FnMut(&str) -> Option<String>,
+) -> BTreeMap<String, BTreeMap<String, u32>> {
+    let mut out: BTreeMap<String, BTreeMap<String, u32>> = BTreeMap::new();
+    for file in cache.executable.keys() {
+        let Some(node) = tree.file_nodes.get(file) else { continue };
+        let Some(hash) = hash_of(file) else { continue };
+        for gap in file_concern_gaps(tree, cache, file, node, &hash) {
+            *out.entry(node.clone()).or_default().entry(gap.concern).or_default() += gap.lines.len() as u32;
+        }
+    }
+    out
 }
 
 /// Is a record taken at `recorded_at` with these anchor fingerprints still
@@ -328,6 +382,7 @@ pub fn compute_derived_status(
                 own: o,
                 probe: node_probe.get(n.id.as_str()).and_then(mark),
                 dark_files: dark.remove(n.id.as_str()).unwrap_or_default(),
+                concern_gaps: BTreeMap::new(),
             },
         );
     }
@@ -429,6 +484,28 @@ mod tests {
             layer_exempt: Vec::new(),
             tooling: Default::default(),
         }
+    }
+
+    /// Counts each node's concern gaps by concern over the files it holds, a claim on the node or below it being its own.
+    #[test]
+    fn counts_each_nodes_concern_gaps() {
+        use crate::evidence::FileLines;
+        let mut t = tree();
+        // `bare` holds src/b.rs; core's [auth] claim runs lines 2-3 of it,
+        // and bare's own claim runs line 2.
+        t.planned.nodes.push(node("bare-inner", Kind::Component, Some("bare")));
+        let mut auth = claim("login", "core", false);
+        auth.concerns = vec!["Auth".into()];
+        t.claims.push(auth);
+        t.claims.push(claim("own", "bare-inner", false));
+        let fl = |lines: &[u32]| BTreeMap::from([("src/b.rs".to_string(), FileLines { hash: "h".into(), lines: lines.to_vec() })]);
+        let mut cache = CoverageCache::default();
+        cache.executable.insert("src/b.rs".into(), FileLines { hash: "h".into(), lines: vec![1, 2, 3] });
+        cache.claims.insert("login".into(), fl(&[2, 3]));
+        cache.claims.insert("own".into(), fl(&[2]));
+        let gaps = node_concern_gaps(&t, &cache, &mut |_| Some("h".into()));
+        assert_eq!(gaps, BTreeMap::from([("bare".to_string(), BTreeMap::from([("auth".to_string(), 1)]))]));
+        assert!(node_concern_gaps(&t, &cache, &mut |_| Some("changed".into())).is_empty(), "outdated coverage has no gaps");
     }
 
     /// Each state is reachable: a current green verdict is proven, an edited

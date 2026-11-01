@@ -34,27 +34,9 @@ impl Loaded {
         }
         let Ok(bytes) = std::fs::read(self.project.join(file)) else { return Vec::new() };
         let model = &self.tree.planned;
-        let parent: HashMap<&str, &str> =
-            model.nodes.iter().filter_map(|n| Some((n.id.as_str(), n.parent_id.as_deref()?))).collect();
         let name: HashMap<&str, &str> = model.nodes.iter().map(|n| (n.id.as_str(), n.name.as_str())).collect();
         let home: HashMap<&str, &str> = self.tree.claims.iter().map(|c| (c.id.as_str(), c.node_id.as_str())).collect();
-        let concerns: HashMap<&str, &Vec<String>> =
-            model.nodes.iter().flat_map(|n| &n.claims).map(|c| (c.id.as_str(), &c.concerns)).collect();
-        fn under<'a>(parent: &HashMap<&'a str, &'a str>, mut id: &'a str, node: &str) -> bool {
-            loop {
-                if id == node {
-                    return true;
-                }
-                match parent.get(id) {
-                    Some(p) => id = p,
-                    None => return false,
-                }
-            }
-        }
-        let is_own = |claim: &str| home.get(claim).is_some_and(|n| under(&parent, n, node));
-        let concerns_of = |claim: &str| concerns.get(claim).map(|c| c.to_vec()).unwrap_or_default();
-        self.coverage
-            .concern_gaps(file, &content_hash(&bytes), &is_own, &concerns_of)
+        scryer_core::derived_tree::file_concern_gaps(&self.tree, &self.coverage, file, node, &content_hash(&bytes))
             .into_iter()
             .map(|g| {
                 let mut from: Vec<&str> =

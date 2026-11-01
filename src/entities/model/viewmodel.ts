@@ -276,6 +276,30 @@ export function concernCounts(model: ScryModel, slug: string): Map<string, numbe
   return new Map([...claimsAt].map(([id, set]) => [id, set.size]));
 }
 
+/** Per-node subtree tally of one concern's gaps: node id → lines in its
+ *  subtree that serve `slug` with no `slug` claim stated where they are
+ *  (`concernGaps` on each node's derived status). Absent means no gap. */
+export function concernGapCounts(
+  model: ScryModel,
+  nodeStatus: Record<string, { concernGaps?: Record<string, number> }> | undefined,
+  slug: string,
+): Map<string, number> {
+  const byId = new Map(model.nodes.map((n) => [n.id, n]));
+  const out = new Map<string, number>();
+  for (const [id, status] of Object.entries(nodeStatus ?? {})) {
+    const lines = status.concernGaps?.[slug] ?? 0;
+    if (lines === 0) continue;
+    let cur: Node | undefined = byId.get(id);
+    const seen = new Set<string>();
+    while (cur && !seen.has(cur.id)) {
+      seen.add(cur.id);
+      out.set(cur.id, (out.get(cur.id) ?? 0) + lines);
+      cur = cur.parentId ? byId.get(cur.parentId) : undefined;
+    }
+  }
+  return out;
+}
+
 export function updateNode(
   model: ScryModel,
   nodeId: string,

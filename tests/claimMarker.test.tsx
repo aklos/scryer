@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ClaimMarker, ConcernTag } from "../src/widgets/node-page-sections/ClaimsSection";
 import { CLAIM_TONE } from "../src/entities/model/claimState";
+import { ConcernGapMark } from "../src/entities/model/ConcernGapMark";
 import {
   claimMark,
   claimMarkLabel,
@@ -89,6 +90,13 @@ describe("claim row concern", () => {
     const html = renderToStaticMarkup(<ConcernTag slugs={["idempotency", "auth"]} />);
     expect(html.indexOf(">idempotency<")).toBeGreaterThan(-1);
     expect(html.indexOf(">auth<")).toBeGreaterThan(html.indexOf(">idempotency<"));
+  });
+
+  it("Shows a concern gap as its line count, saying what the gap means", () => {
+    const html = renderToStaticMarkup(<ConcernGapMark lines={3} concern="auth" />);
+    expect(html).toContain(">3<");
+    expect(html).toContain("no [auth] claim stated here");
+    expect(renderToStaticMarkup(<ConcernGapMark lines={0} concern="auth" />)).toBe("");
   });
 
   it("Shows nothing in the concern lane for an untagged claim", () => {

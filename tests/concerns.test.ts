@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 import {
   concernCounts,
+  concernGapCounts,
   emptyModel,
   modelConcerns,
   type Node,
@@ -80,5 +81,27 @@ describe("modelConcerns", () => {
       { slug: "auth", count: 2 },
       { slug: "validation", count: 1 },
     ]);
+  });
+});
+
+describe("concernGapCounts", () => {
+  it("Rolls each node's gap lines for a concern up its ancestors; a node with none is absent", () => {
+    const m = modelWith([
+      node("sys", undefined, []),
+      node("session", "sys", []),
+      node("store", "sys", []),
+      node("ui", "sys", []),
+    ]);
+    const status = {
+      session: { concernGaps: { auth: 3 } },
+      store: { concernGaps: { auth: 1, persistence: 4 } },
+      ui: {},
+    };
+    const gaps = concernGapCounts(m, status, "auth");
+    expect(gaps.get("session")).toBe(3);
+    expect(gaps.get("store")).toBe(1);
+    expect(gaps.get("sys")).toBe(4);
+    expect(gaps.has("ui")).toBe(false);
+    expect(concernGapCounts(m, undefined, "auth").size).toBe(0);
   });
 });
