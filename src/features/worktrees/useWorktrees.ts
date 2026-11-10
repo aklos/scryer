@@ -24,7 +24,7 @@ export interface WorktreeClaim {
   statement: string;
   file: string;
   line: number;
-  state: "proven" | "stale" | "failing" | "planned";
+  state: "proven" | "stale" | "unproven" | "failing" | "planned";
   concerns?: string[];
 }
 
@@ -52,7 +52,7 @@ export interface Worktrees {
 
 /** Where a worktree stands, in a few words, each in the tone of what it
  *  says: a claim count in its state's hue, anything else plain. */
-export type StandingPart = { label: string; tone: "proven" | "stale" | "failing" | "planned" | "none" };
+export type StandingPart = { label: string; tone: "proven" | "stale" | "unproven" | "failing" | "planned" | "none" };
 
 export function standing(w: WorktreeWork): StandingPart[] {
   if (w.error) return [{ label: "could not be read", tone: "failing" }];
@@ -63,7 +63,7 @@ export function standing(w: WorktreeWork): StandingPart[] {
   }
   if (w.claims.length === 0) return [{ label: "touches no claims", tone: "none" }];
   if (w.ready) return [{ label: "ready to merge", tone: "proven" }];
-  return (["failing", "stale", "planned"] as const)
+  return (["failing", "stale", "unproven", "planned"] as const)
     .map((state) => ({ state, n: w.claims.filter((c) => c.state === state).length }))
     .filter(({ n }) => n > 0)
     .map(({ state, n }) => ({ label: `${n} ${CLAIM_LABEL[state]}`, tone: state }));

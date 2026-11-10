@@ -4,8 +4,12 @@
  * the mix of its subtree's claims (proven, outdated, todo, failing) as one
  * thin bar, beside its structural violation count, and a node changed since
  * the base its name tinted and lettered (A added, M modified), a node holding
- * changes below it a dot. Type-to-filter, the claim
- * state lenses (Todo / Outdated / Failing) and the concern lens narrow it. The structure is the code's, so right-click offers only what
+ * changes below it a dot. Change, count and bar each keep a fixed column, so
+ * each reads down the tree. Violations charged to a node are a red chip;
+ * violations only below it a bare red number. An open row leaves its dot
+ * and its below-count to the rows below it, which show them.
+ * Type-to-filter, the claim
+ * state lenses (Todo / To run / Failing) and the concern lens narrow it. The structure is the code's, so right-click offers only what
  * lands in code: add a claim (a todo test), or rename a container.
  */
 
@@ -54,10 +58,12 @@ const OPEN_RIGHT =
   "linear-gradient(#000 0 0) padding-box, linear-gradient(to right, #000 calc(100% - 40px), transparent calc(100% - 4px)) border-box";
 // Room at the row's left edge, outside the outermost level's frame.
 const GUTTER = 6;
+/** The violation count's column. */
+const VIOLATION_COL = "w-[22px]";
 const ROW = "group/row relative flex items-center gap-1 pr-3 h-[26px] cursor-pointer select-none";
 
 /** The order a reader looks at claim states in, and the bar draws them. */
-const MIX_ORDER: readonly ClaimState[] = ["failing", "stale", "planned", "proven"];
+const MIX_ORDER: readonly ClaimState[] = ["failing", "stale", "unproven", "planned", "proven"];
 
 /** A subtree's claims as one thin bar: each state's share, failing first,
  *  then outdated, todo and proven, each present state at least a sliver so
@@ -71,7 +77,11 @@ export function ClaimMix({ counts, empty }: { counts: DerivedCounts | undefined;
   if (total === 0 && !empty) return <span className="w-10 shrink-0" />;
   return (
     <span
-      title={total ? MIX_ORDER.map((st) => `${counts![st]} ${CLAIM_LABEL[st]}`).join(" · ") : "No claims"}
+      title={
+        total
+          ? `Claims here and below: ${MIX_ORDER.filter((st) => counts![st] > 0).map((st) => `${counts![st]} ${CLAIM_LABEL[st]}`).join(" · ")}`
+          : "No claims: no test says what this code does yet"
+      }
       className="flex h-[3px] w-10 shrink-0 gap-px overflow-hidden rounded-[1px]"
       style={total ? undefined : { background: "var(--claim-mix-empty)" }}
     >
@@ -271,7 +281,12 @@ export function ModelTree({
   let visibleIds: ReadonlySet<string> | null = null;
   if (filterActive) {
     // A lens matches a row whose subtree holds a claim in its state.
-    const lensMatch = (id: string) => lens === "all" || (claimStatus?.[id]?.subtree?.[lens] ?? 0) > 0;
+    const lensMatch = (id: string) => {
+    if (lens === "all") return true;
+    const c = claimStatus?.[id]?.subtree;
+    // "To run" holds both states a run settles: outdated and unproven.
+    return ((lens === "stale" ? (c?.stale ?? 0) + (c?.unproven ?? 0) : c?.[lens]) ?? 0) > 0;
+  };
     const matchSelf = (n: Node) =>
       (q === "" || (n.name || "").toLowerCase().includes(q)) && lensMatch(n.id);
     const set = new Set<string>();
@@ -351,6 +366,25 @@ export function ModelTree({
     };
     pushLevel(null, 0, []);
   }
+
+  // An open row's subtree marks (the dot, the count of violations below) are
+  // already on the rows below it, so it leaves them there, unless the
+  // filter hides the rows that carry them. Violations charged to the node
+  // itself are its own chip, open or closed: nothing below carries them.
+  const childRows = new Map<string, TreeRow[]>();
+  for (const r of rows) if (r.parent) childRows.set(r.parent.id, [...(childRows.get(r.parent.id) ?? []), r]);
+  const violationMark = (row: TreeRow): React.ReactNode => {
+    const all = structural?.get(row.id) ?? [];
+    const here = all.filter((v) => v.node === row.id);
+    if (here.length) return <StructuralCount mark="here" violations={here} />;
+    const shownBelow = row.isOpen
+      ? (childRows.get(row.id) ?? []).reduce((t, c) => t + (structural?.get(c.id)?.length ?? 0), 0)
+      : 0;
+    return shownBelow === all.length ? null : <StructuralCount mark="below" violations={all} />;
+  };
+  const holdingShown = (row: TreeRow): boolean =>
+    changes.holding.has(row.id) &&
+    !(row.isOpen && (childRows.get(row.id) ?? []).some((c) => changes.nodes.has(c.id) || changes.holding.has(c.id)));
 
   // Levels: every level of the tree is a frame, titled with what its rows are
   // in the map's words (System context, Containers, Components, Code), as
@@ -603,11 +637,15 @@ export function ModelTree({
           </span>
         )}
         {concernLens && <ConcernGapMark lines={gapTally?.get(node.id)} concern={concernLens} />}
-        <NodeChangeMark change={change} holding={changes.holding.has(node.id)} />
-        <StructuralCount violations={structural?.get(node.id)} />
         {active && (
           <Loader2 className="h-3 w-3 shrink-0 animate-spin text-violet-500 dark:text-violet-400" />
         )}
+        <span data-slot="change" className="flex w-3 shrink-0 justify-center">
+          <NodeChangeMark change={change} holding={holdingShown(row)} />
+        </span>
+        <span data-slot="violations" className={`flex ${VIOLATION_COL} shrink-0 justify-end`}>
+          {violationMark(row)}
+        </span>
         {/* The mix of the subtree's claims. A box that holds code and no
             claims draws an empty bar; a person or an external system holds
             none by nature and draws nothing. */}
@@ -673,7 +711,7 @@ export function ModelTree({
             [
               { id: "all", label: "All", title: "Show the whole model" },
               { id: "planned", label: "Todo", title: "Where todo claims are: work planned, not built or not tested yet" },
-              { id: "stale", label: "Outdated", title: "Where the code or a test changed since the claim's last verdict, or it never ran" },
+              { id: "stale", label: "To run", title: "Where a claim's test needs a run: it never ran (unproven), or the code or test changed since its verdict (outdated)" },
               { id: "failing", label: "Failing", title: "Where claims are failing" },
             ] as const
           ).map((opt) => (
@@ -725,7 +763,7 @@ export function ModelTree({
               : lens === "planned"
                 ? "No todo claims."
                 : lens === "stale"
-                  ? "Nothing outdated: every claim's verdict covers the code as it is."
+                  ? "Nothing to run: every claim's verdict covers the code as it is."
                   : "Nothing failing."}
           </div>
         ) : (

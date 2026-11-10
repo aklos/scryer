@@ -7,7 +7,7 @@ description: How to plan, build and verify code in a project Scryer reads. Scrye
 
 # Working in a Scryer project
 
-Scryer reads this repository and derives its C4 tree: containers from packaging, components from modules and directories, links from imports. Claims come from behaviour tests: **a test's description is a claim** about the code it tests, and its status (proven, outdated, failing, todo) comes from test reports. You never edit a model. There is none. You write code and tests; Scryer reads them.
+Scryer reads this repository and derives its C4 tree: containers from packaging, components from modules and directories, links from imports. Claims come from behaviour tests: **a test's description is a claim** about the code it tests, and its status (proven, unproven, outdated, failing, todo) comes from test reports. You never edit a model. There is none. You write code and tests; Scryer reads them.
 
 The loop: **orient → write the claims as todo tests → build → run what the change reaches → ingest the report → probe what you doubt.**
 
@@ -88,6 +88,8 @@ Make the todos pass and turn each into a real test: drop `#[ignore]` / `.todo` /
 
 **Where code goes.** A container may declare an architecture style in `.scryer/structure.toml` (hexagonal, feature-sliced, core-shell, library, …) with layers. Respect what the file's layer may import. When a file breaks its container's style, **fix it by moving code** to the layer it belongs in. Never change the style, the layers or `structure.toml` to make a finding go away, unless the user asks. A container declared `tooling = true` (demos, harnesses, dev apps) is not held to style rules; orient says so. One declared `as_layer = { "src/Shared" = "domain" }` uses that container as its domain: its imports of it follow its own matrix, and the other container is held to the domain's rules.
 
+**Relationships the code cannot show.** Imports are read; a dependency the imports don't carry (a process you spawn, a server you call over HTTP, a person or external using the system) goes in `.scryer/structure.toml` `[relationships]`, with a label saying what the relationship is. Either end is any node: the system, a person or an external by its key, a container by its key, a component by its path, a symbol as `file#Name`. Declare it on the lowest nodes that have it (`"src-tauri/src/shell/preview.rs" = [{ to = "preview", label = "runs with node as its preview sidecar" }]`). Scryer implies it on every ancestor of both ends, so never declare it again higher up. C4 never relates a node to its own parent or child. Change relationships only for the behaviour you are building, or when the user asks.
+
 **How to organise it.** Scryer draws each module or directory as a component, so how you organise code is what the reader sees:
 
 - **A component is one job behind one entry file.** Name it for what it does (`billing`, `claim_text`, `session_store`), never for its layer (`domain`, `services`, `utils`). A layer is where a component sits, not a component.
@@ -107,11 +109,11 @@ No separate ADR files; the doc comment travels with the code it explains. A deci
 
 ## 4. Verify
 
-1. `get_test_radius` (no `files` = this session's edits) names the tests your change reaches and, when configured, the exact command. Run those, never the whole suite.
+1. `get_test_radius` (no `files` = this session's edits) names the tests your change reaches and, when configured, the exact command per runner. Run those, never the whole suite. In a project with several runners, set one command per runner: `get_test_radius {command: "[*.rs] cargo nextest run …"}` and `{command: "[*.ts *.tsx] npx vitest run {files} …"}`; a line without `[globs]` runs every file no other line claims.
 2. Have the runner write JUnit XML: vitest `--reporter=junit --outputFile=…`, pytest `--junitxml=…`, `dotnet test --logger junit`, cargo through nextest's JUnit output or a cargo-to-JUnit converter.
 3. `ingest_test_report {path}`, once per report file. That is what turns claims proven or failing; nothing else does.
 
-A later edit to a test or to the code it exercises makes its verdict **outdated** until the next ingested run. Before saying you are done, your claims should be proven and current.
+A test no report has covered yet is **unproven**; a later edit to a test or to the code it exercises makes its verdict **outdated** until the next ingested run. Before saying you are done, your claims should be proven and current.
 
 **Which lines each claim runs.** In a Rust project, wrap the radius command once in a while: `scryer-mcp coverage run -- cargo nextest run …` runs it with per-test coverage and prints an LCOV path; `ingest_test_report` it like a JUnit file. `locate` and `orient` then list a file's lines no claim runs: behaviour nothing states. Before relying on such code, write the claim it should meet; code nothing needs can go. They also name concern gaps: lines only claims tagged `[auth]` (or another concern) from elsewhere run, so the code serves that concern where nothing says so; write the tagged claim beside the code.
 

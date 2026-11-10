@@ -383,8 +383,8 @@ pub fn landing(
                 (ClaimState::Planned, _) if reached(&c) => s.still_planned.push(row),
                 (ClaimState::Proven, Some(false)) if own && verdict_in_window => s.newly_proven.push(row),
                 (ClaimState::Proven, None) if own && verdict_in_window => s.newly_proven.push(row),
-                (ClaimState::Stale, Some(true)) if reached(&c) => s.newly_stale_or_failing.push(row),
-                (ClaimState::Stale, None) if reached(&c) => s.newly_stale_or_failing.push(row),
+                (ClaimState::Stale | ClaimState::Unproven, Some(true)) if reached(&c) => s.newly_stale_or_failing.push(row),
+                (ClaimState::Stale | ClaimState::Unproven, None) if reached(&c) => s.newly_stale_or_failing.push(row),
                 (ClaimState::Failing, Some(was)) if was || own => s.newly_stale_or_failing.push(row),
                 (ClaimState::Failing, None) if verdict_in_window || touched.contains(c.file.as_str()) => {
                     s.newly_stale_or_failing.push(row)
@@ -464,6 +464,7 @@ mod tests {
             vec![SourceLocation { pattern: "src/a.rs".into(), symbol: None, line: None, end_line: None }],
         );
         let tree = DerivedTree {
+            structure_problems: Vec::new(),
             fingerprint: 0,
             committed: planned.clone(),
             planned,
@@ -542,6 +543,7 @@ mod tests {
     fn a_session_with_a_baseline_counts_the_changes_it_made() {
         let planned = ScryModel::new();
         let tree = DerivedTree {
+            structure_problems: Vec::new(),
             fingerprint: 0,
             committed: planned.clone(),
             planned,
@@ -594,6 +596,7 @@ mod tests {
             serde_json::from_value(serde_json::json!({"id": "comp", "kind": "component", "name": "drafts"})).unwrap(),
         );
         let tree = DerivedTree {
+            structure_problems: Vec::new(),
             fingerprint: 0,
             committed: planned.clone(),
             planned,
@@ -629,6 +632,7 @@ mod tests {
     #[test]
     fn a_sessions_steps_follow_what_it_did_in_order() {
         let tree = DerivedTree {
+            structure_problems: Vec::new(),
             fingerprint: 0,
             committed: ScryModel::new(),
             planned: ScryModel::new(),
@@ -684,6 +688,7 @@ mod tests {
     fn a_session_without_task_or_component_has_no_title() {
         let sessions = vec![("dddddddd-4".to_string(), vec![touch(10, "README.md")])];
         let tree = DerivedTree {
+            structure_problems: Vec::new(),
             fingerprint: 0,
             committed: ScryModel::new(),
             planned: ScryModel::new(),

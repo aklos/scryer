@@ -148,6 +148,14 @@ pub(crate) fn reply_comment(
     reply(std::path::Path::new(&cwd), &thread, Author::Human, &text, status)
 }
 
+/// Delete a comment the person at the app wrote; its thread's opening
+/// comment takes the thread with it.
+#[tauri::command]
+pub(crate) fn delete_comment(cwd: String, thread: String, event: String) -> Result<(), String> {
+    use scryer_core::comments::{delete, Author};
+    delete(std::path::Path::new(&cwd), &thread, &event, Author::Human)
+}
+
 #[cfg(test)]
 mod tests {
     fn write(dir: &std::path::Path, rel: &str, text: &str) {

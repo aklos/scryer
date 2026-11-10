@@ -93,7 +93,7 @@ impl Loaded {
         self.status.claims.iter().find(|s| s.resp_id == c.id)
     }
 
-    /// A claim's status in words: `proven`, `outdated`, `failing` or `planned`,
+    /// A claim's status in words: `proven`, `outdated`, `unproven`, `failing` or `planned`,
     /// and the probe mark when a probe or mutation run left one.
     pub(crate) fn claim_status(&self, c: &DerivedClaim) -> String {
         let s = self.status_of(c);
@@ -101,7 +101,8 @@ impl Loaded {
             (true, _) | (_, Some(ClaimState::Planned)) => "planned",
             (_, Some(ClaimState::Proven)) => "proven",
             (_, Some(ClaimState::Failing)) => "failing",
-            (_, Some(ClaimState::Stale)) | (_, None) => "outdated",
+            (_, Some(ClaimState::Stale)) => "outdated",
+            (_, Some(ClaimState::Unproven)) | (_, None) => "unproven",
         };
         match s.and_then(|s| s.probe) {
             Some(ProbeMark::Crosshair) => format!("{state}, a break survived"),
@@ -466,6 +467,7 @@ mod tests {
 
     fn tree(claims: Vec<DerivedClaim>) -> DerivedTree {
         DerivedTree {
+            structure_problems: Vec::new(),
             fingerprint: 0,
             committed: ScryModel::new(),
             planned: ScryModel::new(),

@@ -4,6 +4,7 @@
 pub mod app;
 pub mod authored_model;
 pub mod derived;
+pub mod links;
 pub mod mcp_setup;
 pub mod observability;
 pub mod preview;

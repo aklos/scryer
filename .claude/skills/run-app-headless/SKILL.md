@@ -21,7 +21,7 @@ python3 .claude/skills/run-app-headless/scripts/wd.py shot /tmp/app.png
 `start.sh` is idempotent: it builds the debug `scryer-mcp` sidecar
 (`cargo run -p xtask -- build-sidecar --debug`) and the app binary if
 needed, links `node_modules` from the main checkout when run in a worktree,
-starts Xvfb on `:99`, Vite on port 1420 (`--strictPort`), and tauri-driver on
+starts Xvfb on `:99`, a private D-Bus session bus, Vite on port 1420 (`--strictPort`), and tauri-driver on
 4444, then opens a WebDriver session on `target/debug/scryer`. Logs and pid
 files go to `$RUN_DIR` (default `/tmp/scryer-headless`).
 
@@ -58,6 +58,11 @@ Recipes that worked:
   window opens on the real desktop. Never launch the app, `tauri dev`,
   tauri-driver or a browser any other way.
 
+- **Never on the developer's session bus.** The app is single-instance,
+  keyed on a D-Bus session-bus name: on the developer's bus, a headless launch
+  would hand off to their running scryer and raise its window. start.sh
+  starts a private `dbus-daemon` for the run and refuses a tauri-driver that
+  isn't on it; stop.sh stops it.
 - The webview uses the developer's real app profile: `localStorage`
   (recent projects, per-project settings) is shared with their app. Remove
   whatever you add when done — `wd.py open` records what it added and

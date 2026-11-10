@@ -14,7 +14,7 @@ use crate::tree_from_disk::{derived_tree_uncached, DERIVE_VERSION};
 use scryer_core::worktree::{bases_root, export_revision, project_slug, tree_of};
 use std::sync::atomic::{AtomicU64, Ordering};
 use scryer_core::ScryModel;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub use scryer_core::worktree::{change_base, ChangeBase};
 

@@ -62,6 +62,7 @@ export function DescriptionSection({
   return (
     <div className="group/lede relative flow-root pr-16">
       <p
+        data-field="description"
         className={`text-sm leading-relaxed ${
           value || reworded ? "text-[var(--text-secondary)]" : "italic text-[var(--text-muted)]"
         }`}

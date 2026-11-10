@@ -1,5 +1,10 @@
 //! The open project: its file watcher, its derived tree, the model at the
 //! base its changes are read against, and the developer's subagent settings.
+//!
+//! While a project is open the app records itself in `.scryer/view/app.json`
+//! with whether the developer follows agents, so the agents' MCP servers offer
+//! `show`; an agent's direction lands in `.scryer/view/direction.json` and goes
+//! to the window as `view-direction`.
 
 use std::sync::Mutex;
 
@@ -8,8 +13,34 @@ use tauri::Emitter;
 
 use crate::shell::state::WatcherState;
 
-/// Watch `{project}/.scryer/` for the tree, session logs and verdicts
-/// changing. Replaces any previous watcher.
+/// The direction to send the window when `path` changed: only the direction
+/// file in the view directory, and only once it parses.
+pub(crate) fn direction_at(path: &std::path::Path) -> Option<scryer_core::app_view::Direction> {
+    if path.file_name()? != "direction.json" || !path.parent()?.ends_with("view") {
+        return None;
+    }
+    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+}
+
+/// Clear the open project's record that the app has it open.
+pub(crate) fn forget_open_project(state: &Mutex<WatcherState>) {
+    if let Some((dir, _)) = &state.lock().unwrap().project {
+        if let Some(root) = dir.parent() {
+            scryer_core::app_view::mark_closed(root);
+        }
+    }
+}
+
+/// One agent session as its log stands: what the app needs to offer
+/// following it, without deriving every worktree's tree as the landing does.
+#[tauri::command]
+pub(crate) fn get_session_brief(cwd: String, session: String) -> scryer_core::session::SessionBrief {
+    let r = scryer_core::ModelRef::ProjectLocal(std::path::PathBuf::from(cwd));
+    scryer_core::session::session_brief(&r, &session, scryer_core::session::now_secs())
+}
+
+/// Watch `{project}/.scryer/` for the tree, session logs, verdicts and agents'
+/// directions changing. Replaces any previous watcher.
 #[tauri::command]
 pub(crate) fn watch_project(
     ref_str: String,
@@ -29,7 +60,11 @@ pub(crate) fn watch_project(
         }
     }
 
-    state.project = None;
+    if let Some((prev, _)) = state.project.take() {
+        if let Some(root) = prev.parent() {
+            scryer_core::app_view::mark_closed(root);
+        }
+    }
 
     let scryer_core::ModelRef::ProjectLocal(ref project_path) = model_ref;
     let _ = scryer_core::agent_setup::ensure_scryer_dir(project_path);
@@ -51,6 +86,11 @@ pub(crate) fn watch_project(
                 return;
             }
             for path in &event.paths {
+                // An agent pointed the app somewhere.
+                if let Some(direction) = direction_at(path) {
+                    let _ = handle.emit("view-direction", direction);
+                    continue;
+                }
                 // Session logs are appended by the agent's hooks and MCP server;
                 // the session view re-reads the one that changed.
                 if path.parent().is_some_and(|p| p.ends_with("sessions"))
@@ -94,6 +134,11 @@ pub(crate) fn watch_project(
     for dir in crate::shell::test_reports::report_dirs(project_path) {
         let _ = watcher.watch(&dir, RecursiveMode::Recursive);
     }
+    // Agents' directions, and the record that offers them the tool.
+    let view_dir = scryer_core::app_view::view_dir(project_path);
+    let _ = std::fs::create_dir_all(&view_dir);
+    let _ = watcher.watch(&view_dir, RecursiveMode::NonRecursive);
+    let _ = scryer_core::app_view::mark_open(project_path);
 
     state.project = Some((target_dir, watcher));
     Ok(())
@@ -177,6 +222,20 @@ mod tests {
         assert!(base.dirty && base.against.is_none());
         let model = tauri::async_runtime::block_on(super::read_base_model(ref_str, base.commit)).unwrap();
         assert!(model.contains("\"Saves\"") && !model.contains("Saves the note"));
+    }
+
+    /// When the direction file changes, reads the direction to send to the window, and ignores the app's own record beside it.
+    #[test]
+    fn reads_a_direction_only_from_the_direction_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = scryer_core::app_view::Direction { sender: "fix the save".into(), node: "n".into(), at: 3, ..Default::default() };
+        scryer_core::app_view::write_direction(dir.path(), &d).unwrap();
+        scryer_core::app_view::mark_open(dir.path()).unwrap();
+        let view = scryer_core::app_view::view_dir(dir.path());
+        assert_eq!(super::direction_at(&view.join("direction.json")), Some(d));
+        assert_eq!(super::direction_at(&view.join("app.json")), None);
+        std::fs::write(view.join("direction.json"), "{ torn").unwrap();
+        assert_eq!(super::direction_at(&view.join("direction.json")), None, "a torn write is no direction");
     }
 
     /// When a different project is opened, replaces the previous project's watcher, and when the same project is opened again, keeps the running one.

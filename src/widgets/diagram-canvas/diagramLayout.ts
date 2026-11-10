@@ -56,8 +56,7 @@ export interface DiagramNode {
   childIds: string[];
   /** Fan-in at this level (how many symbols depend on it) — encodes centrality. */
   degree: number;
-  /** Rendered dot diameter (px) on the code tier, sized relative to the graph's
-   *  busiest hub so the most depended-upon symbol reads largest. */
+  /** Rendered glyph size (px) on the code tier: one size for every symbol. */
   dotSize: number;
   /** A ghost: a node referenced from this level but living outside it. Rendered
    *  hollow; double-click navigates to where it actually lives. */
@@ -87,8 +86,11 @@ export interface DiagramEdge {
   kind?: string;
   /** A real dependency that conforms to the level's style (a legal step
    *  between its layers), or a tooling link, held to no style: the drawing
-   *  already says it, so it draws quiet. */
+   *  already says it, so it draws quiet. Never a declared one. */
   conforming: boolean;
+  /** Declared in structure.toml: what the developer says the relationship
+   *  is, never drawn quiet, and in place of what imports imply. */
+  declared?: boolean;
   /** Styled mode: both ends sit on one ring or band, so the straight chord
    *  would cut through what lies between — bow it away from `(cx, cy)`, the
    *  curve's middle displaced `offset` px from the chord's midpoint. */
@@ -113,6 +115,12 @@ export interface StyledScene {
   name: string;
   drawing: Drawing;
   regions: LayerRegion[];
+  /** The style's layers, outermost first. */
+  layers: string[];
+  /** What the style is for, in its own words. */
+  purpose: string;
+  /** Each layer and the layers it may import. */
+  mayImport: Record<string, string[]>;
 }
 
 export interface DiagramScene {
@@ -134,17 +142,12 @@ export const CARD_W = 180;
 export const CARD_H = 160;
 
 
-// Relative dot sizing: the most depended-upon symbol fills MAX_DOT, a leaf sits
-// at MIN_DOT, scaled against the graph's own busiest hub (not an absolute count)
-// so the contrast is dramatic without ever producing a sun-sized dot. Sized to
-// read like the C4 arch tiers — substantial circles, not pinpricks.
-const MIN_DOT = 18;
-const MAX_DOT = 64;
-function dotSizeFor(inDegree: number, maxInDegree: number): number {
-  if (maxInDegree <= 0) return MIN_DOT;
-  const t = Math.min(1, inDegree / maxInDegree);
-  return MIN_DOT + (MAX_DOT - MIN_DOT) * Math.pow(t, 0.85);
-}
+// One glyph size for every symbol and reference on the code tier: a size
+// read off this map's own arrows measured the wrong thing (a symbol the
+// whole codebase calls drew tiny, the components it calls drew huge), and
+// sizes meant nothing from one map to the next.
+const DOT = 32;
+const MIN_DOT = DOT;
 
 // Label geometry for the centered-below layout: the glyph sits on top, the
 // name beneath it, both horizontally centered. The collision box is the union
@@ -205,39 +208,25 @@ export async function buildDiagramScene(
     return null;
   };
 
-  // Depth of a node (root-level = 0), memoized.
-  const depthCache = new Map<string, number>();
-  const depthOf = (id: string): number => {
-    const cached = depthCache.get(id);
-    if (cached !== undefined) return cached;
-    let d = 0;
-    let cur = byId.get(id);
-    const seen = new Set<string>();
-    while (cur && cur.parentId && !seen.has(cur.id)) {
-      seen.add(cur.id);
-      cur = byId.get(cur.parentId);
-      d++;
-    }
-    depthCache.set(id, d);
-    return d;
-  };
-  // Roll a node strictly above this level: walk up to the focus's own altitude
-  // (one level above the visible children) so a cross-boundary peer reads as the
-  // higher-level box that contains it (C4 rule) — a sibling symbol's component, a
-  // sibling component's container. Nodes already at or above that altitude come
-  // back unchanged. Cycle-guarded.
-  const childDepth = focusId === null ? 0 : depthOf(focusId) + 1;
-  const rollAbove = (nodeId: string): string => {
-    const target = childDepth - 1;
+  // An end outside the focus as this level draws it (C4): the highest node
+  // holding it that does not hold the focus. Another container shows as that
+  // container, another system as that system, a person as the person. An
+  // end inside the focus that the level does not draw, or one that is the
+  // focus or holds it, has no place here.
+  const focusLine = new Set<string>();
+  for (let id = focusId; id !== null && !focusLine.has(id); id = byId.get(id)?.parentId ?? null) focusLine.add(id);
+  const outsideAt = (nodeId: string): string | null => {
     let cur = byId.get(nodeId);
-    let d = depthOf(nodeId);
+    let top: string | null = null;
     const seen = new Set<string>();
-    while (cur && d > target && cur.parentId && !seen.has(cur.id)) {
+    while (cur && !seen.has(cur.id)) {
       seen.add(cur.id);
-      cur = byId.get(cur.parentId);
-      d--;
+      if (cur.id === focusId) return null;
+      if (focusLine.has(cur.id)) break;
+      top = cur.id;
+      cur = cur.parentId ? byId.get(cur.parentId) : undefined;
     }
-    return cur ? cur.id : nodeId;
+    return top;
   };
 
   const ghostIds = new Set<string>();
@@ -249,68 +238,55 @@ export async function buildDiagramScene(
     source: string,
     target: string,
     kind?: string,
+    declared = false,
   ) => {
     if (source === target) return;
     const key = `${source}\0${target}`;
-    if (edgeMap.has(key)) return;
-    edgeMap.set(key, { id: linkId, source, target, label, method, kind, conforming: false });
+    const existing = edgeMap.get(key);
+    if (!existing) {
+      edgeMap.set(key, { id: linkId, source, target, label, method, kind, conforming: false, declared });
+      return;
+    }
+    // A declared link takes the place of one imports imply; otherwise a
+    // label fills an arrow that has none.
+    if (declared && !existing.declared) Object.assign(existing, { id: linkId, label, method, kind, declared });
+    else if (!existing.label && label && !existing.declared) existing.label = label;
   };
-  for (const link of model.links) {
-    const s = liftToLevel(link.src);
-    const t = liftToLevel(link.dst);
-    if (s && t) addEdge(link.id, link.label ?? "", link.method, s, t, link.kind);
-  }
+  // Every link at this level (C4): both ends inside, between the focus's
+  // children; one end outside, to that end drawn as a ghost at the highest
+  // node that does not hold the focus. Declared links keep their label at
+  // every level; links read off the code carry none.
+  const endAt = (nodeId: string) => {
+    const inside = liftToLevel(nodeId);
+    if (inside) return { id: inside, inside: true };
+    const outside = focusId === null ? null : outsideAt(nodeId);
+    return outside ? { id: outside, inside: false } : null;
+  };
+  // Links between the focus's children first, then the imports crossing its
+  // boundary, then the other links that do, so the outside ends keep the
+  // order the drawing places them in.
+  const ends = model.links.map((link) => ({ link, s: endAt(link.src), t: endAt(link.dst) }));
+  const addLink = ({ link, s, t }: (typeof ends)[number]) => {
+    for (const end of [s!, t!]) if (!end.inside) ghostIds.add(end.id);
+    addEdge(link.id, link.label ?? "", link.method, s!.id, t!.id, link.kind, !!link.declared);
+  };
+  for (const e of ends) if (e.s?.inside && e.t?.inside) addLink(e);
 
-  // Ghosts: the focus node's cross-boundary connections, read off the same code
-  // import graph the wiki's implied connections use (report.derived.resolvedEdges).
-  // For every resolved edge with exactly one end inside this level, the inside end
-  // is rolled to the child it passes through, and the outside end (the peer) is
-  // rolled strictly above the level — that rolled-up peer is the ghost, wired to
-  // that child. Unlike the wiki we keep edges a declared link already "covers",
-  // because the diagram doesn't draw those declared cross-level links separately;
-  // dropping them here is what left the arch tiers ghost-less. Counts sum per
-  // (child, ghost) and show as ×n.
+  // Imports the tree holds below its links: each crossing the focus's
+  // boundary, its inside end rolled to the child it passes through and its
+  // outside end drawn as above. Unlabelled: calculated, not declared.
   if (focusId !== null) {
-    const crossing = new Map<string, { source: string; target: string; ghost: string; count: number }>();
     for (const e of report?.derived.resolvedEdges ?? []) {
-      const srcChild = liftToLevel(e.srcNode);
-      const dstChild = liftToLevel(e.dstNode);
-      const srcIn = srcChild !== null;
-      if (srcIn === (dstChild !== null)) continue; // not crossing this level's boundary
-      const child = (srcIn ? srcChild : dstChild)!;
-      const ghost = rollAbove(srcIn ? e.dstNode : e.srcNode);
-      // A root symbol's edge rolls up to the focus itself: no ghost.
-      if (!byId.has(ghost) || ghost === child || ghost === focusId || childIds.has(ghost)) continue;
-      const source = srcIn ? child : ghost;
-      const target = srcIn ? ghost : child;
-      const key = source + ">" + target;
-      const cur = crossing.get(key);
-      if (cur) cur.count += e.count;
-      else crossing.set(key, { source, target, ghost, count: e.count });
-    }
-    for (const e of crossing.values()) {
-      ghostIds.add(e.ghost);
-      addEdge("import:" + e.source + ">" + e.target, "×" + e.count, undefined, e.source, e.target);
-    }
-    // A declared link to a person or an external (a container's `uses` in
-    // structure.toml) has no import behind it, so it ghosts that node here.
-    for (const link of model.links) {
-      const srcChild = liftToLevel(link.src);
-      const dstChild = liftToLevel(link.dst);
-      if ((srcChild !== null) === (dstChild !== null)) continue;
-      const outside = byId.get(srcChild !== null ? link.dst : link.src);
-      if (!outside || outside.parentId || (outside.kind !== "person" && !outside.external)) continue;
-      ghostIds.add(outside.id);
-      const source = srcChild ?? outside.id;
-      const target = dstChild ?? outside.id;
-      addEdge(link.id, link.label ?? "", link.method, source, target, link.kind);
+      const s = endAt(e.srcNode), t = endAt(e.dstNode);
+      if (!s || !t || s.inside === t.inside) continue;
+      for (const end of [s, t]) if (!end.inside) ghostIds.add(end.id);
+      addEdge("import:" + s.id + ">" + t.id, "", undefined, s.id, t.id);
     }
   }
+  for (const e of ends) if (e.s && e.t && e.s.inside !== e.t.inside) addLink(e);
   const edges = [...edgeMap.values()];
 
-  // Fan-in per visible node — how many other symbols depend on it. Drives dot
-  // size on the code tier: the more depended-upon a symbol is, the bigger it
-  // reads, so the load-bearing hubs stand out.
+  // Fan-in per visible node on this level: how many of its arrows end there.
   const degree = new Map<string, number>();
   for (const e of edges) {
     degree.set(e.target, (degree.get(e.target) ?? 0) + 1);
@@ -355,12 +331,7 @@ export async function buildDiagramScene(
   const ghosts = [...ghostIds];
   const layoutIds = [...children.map((c) => c.id), ...ghosts];
 
-  // Size every dot relative to the busiest hub on this level — dramatic contrast
-  // without an absolute scale that could blow a dot up out of proportion.
-  const maxIn = layoutIds.reduce((m, id) => Math.max(m, degree.get(id) ?? 0), 0);
-  const sizeById = new Map(
-    layoutIds.map((id) => [id, dotSizeFor(degree.get(id) ?? 0, maxIn)] as const),
-  );
+  const sizeById = new Map(layoutIds.map((id) => [id, DOT] as const));
 
   // A position given on a node fixes it and auto-layout places the rest. The
   // app never gives one (its maps are derived); a caller drawing a curated
@@ -439,7 +410,14 @@ export async function buildDiagramScene(
     );
     for (const [id, at] of pinnedPos) positions.set(id, at);
     const allRegions = tools.region ? [...laid.regions, tools.region] : laid.regions;
-    styled = { name: styleDef.name, drawing: styleDef.drawing, regions: allRegions };
+    styled = {
+      name: styleDef.name,
+      drawing: styleDef.drawing,
+      regions: allRegions,
+      layers: styleDef.layers.map((l) => l.name),
+      purpose: styleDef.description,
+      mayImport: styleDef.matrix,
+    };
     regions = allRegions;
     // The drawing already says the links that conform: drawn quiet. Links
     // that leave the container say what the drawing cannot — who calls in,
@@ -536,6 +514,9 @@ export async function buildDiagramScene(
       y: p.y,
     };
   });
+
+  // A declared link says something the drawing cannot: never quiet.
+  for (const e of edges) if (e.declared) e.conforming = false;
 
   return { mode, focusId, nodes, edges, styled, regions };
 }

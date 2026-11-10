@@ -1,4 +1,5 @@
 import type { ScryModel } from "../../entities/model/viewmodel";
+import type { ModelChanges } from "../../entities/model/changes";
 import type { Editor } from "../../entities/model/editor";
 import type { ClaimProbeStatus, ClaimTestStatus, ModelHealthReport } from "../../entities/model/health";
 import type { PreviewServerState } from "../../features/preview-client/usePreviewServer";
@@ -13,6 +14,11 @@ export interface PageProps {
   /** Show the page's changes in full: word diffs and removed rows. Off, a
    *  changed row only carries its mark. */
   showChanges: boolean;
+  /** Flip {@link showChanges}; the page draws its toggle only when its node
+   *  changed since the base. */
+  onToggleChanges?: () => void;
+  /** What changed in the model since the base, node by node. */
+  changes?: ModelChanges;
   selected: Selected;
   report: ModelHealthReport | null;
   /** respId → recorded test verdict (re-verified staleness), from the

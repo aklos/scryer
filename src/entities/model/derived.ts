@@ -1,16 +1,17 @@
 /**
  * The derived tree's status as `get_derived_status` and the health report
- * return it: every claim's state (proven, stale, failing, planned) and probe
+ * return it: every claim's state (proven, stale, unproven, failing, planned) and probe
  * mark, and the health counts per node and in total.
  */
 
-export type ClaimState = "proven" | "stale" | "failing" | "planned";
+export type ClaimState = "proven" | "stale" | "unproven" | "failing" | "planned";
 export type ProbeMark = "crosshair" | "doubleCheck";
 
 export interface DerivedCounts {
   claims: number;
   proven: number;
   stale: number;
+  unproven: number;
   failing: number;
   planned: number;
   untestedComponents: number;

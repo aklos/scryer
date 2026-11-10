@@ -3,10 +3,13 @@
  * a dashed chord ending at its arrowhead and a label/method pill. A reverse
  * pair splits into parallel lanes, code-tier edges inset to their dots' rims,
  * same-ring edges in a styled level bow outward, a long box-tier link follows
- * its lane, a quiet edge (one the drawing already implies) sits faint, and
- * edges light or fade with
- * the selection. An edge carrying structural violations is drawn red, its
- * reason always written on it. Edges take no clicks.
+ * its lane, a quiet edge (one the drawing already implies) draws as faint
+ * round beads with an open arrowhead, a label sits beside its line (on it
+ * only when nothing beside is free), its letters haloed so no line strikes
+ * them, or, crowded, waits as a mark until its edge is lit, and edges light or fade with the
+ * selection. An edge carrying structural violations is drawn red, its
+ * reason always written on it. A click on an edge or its label lights it,
+ * its label in full.
  */
 
 import {
@@ -51,6 +54,14 @@ export interface EdgeData extends Record<string, unknown> {
   /** Where the label pill goes, chosen for the whole level so it hides no
    *  other edge (`placeLabels`). Absent: the line's own middle. */
   labelAt?: { x: number; y: number };
+  /** Beside an upright run: which edge of the label meets the line, and
+   *  where, so its words start at the line. */
+  labelHug?: { side: "left" | "right"; x: number };
+  /** Even the label's best spot covers another edge, a card or a label: a
+   *  mark stands in for it until the edge is lit. */
+  labelCrowded?: boolean;
+  /** A click on the label (or its mark) lights the edge, as one on the line. */
+  onLabelClick?: () => void;
   /** Structural violations charged on this pair — drawn red, the first
    *  reason written on it, so the map exposes the code's disorder instead of
    *  tidying it away. */
@@ -77,29 +88,46 @@ export function edgeText(data: EdgeData | undefined): string | undefined {
   return data?.label;
 }
 
-/** The dots a quiet edge draws in, round-capped. */
-const QUIET_DASH = "2 3";
+/** The beads a quiet edge draws in: zero-length dashes, round-capped, so
+ *  each is a dot the stroke's width across. */
+const QUIET_DASH = "0 4.5";
+
+export interface EdgeLook {
+  opacity: number;
+  width: number;
+  /** The label shows: as words, or as its mark while crowded. */
+  label: boolean;
+  /** A crowded label at rest: a mark where its words go. */
+  mark: boolean;
+  dash?: string;
+  flowing: boolean;
+  /** Quiet edges take the fainter tone and an open arrowhead. */
+  tone: "plain" | "quiet";
+  arrow: "filled" | "open";
+}
 
 /** How strongly an edge draws: lit edges (at a selected end) in full; a
- *  quiet one fainter, thinner and dotted, still, with no label; the rest of a
- *  selection's level faded further. The dot tier draws solid, still curves;
- *  the box tiers a dashed line flowing towards the target. */
-export function edgeLook(
-  data: EdgeData | undefined,
-  selected = false,
-): { opacity: number; width: number; label: boolean; dash?: string; flowing: boolean } {
+ *  quiet one as faint round beads, still, with an open arrowhead and no
+ *  label; the rest of a selection's level faded further. The dot tier draws
+ *  solid, still curves; the box tiers a dashed line flowing towards the
+ *  target. */
+export function edgeLook(data: EdgeData | undefined, selected = false): EdgeLook {
   const lit = !!(selected || data?.highlighted);
   const red = (data?.violations?.length ?? 0) > 0;
   const isDot = !!data?.dot;
-  const hushed = !!data?.quiet && !lit;
-  const opacity = lit ? 1 : data?.dimmed ? (data?.quiet ? 0.14 : 0.18) : red ? 0.95 : isDot ? 0.5 : data?.quiet ? 0.8 : 0.85;
-  const width = selected ? 2.5 : isDot ? 1 : hushed ? 1.25 : 1.5;
+  const hushed = !!data?.quiet && !lit && !red;
+  const opacity = lit ? 1 : data?.dimmed ? (data?.quiet ? 0.14 : 0.18) : red ? 0.95 : isDot ? 0.5 : hushed ? 0.9 : 0.85;
+  const width = selected ? 2.5 : isDot ? 1 : hushed ? 1.7 : 1.5;
+  const label = (!isDot && !data?.quiet) || labelInFull(data, selected);
   return {
     opacity,
     width,
-    label: (!isDot && !data?.quiet) || labelInFull(data, selected),
+    label,
+    mark: label && !!data?.labelCrowded && !labelInFull(data, selected),
     dash: isDot ? undefined : hushed ? QUIET_DASH : "6 3",
     flowing: !isDot && !hushed,
+    tone: hushed ? "quiet" : "plain",
+    arrow: hushed ? "open" : "filled",
   };
 }
 
@@ -119,7 +147,8 @@ export function RelationshipEdge({
   // Neutral chrome — the diff/change-mark palette is carried by the nodes.
   const violations = data?.violations ?? [];
   const red = violations.length > 0;
-  const baseColor = red ? getThemedHex("red", "500") : "var(--map-edge)";
+  const look = edgeLook(data, selected);
+  const baseColor = red ? getThemedHex("red", "500") : look.tone === "quiet" ? "var(--map-edge-quiet)" : "var(--map-edge)";
   const selColor =
     getComputedStyle(document.documentElement).getPropertyValue("--selection-color").trim() ||
     "#18181b";
@@ -145,6 +174,7 @@ export function RelationshipEdge({
   // ~22%/78% and clears ALONG the line at any angle — and (b) nudging it to its
   // lane's OUTER side so the pill hugs its own line.
   let labelDivX = labelX, labelDivY = labelY;
+  const hug = data?.labelAt ? data.labelHug : undefined;
   if (data?.labelAt) {
     labelDivX = data.labelAt.x;
     labelDivY = data.labelAt.y;
@@ -161,9 +191,6 @@ export function RelationshipEdge({
   const ax2 = tx - arrowSize * Math.cos(arrowAngle + Math.PI / 6);
   const ay2 = ty - arrowSize * Math.sin(arrowAngle + Math.PI / 6);
 
-  // Subgraph highlight: edges touching the selection stay lit, the rest fade.
-  // Dot-tier edges sit fainter at rest so the constellation reads as nodes, not lines.
-  const look = edgeLook(data, selected);
 
   return (
     <>
@@ -179,38 +206,71 @@ export function RelationshipEdge({
             animation: look.flowing ? "dash-flow 0.5s linear infinite" : undefined,
           }}
         />
-        <polygon points={`${tx},${ty} ${ax1},${ay1} ${ax2},${ay2}`} fill={edgeColor} />
+        {look.arrow === "open" ? (
+          <polyline
+            points={`${ax1},${ay1} ${tx},${ty} ${ax2},${ay2}`}
+            fill="none"
+            stroke={edgeColor}
+            strokeWidth={1.2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        ) : (
+          <polygon points={`${tx},${ty} ${ax1},${ay1} ${ax2},${ay2}`} fill={edgeColor} />
+        )}
       </g>
       {(label || method) && look.label && (
         <EdgeLabelRenderer>
           <div
             style={{
               position: "absolute",
-              transform: `translate(-50%, -50%) translate(${labelDivX}px,${labelDivY}px)`,
+              transform: hug
+                ? `translate(${hug.side === "left" ? "0" : "-100%"}, -50%) translate(${hug.x}px,${labelDivY}px)`
+                : `translate(-50%, -50%) translate(${labelDivX}px,${labelDivY}px)`,
               zIndex: red ? 3 : full ? 2 : 1,
-              pointerEvents: "none",
+              pointerEvents: data?.onLabelClick ? "all" : "none",
+              cursor: data?.onLabelClick ? "pointer" : undefined,
               // At rest the words are muted by colour, not by opacity: a
               // translucent label lets the edge under it strike the text.
               ...(data?.dimmed ? { opacity: 0.18 } : {}),
             }}
-            className="flex flex-col items-center"
+            className={`nodrag nopan flex flex-col ${hug ? (hug.side === "left" ? "items-start" : "items-end") : "items-center"}`}
+            onClick={(ev) => {
+              ev.stopPropagation();
+              data?.onLabelClick?.();
+            }}
           >
-            {label && (
-              // Wrapped to a narrow column: a sentence-long label on one line
-              // runs across its neighbours' pills where edges converge. At
-              // rest, no border, but the canvas colour behind the words so
-              // the edge they sit on does not strike them through.
+            {label && look.mark ? (
+              // Crowded: its words would cover something, so a mark holds
+              // the place until the edge is lit.
               <div
-                className={`w-max max-w-[150px] rounded border px-1.5 py-0.5 text-center text-[10px] leading-tight ${
-                  red
-                    ? "border-red-500/50 bg-[var(--surface-raised)] text-red-600 dark:text-red-300"
-                    : full
-                      ? "border-[var(--map-card-stroke)] bg-[var(--surface-raised)] text-[var(--text-secondary)]"
-                      : "border-transparent bg-[var(--surface-canvas)] text-[var(--text-muted)]"
-                }`}
-              >
-                {label}
-              </div>
+                data-label-mark=""
+                aria-label={label}
+                className="h-[7px] w-[7px] rounded-full border border-[var(--map-edge)] bg-[var(--surface-canvas)]"
+              />
+            ) : (
+              label && (
+                // Wrapped to a narrow column: a sentence-long label on one
+                // line runs across its neighbours' pills where edges converge.
+                // At rest, bare words, their letters haloed in the canvas
+                // colour: any line under them (its own, another edge, a
+                // boundary) shows between the words instead of striking them
+                // or stopping at a box. Beside an upright run, the words
+                // start at the line.
+                <div
+                  className={`w-max max-w-[150px] rounded border px-1.5 py-0.5 text-[10px] leading-tight ${
+                    hug ? (hug.side === "left" ? "text-left" : "text-right") : "text-center"
+                  } ${
+                    red
+                      ? "border-red-500/50 bg-[var(--surface-raised)] text-red-600 dark:text-red-300"
+                      : full
+                        ? "border-[var(--map-card-stroke)] bg-[var(--surface-raised)] text-[var(--text-secondary)]"
+                        : "edge-label-halo border-transparent text-[var(--text-muted)]"
+                  }`}
+                >
+                  {label}
+                </div>
+              )
             )}
             {method && (
               <div className="whitespace-nowrap text-[9px] text-[var(--text-tertiary)]">[{method}]</div>

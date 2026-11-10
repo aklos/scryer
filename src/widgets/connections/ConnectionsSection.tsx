@@ -242,7 +242,7 @@ function symbolDiscriminator(model: ScryModel, node: Node): string | undefined {
  *  child). An arrow, not a chevron: the chevron is reserved for expand toggles,
  *  so a static separator never reads as a clickable control. */
 function Sep() {
-  return <span className="shrink-0 select-none px-0.5 text-[var(--text-ghost)]">→</span>;
+  return <ArrowRight aria-hidden className="h-3.5 w-3.5 shrink-0 self-center text-[var(--text-muted)]" />;
 }
 
 /** One endpoint of a code path — the host node (component/container, a real node
@@ -502,7 +502,7 @@ function SuggestedRow({
 }) {
   return (
     <li className={`group/erow ${CONN_ROW} py-[1.5px]`}>
-      <span className="relative top-px flex select-none justify-center text-[var(--text-ghost)]">
+      <span className="relative top-px flex select-none justify-center text-[var(--text-muted)]">
         {out ? (
           <ArrowRight className="h-3.5 w-3.5" />
         ) : (

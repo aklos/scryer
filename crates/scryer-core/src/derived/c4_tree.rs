@@ -85,6 +85,11 @@ pub struct DerivedTree {
     /// dark.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tooling: BTreeMap<String, Vec<String>>,
+    /// What `structure.toml` declares that the tree cannot hold: a
+    /// relationship end naming no node, or relating a node to its own
+    /// parent or child. Reading the project fails on any.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub structure_problems: Vec<String>,
 }
 
 /// One style violation, charged to the node whose code has to move.

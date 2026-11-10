@@ -35,19 +35,21 @@ import {
   type Edge as RFEdge,
   type NodeChange,
   type NodeProps,
+  type Viewport,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { ChevronRight, CornerLeftUp, Maximize, Spline } from "lucide-react";
 import type { ScryModel } from "../../entities/model/viewmodel";
 import { concernCounts, concernGapCounts } from "../../entities/model/viewmodel";
 import { attentionState, childTally, CLAIM_TONE } from "../../entities/model/claimState";
-import { SYMBOL_ICON } from "../../entities/model/kindIcon";
+import { SYMBOL_ICON, kindIcon } from "../../entities/model/kindIcon";
 import { placeLabels } from "../../shared/diagram/labelPlacement";
 import { edgeLines, linePoints } from "./edgeLines";
 import { DiagramCard, type CardData, type RFCard } from "./DiagramCard";
 import { CenterHandle } from "../../shared/diagram/NodeHandles";
 import { RelationshipEdge, edgeText, type EdgeData } from "../../shared/diagram/RelationshipEdge";
 import { buildDiagramScene, CARD_W, CARD_H, type DiagramScene, type DiagramNode } from "./diagramLayout";
+import { levelFacts, nodeFacts } from "./levelFacts";
 import { useDotSim } from "./useDotSim";
 import { drawingBounds, StyleRegions } from "./StyleRegions";
 import { structuralBySubtree, type ModelHealthReport } from "../../entities/model/health";
@@ -64,6 +66,33 @@ export function edgeShown(conforming: boolean, showConforming: boolean, lit: boo
   return !conforming || showConforming || lit;
 }
 
+/** What stays lit while the rest of the level dims: a clicked edge and its
+ *  two ends; else the selected card, its edges and its neighbours; else
+ *  nothing (the selection lives on another level). */
+export function subgraphHighlight(
+  scene: Pick<DiagramScene, "nodes" | "edges"> | null,
+  selectedId: string | null,
+  litEdge: string | null,
+): { active: boolean; neighbors: Set<string>; edge?: string } {
+  const lit = litEdge ? scene?.edges.find((e) => e.id === litEdge) : undefined;
+  if (lit) return { active: true, neighbors: new Set([lit.source, lit.target]), edge: lit.id };
+  if (!scene || !selectedId || !scene.nodes.some((n) => n.id === selectedId)) {
+    return { active: false, neighbors: new Set<string>() };
+  }
+  const neighbors = new Set<string>([selectedId]);
+  for (const e of scene.edges) {
+    if (e.source === selectedId) neighbors.add(e.target);
+    else if (e.target === selectedId) neighbors.add(e.source);
+  }
+  return { active: true, neighbors };
+}
+
+/** The edge lit by a click on it or its label: a click lights it, a second
+ *  click on the same edge puts it back. */
+export function toggleLit(lit: string | null, id: string): string | null {
+  return lit === id ? null : id;
+}
+
 /** The class word for a symbol's label, now that its glyph says it. */
 const SYMBOL_CLASS_LABEL: Record<DiagramNode["symbolClass"], string> = {
   code: "code",
@@ -73,32 +102,30 @@ const SYMBOL_CLASS_LABEL: Record<DiagramNode["symbolClass"], string> = {
 
 /** A code-tier symbol: its type's glyph — the tree's, so a symbol looks the
  *  same everywhere — sized by fan-in, with its name beneath. The glyph's
- *  tone says what is known about it: full for a symbol with claims, ghost
- *  for one with none (a big ghost glyph is a hub nobody has described, the
+ *  tone says what is known about it: full for a symbol with claims, muted
+ *  for one with none (a big muted glyph is a hub nobody has described, the
  *  find worth making), red when a claim on it fails. A todo is work, not
- *  a fault, so it stays in the plain tone like a proven claim. */
+ *  a fault, so it stays in the plain tone like a proven claim. A reference
+ *  (a caller or dependency outside the component) wears its own kind's
+ *  glyph — a component reads as a component, not as code. */
 export function DotNode({ data }: NodeProps<RFDot>) {
   const { node, selected, attention } = data;
   const meta = attention === "failing" ? { color: CLAIM_TONE.failing, label: "a claim here is failing" } : null;
   const ghost = node.reference;
-  // Size encodes fan-in — the more depended-upon a symbol, the larger it
-  // reads. Sized relative to the busiest hub on this level (see diagramLayout).
+  // One size for every glyph (see diagramLayout).
   const dia = node.dotSize;
-  const Icon = SYMBOL_ICON[node.symbolClass];
+  const Icon = ghost ? kindIcon(node) : SYMBOL_ICON[node.symbolClass];
   const undescribed = !ghost && !node.hasClaims;
   // A ghost lives elsewhere: its state is told on its own level, never here.
+  // Nothing rests faded: only a selection elsewhere dims what it misses.
   const tone = ghost
     ? "text-[var(--text-muted)]"
     : meta
       ? meta.color
       : undescribed
-        ? "text-[var(--text-ghost)]"
-        : "text-[var(--text-secondary)]";
-  // Subgraph highlight: faded when a selection elsewhere doesn't touch this
-  // symbol. Leaves (undescribed, one caller at most) rest faded so the
-  // important ones carry the level.
-  const leaf = undescribed && node.degree <= 1;
-  const dimClass = data.dimmed ? "opacity-20" : ghost ? "opacity-70" : leaf ? "opacity-45" : "";
+        ? "text-[var(--text-muted)]"
+        : "text-[var(--text)]";
+  const dimClass = data.dimmed ? "opacity-20" : "";
   const said = [node.name, SYMBOL_CLASS_LABEL[node.symbolClass], ghost ? "referenced — double-click to open" : meta?.label]
     .filter(Boolean)
     .join(", ");
@@ -111,8 +138,6 @@ export function DotNode({ data }: NodeProps<RFDot>) {
         }`}
         aria-label={said}
       >
-        {/* The stroke thickens a little with size, so a hub's glyph holds
-            its weight without the small ones going bold. */}
         <Icon width={dia} height={dia} absoluteStrokeWidth strokeWidth={1.5 + dia / 40} />
         <CenterHandle />
       </span>
@@ -144,6 +169,13 @@ const NO_EDGES: RFEdge<EdgeData>[] = [];
 // placements land on the visible grid. Arch tiers only: snapping the code
 // tier's dots would fight the physics.
 
+/** React Flow's camera props: fitted and bounded for the user, or held at a given viewport past those bounds. */
+export function cameraProps(viewport: Viewport | undefined) {
+  return viewport
+    ? { viewport, defaultViewport: viewport, fitView: false, minZoom: 0.01, maxZoom: 16 }
+    : { fitView: true, minZoom: 0.2, maxZoom: 2 };
+}
+
 export function DiagramView({
   model,
   report,
@@ -155,6 +187,8 @@ export function DiagramView({
   concernLens,
   previewable,
   changes = NO_CHANGES,
+  viewport,
+  fitDuration,
 }: {
   model: ScryModel;
   /** Symbol ids the preview sidecar can render — derived, drives the `visual` class. */
@@ -176,6 +210,13 @@ export function DiagramView({
   /** The active concern lens (a concern slug some claim carries, or null): cards whose subtree
    *  holds no claim tagged with it dim, mirroring the tree. */
   concernLens?: string | null;
+  /** The camera, held: the map shows exactly this viewport (flow → screen: translate, then zoom), past the
+   *  interactive zoom limits, and never fits itself. For a caller that drives the camera frame by frame (the
+   *  demo film); unset in the product. */
+  viewport?: Viewport;
+  /** How long a fit to a new level animates, in ms (default 300). An agent's direction fits instantly: its own
+   *  transition shows the move, and waits for the level to report `data-map-ready` before playing. */
+  fitDuration?: number;
 }) {
   return (
     <ReactFlowProvider>
@@ -190,6 +231,8 @@ export function DiagramView({
         concernLens={concernLens}
         previewable={previewable}
         changes={changes}
+        viewport={viewport}
+        fitDuration={fitDuration}
       />
     </ReactFlowProvider>
   );
@@ -206,11 +249,15 @@ function DiagramInner({
   concernLens,
   previewable,
   changes,
+  viewport,
+  fitDuration,
 }: {
   model: ScryModel;
   /** Symbol ids the preview sidecar can render — derived, drives the `visual` class. */
   previewable: ReadonlySet<string>;
   changes: ModelChanges;
+  viewport?: Viewport;
+  fitDuration?: number;
   report: ModelHealthReport | null;
   focusId: string | null;
   selectedId: string | null;
@@ -288,20 +335,19 @@ function DiagramInner({
   // so a failing or planned claim anywhere beneath it shows on the card.
   const claimsOf = report?.derivedStatus?.nodes;
 
+  // The edge a click lit, its label read in full and the rest dimmed
+  // as a card's selection dims it; a click on a card or the
+  // canvas, or a new level, puts it back.
+  const [litEdge, setLitEdge] = useState<string | null>(null);
+  useEffect(() => setLitEdge(null), [scene]);
+  const lightEdge = useCallback((id: string) => setLitEdge((lit) => toggleLit(lit, id)), []);
+
   // Subgraph highlight: when the selected node is on this level, its incident
-  // edges and neighbour nodes stay lit and everything else dims. Inactive when
-  // the selection lives at another level (nothing here to anchor it).
-  const highlight = useMemo(() => {
-    if (!scene || !selectedId || !scene.nodes.some((n) => n.id === selectedId)) {
-      return { active: false, neighbors: new Set<string>() };
-    }
-    const neighbors = new Set<string>([selectedId]);
-    for (const e of scene.edges) {
-      if (e.source === selectedId) neighbors.add(e.target);
-      else if (e.target === selectedId) neighbors.add(e.source);
-    }
-    return { active: true, neighbors };
-  }, [scene, selectedId]);
+  // edges and neighbour nodes stay lit and everything else dims. A lit edge
+  // does the same for itself and its two ends, ahead of the selection.
+  // Inactive when the selection lives at another level (nothing here to
+  // anchor it).
+  const highlight = useMemo(() => subgraphHighlight(scene, selectedId, litEdge), [scene, selectedId, litEdge]);
 
   // Concern lens: a card is lit when its subtree holds a claim tagged
   // with the active slug; everything else dims. Composes with the subgraph
@@ -378,8 +424,17 @@ function DiagramInner({
   // them too). Routing is the costly part, so it reruns only when the scene
   // or a card's size changes, never on a selection.
   const sizeKey = rfNodes.map((n) => `${n.id}:${n.measured?.width ?? ""}x${n.measured?.height ?? ""}`).join("|");
+  // Every card of this level measured: until then a route would be laid over
+  // guessed boxes and thrown away, so none is.
+  const allMeasured = useMemo(() => {
+    if (!scene?.nodes.length) return false;
+    const measured = new Set(rfNodes.filter((n) => n.measured?.width).map((n) => n.id));
+    return scene.nodes.every((n) => measured.has(n.id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `sizeKey` stands for the sizes read off `rfNodes`
+  }, [scene, sizeKey]);
+  const [edgesReady, setEdgesReady] = useState(false);
   const geometry = useMemo(() => {
-    if (!scene) return null;
+    if (!scene || !(allMeasured || edgesReady)) return null;
     const liveNode = new Map(rfNodes.map((n) => [n.id, n] as const));
     const boxes = scene.nodes.map((n) => {
       const live = liveNode.get(n.id);
@@ -393,7 +448,7 @@ function DiagramInner({
     });
     return { boxes, boxOf: new Map(boxes.map((b) => [b.id, b])), lines: edgeLines(scene, boxes) };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `sizeKey` stands for the sizes read off `rfNodes`
-  }, [scene, sizeKey]);
+  }, [scene, sizeKey, allMeasured, edgesReady]);
 
   const rfEdges = useMemo<RFEdge<EdgeData>[]>(() => {
     if (!scene || !geometry) return [];
@@ -404,25 +459,24 @@ function DiagramInner({
       scene.mode === "code"
         ? new Map(scene.nodes.map((n) => [n.id, n.dotSize / 2] as const))
         : null;
-    // Edges touching a ghost (cross-boundary reference) node carry a ×n count
-    // label that isn't useful — drop it on every tier.
-    const ghostIds = new Set(
-      scene.nodes.filter((n) => n.reference).map((n) => n.id),
-    );
     // Every edge is drawn; one the drawing already implies (a legal step
     // between a style's layers, a tooling link) sits quiet, so the ones that
     // say something new stand out — or, with the map control off, hides until
     // a selection reaches one of its ends.
     const out = scene.edges.map((e) => {
       const line = lines.get(e.id)!;
-      const connected = highlight.active && (e.source === selectedId || e.target === selectedId);
-      const ghostEdge = ghostIds.has(e.source) || ghostIds.has(e.target);
+      // Lit like an edge at a selected card, in its own colour: by a click on
+      // it or its label, else by a selection reaching an end.
+      const connected = highlight.edge
+        ? e.id === highlight.edge
+        : highlight.active && (e.source === selectedId || e.target === selectedId);
       return {
         id: e.id,
         source: e.source,
         target: e.target,
         type: "rel" as const,
         selectable: false,
+        zIndex: e.id === litEdge ? 10 : undefined,
         // Generation choreography (demo-only, like the card `pending` flag): an
         // edge into a node that hasn't generated yet stays out of the frame
         // entirely — it arrives with the node, not before it.
@@ -438,16 +492,18 @@ function DiagramInner({
           targetShift: line.targetShift,
           violations: e.violations,
           quiet: e.conforming,
-          label: ghostEdge ? undefined : e.label || undefined,
-          method: ghostEdge ? undefined : e.method,
+          label: e.label || undefined,
+          method: e.method,
           dot: scene.mode === "code",
           sourceR: radius?.get(e.source),
           targetR: radius?.get(e.target),
           highlighted: connected,
           dimmed:
-            (highlight.active && !connected) ||
-            (concernLit !== null && (!concernLit.has(e.source) || !concernLit.has(e.target))),
+            e.id !== litEdge &&
+            ((highlight.active && !connected) ||
+              (concernLit !== null && (!concernLit.has(e.source) || !concernLit.has(e.target)))),
           parallel: line.parallel,
+          onLabelClick: () => lightEdge(e.id),
         },
       };
     });
@@ -465,10 +521,17 @@ function DiagramInner({
         })),
         boxes,
       );
-      for (const e of out) (e.data as EdgeData).labelAt = spots.get(e.id);
+      for (const e of out) {
+        const spot = spots.get(e.id);
+        Object.assign(e.data as EdgeData, {
+          labelAt: spot && { x: spot.x, y: spot.y },
+          labelHug: spot?.hug,
+          labelCrowded: spot?.crowded,
+        });
+      }
     }
     return out;
-  }, [scene, geometry, selectedId, highlight, concernLit, pendingIds, showConforming]);
+  }, [scene, geometry, selectedId, highlight, concernLit, pendingIds, showConforming, litEdge, lightEdge]);
 
   // Fit the whole drawing — the cards and the regions behind them — so a
   // ring or a band label is never cut off at the edge.
@@ -485,12 +548,19 @@ function DiagramInner({
   // Refit when the level changes (a fresh scene of a different size/shape).
   const fitKey = `${focusId ?? "root"}:${rfNodes.length}`;
   const lastFit = useRef("");
+  const fitDurationRef = useRef(fitDuration);
+  fitDurationRef.current = fitDuration;
+  // The level the camera has fitted: with the edges mounted, the level is settled (`data-map-ready`).
+  const [fittedKey, setFittedKey] = useState("");
   useEffect(() => {
-    if (rfNodes.length === 0 || lastFit.current === fitKey) return;
+    if (viewport || rfNodes.length === 0 || lastFit.current === fitKey) return;
     lastFit.current = fitKey;
-    const t = setTimeout(() => fitDrawing(), 0);
+    const t = setTimeout(() => {
+      fitDrawing(fitDurationRef.current);
+      setFittedKey(fitKey);
+    }, 0);
     return () => clearTimeout(t);
-  }, [fitKey, rfNodes.length, fitDrawing]);
+  }, [fitKey, rfNodes.length, fitDrawing, viewport]);
 
   // Edges route off the card handles, but React Flow doesn't know a handle's
   // real position until it has MEASURED the card — so an edge that mounts before
@@ -499,7 +569,8 @@ function DiagramInner({
   // point the cards have laid out and measured), recompute the handle positions,
   // then mount them — they route correctly on first paint. As a bonus the cards
   // land first and the connections follow, which reads well during the build.
-  const [edgesReady, setEdgesReady] = useState(false);
+  // They mount the moment every card is measured; the beat is only the
+  // fallback for a view that never measures.
   const updateInternalsRef = useRef(updateNodeInternals);
   updateInternalsRef.current = updateNodeInternals;
   // Key of the card SET on screen — a scene rebuild that only moved cards (a
@@ -525,19 +596,30 @@ function DiagramInner({
     }, 250);
     return () => clearTimeout(t);
   }, [cardsKey]);
+  useEffect(() => {
+    if (!cardsKey || !allMeasured || edgesReady) return;
+    for (const n of sceneRef.current?.nodes ?? []) updateInternalsRef.current(n.id);
+    setEdgesReady(true);
+  }, [cardsKey, allMeasured, edgesReady]);
   // Same cards, new scene (moved, or re-derived): refresh the handle anchors.
   useEffect(() => {
     if (scene) scene.nodes.forEach((n) => updateInternalsRef.current(n.id));
   }, [scene]);
 
   const crumbs = useMemo(() => breadcrumb(model, focusId), [model, focusId]);
+  const facts = useMemo(() => levelFacts(model, focusId, scene), [model, focusId, scene]);
+  const picked = useMemo(() => nodeFacts(model, scene, selectedId), [model, scene, selectedId]);
   const level = c4Level(model, focusId);
 
   return (
     // select-none: the map is a diagram, not copyable prose — without it, a
     // text selection swept in from the surrounding chrome paints the
     // full-canvas SVG layers (background, edges) as giant highlight slabs.
-    <div className="relative flex h-full min-w-0 flex-1 select-none flex-col bg-[var(--surface-canvas)]">
+    <div
+      className="relative flex h-full min-w-0 flex-1 select-none flex-col bg-[var(--surface-canvas)]"
+      data-map-level={focusId ?? ""}
+      data-map-ready={edgesReady && fittedKey === fitKey ? "" : undefined}
+    >
       {/* Breadcrumb / level bar */}
       <div className="flex h-9 shrink-0 items-center gap-1 border-b border-[var(--border)] bg-[var(--surface)] px-3 text-xs">
         {focusId !== null && (
@@ -585,6 +667,73 @@ function DiagramInner({
       </div>
 
       <div className="relative min-h-0 flex-1">
+        {facts && (
+          // What this level is, in its corner: kind and technology, the
+          // style it is held to, and what it holds. Read-only, so it lets
+          // every press through to the map.
+          <div
+            data-level-facts=""
+            className="edge-label-halo pointer-events-none absolute left-3 top-2 z-10 flex max-w-[300px] flex-col gap-0.5 text-2xs leading-snug text-[var(--text-muted)]"
+          >
+            <div className="text-[var(--text-secondary)]">
+              {facts.kind}
+              {facts.technology && ` · ${facts.technology}`}
+            </div>
+            {facts.style && (
+              <>
+                <div className="flex flex-wrap items-baseline gap-x-1.5">
+                  <span className="font-mono uppercase tracking-wide text-[var(--text-secondary)]">{facts.style.name}</span>
+                  <span>{facts.style.layers.join(" → ")}</span>
+                </div>
+                <div>for {facts.style.purpose}</div>
+              </>
+            )}
+            {facts.unstyled && <div>No style declared</div>}
+            {facts.tooling && <div>Dev tooling, held to no style</div>}
+            <div className="tabular-nums">
+              {facts.inside} {facts.insideWord}
+              {facts.outside > 0 && ` · ${facts.outside} outside`}
+              {facts.violations > 0 && (
+                <span className="text-red-600 dark:text-red-300">
+                  {" · "}
+                  {facts.violations} {facts.violations === 1 ? "link breaks" : "links break"} the style
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+        {picked && (
+          // The card selected on this level, in the other corner: what it
+          // is, where it sits in the style, what meets it here.
+          <div
+            data-node-facts=""
+            className="edge-label-halo pointer-events-none absolute right-3 top-2 z-10 flex max-w-[300px] flex-col items-end gap-0.5 text-right text-2xs leading-snug text-[var(--text-muted)]"
+          >
+            <div className="font-medium text-[var(--text-secondary)]">{picked.name}</div>
+            <div>
+              {picked.kind}
+              {picked.technology && ` · ${picked.technology}`}
+              {picked.livesIn && ` · in ${picked.livesIn}`}
+            </div>
+            {picked.layer && (
+              <div>
+                <span className="font-mono uppercase tracking-wide text-[var(--text-secondary)]">{picked.layer.name}</span>
+                {" · "}
+                {picked.layer.mayImport.length ? `may import ${picked.layer.mayImport.join(", ")}` : "imports no other layer"}
+              </div>
+            )}
+            <div className="tabular-nums">
+              {picked.arrowsIn} in · {picked.arrowsOut} out
+              {picked.violations > 0 && (
+                <span className="text-red-600 dark:text-red-300">
+                  {" · "}
+                  {picked.violations} {picked.violations === 1 ? "breaks" : "break"} the style
+                </span>
+              )}
+            </div>
+            {picked.summary && <div className="line-clamp-3">{picked.summary}</div>}
+          </div>
+        )}
         {scene && scene.nodes.length === 0 ? (
           <div className="flex h-full items-center justify-center px-6 text-center text-xs text-[var(--text-muted)]">
             Nothing to diagram at this level.
@@ -601,8 +750,7 @@ function DiagramInner({
             elementsSelectable
             edgesFocusable={false}
             proOptions={{ hideAttribution: true }}
-            minZoom={0.2}
-            maxZoom={2}
+            {...cameraProps(viewport)}
             onNodesChange={onNodesChange}
             // Code tier: the drag pins the dot to the pointer and heats the
             // sim, so its neighbours chase it (pure exploration, no writes).
@@ -616,11 +764,18 @@ function DiagramInner({
             onNodeDragStop={(_, n) => {
               if (mode === "code") dotSim.onDragStop(n.id);
             }}
-            onNodeClick={(_, n) => onSelectNode(n.id)}
+            onNodeClick={(_, n) => {
+              setLitEdge(null);
+              onSelectNode(n.id);
+            }}
+            onEdgeClick={(_, e) => lightEdge(e.id)}
             // Clicking the empty canvas selects the parent of this level (the
             // focus node), which practically deselects every node on screen. At
             // the top level there's no parent, so it just clears the selection.
-            onPaneClick={() => onSelectNode(focusId)}
+            onPaneClick={() => {
+              setLitEdge(null);
+              onSelectNode(focusId);
+            }}
             onNodeDoubleClick={(_, n) => {
               const data = n.data as CardData;
               if (data.node.reference) {
@@ -633,7 +788,6 @@ function DiagramInner({
                 onFocus(n.id);
               }
             }}
-            fitView
           >
             <Background
               variant={BackgroundVariant.Dots}
@@ -643,25 +797,27 @@ function DiagramInner({
               className="!bg-[var(--surface-canvas)]"
             />
             {scene?.regions && <StyleRegions regions={scene.regions} />}
-            <Controls showInteractive={false} showFitView={false} className="!shadow-none">
-              <ControlButton
-                onClick={() => fitDrawing()}
-                className="react-flow__controls-fitview"
-                aria-label="Fit the whole drawing"
-                title="Fit view"
-              >
-                <Maximize />
-              </ControlButton>
-              <ControlButton
-                onClick={() => setShowConforming((v) => !v)}
-                aria-pressed={showConforming}
-                aria-label={showConforming ? "Hide links that conform to the style" : "Show links that conform to the style"}
-                title="Conforming links"
-                style={showConforming ? undefined : { opacity: 0.45 }}
-              >
-                <Spline />
-              </ControlButton>
-            </Controls>
+            {!viewport && (
+              <Controls showInteractive={false} showFitView={false} className="!shadow-none">
+                <ControlButton
+                  onClick={() => fitDrawing()}
+                  className="react-flow__controls-fitview"
+                  aria-label="Fit the whole drawing"
+                  title="Fit view"
+                >
+                  <Maximize />
+                </ControlButton>
+                <ControlButton
+                  onClick={() => setShowConforming((v) => !v)}
+                  aria-pressed={showConforming}
+                  aria-label={showConforming ? "Hide links that conform to the style" : "Show links that conform to the style"}
+                  title="Conforming links"
+                  style={showConforming ? undefined : { opacity: 0.45 }}
+                >
+                  <Spline />
+                </ControlButton>
+              </Controls>
+            )}
           </ReactFlow>
         )}
       </div>

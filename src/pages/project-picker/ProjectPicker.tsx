@@ -31,10 +31,10 @@ export function ProjectPicker({ storage }: { storage: ModelStorage }) {
   return (
     <Centered>
       <div className="flex flex-col gap-7 max-w-md w-full">
-        <div className="flex flex-col gap-3">
-          <div className="flex items-center gap-2.5">
-            <img src="/logo.png" alt="" className="h-9 w-9" />
-            <h1 className="text-2xl font-semibold tracking-tight text-[var(--text)]">
+        <div className="flex flex-col items-center gap-3 text-center">
+          <div className="flex items-center gap-3.5">
+            <img src="/logo.png" alt="" className="h-14 w-14" />
+            <h1 className="text-4xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">
               scryer
             </h1>
           </div>

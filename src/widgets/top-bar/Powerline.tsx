@@ -3,8 +3,8 @@
  * edge. Left side reads the tree's standing at a glance: the subagent launch
  * setup, the claims by derived status, dark files, and the tree's size. Right
  * side carries the agent's live activity with Cancel while a fixture fill
- * runs, and the agent session you follow with Stop: its latest step streams
- * through the middle.
+ * runs, and the agent session you follow: its latest step streams through the
+ * middle, with Stop, or Resume while the follow is paused.
  *
  * Segment shades come from the theme surface vars via an inline `--sb`, which the
  * CSS reuses for each chevron's triangle so the tiling stays seamless (see the
@@ -12,7 +12,7 @@
  */
 
 import type { CSSProperties } from "react";
-import { Eye, Loader2, X } from "lucide-react";
+import { Eye, Loader2, Pause, Play, X } from "lucide-react";
 import { AgentMark } from "../../shared/ui/pagekit";
 import type { AgentSession } from "../../features/agent-launch/useAgentSession";
 import { darkBoundaries, type ModelHealthReport } from "../../entities/model/health";
@@ -31,12 +31,17 @@ interface PowerlineProps {
   onOpenSpecial: (page: SpecialPage) => void;
   onOpenSettings: () => void;
   /** The agent session the wiki and map follow, when one is. */
-  follow?: {
-    title: string;
-    /** Its latest step, as one line. */
-    now?: string;
-    onStop: () => void;
-  };
+  follow?: FollowBar;
+}
+
+export interface FollowBar {
+  title: string;
+  /** Its latest step, as one line. */
+  now?: string;
+  /** Paused: you went elsewhere, or accepted an agent's show. */
+  paused: boolean;
+  onResume: () => void;
+  onStop: () => void;
 }
 
 /** Inline `--sb` carrier — drives both a segment's fill and its chevron edge. */
@@ -90,6 +95,11 @@ export function Powerline({ model, agent, health, launch, onOpenSpecial, onOpenS
             <span className="pl-strong font-medium">{counts.proven}</span>
             <Term id="proven" above className="text-[var(--text-secondary)]" />
             <span className="text-[var(--text-tertiary)]">
+              {counts.unproven > 0 && (
+                <>
+                  · {counts.unproven} <Term id="unproven" above />{" "}
+                </>
+              )}
               · {counts.stale} <Term id="outdated" above /> · {counts.failing} <Term id="failing" above /> ·{" "}
               {counts.planned} <Term id="todo" above />
             </span>
@@ -138,7 +148,8 @@ export function Powerline({ model, agent, health, launch, onOpenSpecial, onOpenS
             {agentActivity}
           </span>
         ) : (
-          follow?.now && (
+          follow?.now &&
+          !follow.paused && (
             <span key={follow.now} className="pl-step max-w-full truncate text-[var(--text-tertiary)]" title={follow.now}>
               {follow.now}
             </span>
@@ -146,29 +157,7 @@ export function Powerline({ model, agent, health, launch, onOpenSpecial, onOpenS
         )}
       </div>
 
-      {follow && (
-        <>
-          <div
-            className="rseg r-agent min-w-0"
-            style={sb("color-mix(in srgb, var(--color-violet-500) 14%, var(--surface-active))")}
-            title={`Following ${follow.title}: the wiki and map go where it edits`}
-          >
-            <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-violet-600 dark:bg-violet-400" />
-            <Eye className="h-3 w-3 shrink-0" />
-            <span className="min-w-0 max-w-[24ch] truncate">{follow.title}</span>
-          </div>
-          <button
-            type="button"
-            onClick={follow.onStop}
-            className="rseg"
-            style={sb("color-mix(in srgb, var(--text) 9%, var(--surface-canvas))")}
-            title="Stop following"
-          >
-            <X className="h-3 w-3" />
-            stop
-          </button>
-        </>
-      )}
+      {follow && <FollowSegments follow={follow} />}
 
       {busy ? (
         <>
@@ -192,5 +181,55 @@ export function Powerline({ model, agent, health, launch, onOpenSpecial, onOpenS
         </>
       ) : null}
     </div>
+  );
+}
+
+/** The followed session on the bar's right: its name, live or paused, then Resume while paused and Stop. */
+export function FollowSegments({ follow }: { follow: FollowBar }) {
+  return (
+    <>
+      <div
+        className="rseg r-agent min-w-0"
+        style={sb("color-mix(in srgb, var(--color-violet-500) 14%, var(--surface-active))")}
+        title={
+          follow.paused
+            ? `Paused following ${follow.title}: resume to go back to where it works`
+            : `Following ${follow.title}: the wiki and map go where it works`
+        }
+      >
+        {follow.paused ? (
+          <Pause className="h-3 w-3 shrink-0" />
+        ) : (
+          <>
+            <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-violet-600 dark:bg-violet-400" />
+            <Eye className="h-3 w-3 shrink-0" />
+          </>
+        )}
+        {follow.paused && <span className="shrink-0">paused</span>}
+        <span className="min-w-0 max-w-[24ch] truncate">{follow.title}</span>
+      </div>
+      {follow.paused && (
+        <button
+          type="button"
+          onClick={follow.onResume}
+          className="rseg"
+          style={sb("color-mix(in srgb, var(--color-violet-500) 9%, var(--surface-canvas))")}
+          title="Go back to where the session works, and follow it again"
+        >
+          <Play className="h-3 w-3" />
+          resume
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={follow.onStop}
+        className="rseg"
+        style={sb("color-mix(in srgb, var(--text) 9%, var(--surface-canvas))")}
+        title="Stop following"
+      >
+        <X className="h-3 w-3" />
+        stop
+      </button>
+    </>
   );
 }

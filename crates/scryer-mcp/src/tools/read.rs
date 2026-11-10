@@ -559,8 +559,9 @@ impl ScryerServer {
         description = "Look up one project-relative `file`: its node chain, its layer when the container \
          declares a style in .scryer/structure.toml, the module description, every claim that \
          speaks for it (the tests in it, then its component's) with status, test level and JUnit \
-         name, and the test file where new todo stubs go. A structural violation is fixed by \
-         moving code, never by changing the style. The single-file form of orient."
+         name, the test file where new todo stubs go, and a `link` that opens the node in the \
+         developer's app. A structural violation is fixed by moving code, never by changing \
+         the style. The single-file form of orient."
     )]
     fn locate(
         &self,
@@ -593,6 +594,9 @@ impl ScryerServer {
         if let Some(obj) = payload.as_object_mut() {
             obj.remove("moreClaims");
             obj.insert("claims".into(), serde_json::json!(claims));
+            if let Some(n) = node {
+                obj.insert("link".into(), serde_json::json!(self.node_link(&model_ref, &n.id, &n.name)));
+            }
         }
         strip_fields_compact(&mut payload);
         Ok(CallToolResult::success(vec![Content::text(
@@ -759,7 +763,7 @@ mod tests {
         assert_eq!(draft["path"], "notes / notes / draft", "{out}");
         assert_eq!(draft["description"], "Holds the user's draft.");
         let claims: Vec<&str> = draft["claims"].as_array().unwrap().iter().filter_map(|c| c.as_str()).collect();
-        assert!(claims.iter().any(|c| c.starts_with("[outdated] When a save fails, keeps the draft [persistence]")), "{claims:?}");
+        assert!(claims.iter().any(|c| c.starts_with("[unproven] When a save fails, keeps the draft [persistence]")), "{claims:?}");
         assert!(claims.iter().any(|c| c.starts_with("[planned] Merges two drafts")), "{claims:?}");
         assert_eq!(draft["stubs"], "crates/notes/src/draft.rs", "Rust unit tests go in the file's own test module");
         assert_eq!(out["files"][1]["stubs"], "crates/notes/src/sync.rs");
@@ -878,10 +882,27 @@ mod tests {
         assert_eq!(claim["claim"], "Saves and reloads a draft unchanged", "{it}");
         assert_eq!(claim["level"], "integration");
         assert_eq!(claim["test"], "roundtrip");
-        assert_eq!(claim["status"], "outdated", "no report has covered it yet");
+        assert_eq!(claim["status"], "unproven", "no report has covered it yet");
         let abs = format!("{}/crates/notes/src/draft.rs", dir.path().display());
         assert_eq!(at(&abs)["file"], "crates/notes/src/draft.rs", "an absolute path is accepted");
         assert!(at("README.md")["note"].as_str().unwrap().contains("No container or component"));
+    }
+
+    /// Gives the file's node as a markdown link that opens the app there, for the agent to hand the developer.
+    #[test]
+    fn locate_gives_a_link_that_opens_the_app_at_the_node() {
+        let dir = project();
+        let out = json_of(
+            &ScryerServer::new()
+                .locate(Parameters(LocateRequest { project: project_arg(&dir), file: "crates/notes/src/draft.rs".into() }))
+                .unwrap(),
+        );
+        let link = out["link"].as_str().unwrap();
+        assert!(link.starts_with("[draft](scryer://show?project="), "{link}");
+        let url = link.trim_start_matches("[draft](").trim_end_matches(')');
+        let (project, d) = scryer_core::app_view::parse_link(url).unwrap();
+        assert_eq!(project, dir.path());
+        assert_eq!(Some(d.node.as_str()), out["node"].as_str());
     }
 
     /// When no running test reaches a file, says so and asks for the claim first.

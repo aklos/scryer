@@ -31,7 +31,12 @@ export const GLOSSARY = {
   outdated: {
     label: "outdated",
     definition:
-      "The test or the code it exercises changed since its verdict, so the verdict no longer covers the code as it is, or no report has covered it yet. Re-running the test settles it.",
+      "The test or the code it exercises changed since its verdict, so the verdict no longer covers the code as it is. Re-running the test settles it.",
+    docs: "concepts/status/",
+  },
+  unproven: {
+    label: "unproven",
+    definition: "Its test is written but no report has covered it yet. Running the test settles it.",
     docs: "concepts/status/",
   },
   failing: {
@@ -107,6 +112,7 @@ export function docsUrl(id: TermId): string | undefined {
 export const CLAIM_TERM = {
   proven: "proven",
   stale: "outdated",
+  unproven: "unproven",
   failing: "failing",
   planned: "todo",
 } as const satisfies Record<ClaimState, TermId>;

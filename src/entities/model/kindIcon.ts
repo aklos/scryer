@@ -9,7 +9,7 @@
 
 import type { ComponentType } from "react";
 import type { LucideProps } from "lucide-react";
-import { Box, Boxes, Cloud, Code, Component, Database, Eye, Layers, User } from "lucide-react";
+import { Box, Boxes, Braces, Cloud, Component, Eye, Layers, SquareFunction, User } from "lucide-react";
 import type { Node } from "./viewmodel";
 import { isDataShape } from "./viewmodel";
 import type { TermId } from "./glossary";
@@ -18,14 +18,15 @@ import type { TermId } from "./glossary";
 type IconNode = Pick<Node, "kind" | "external" | "technology" | "properties" | "claims">;
 
 /** The kind silhouette for a node. Person → bust, external → cloud, previewable
- *  symbol → eye, data-shape symbol → database, code symbol → braces, else the
+ *  symbol → eye, data-shape symbol → braces (a record of fields), code symbol
+ *  → ƒ in a tile, else the
  *  C4 box family by altitude. `previewable` is DERIVED by the caller from the
  *  preview sidecar's export list — it is never a fact stored on the node. */
 /** A symbol's glyph by what it is — the same ones `kindIcon` gives it in the
  *  tree: plain code, a data shape, a component the sidecar can render. */
 export const SYMBOL_ICON: Record<"code" | "model" | "visual", ComponentType<LucideProps>> = {
-  code: Code,
-  model: Database,
+  code: SquareFunction,
+  model: Braces,
   visual: Eye,
 };
 
@@ -33,8 +34,8 @@ export function kindIcon(node: IconNode, previewable = false): ComponentType<Luc
   if (node.kind === "person") return User;          // an actor — human, regardless of external
   if (node.external) return Cloud;                  // the world: a third-party service
   if (previewable) return Eye;                      // a component the sidecar can render
-  if (isDataShape(node)) return Database;           // a symbol that defines a data shape
-  if (node.kind === "symbol") return Code;          // code-level leaf
+  if (isDataShape(node)) return Braces;             // a symbol that defines a data shape
+  if (node.kind === "symbol") return SquareFunction; // code-level leaf
   switch (node.kind) {
     case "system": return Boxes;                    // a software system (a set of containers)
     case "container": return Box;                   // a deployable/runnable unit

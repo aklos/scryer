@@ -68,4 +68,28 @@ describe("root symbols beside components", () => {
     expect(scene.nodes.find((n) => n.id === "ledger")?.childIds.sort()).toEqual(["app", "dom"]);
     expect(scene.edges.some((e) => e.source === "ledger" && e.target === "pay")).toBe(true);
   });
+
+  it("Draws every symbol and every component it reaches outside at one size on the code tier, however many arrows meet it", async () => {
+    const code = {
+      version: 1,
+      nodes: [
+        { id: "sys", kind: "system", name: "Sys" },
+        { id: "c", kind: "container", name: "C", parentId: "sys" },
+        { id: "host", kind: "component", name: "host", parentId: "c" },
+        { id: "other", kind: "component", name: "other", parentId: "c" },
+        { id: "run", kind: "symbol", name: "run", parentId: "host" },
+        { id: "path", kind: "symbol", name: "path", parentId: "host" },
+        { id: "save", kind: "symbol", name: "save", parentId: "other" },
+      ],
+      links: [
+        { id: "a", src: "run", dst: "path", label: "" },
+        { id: "b", src: "run", dst: "save", label: "" },
+        { id: "d", src: "path", dst: "save", label: "" },
+      ],
+    } as unknown as ScryModel;
+    const scene = await buildDiagramScene(code, "host", report);
+    expect(scene.mode).toBe("code");
+    expect(scene.nodes.length).toBeGreaterThan(2);
+    expect(new Set(scene.nodes.map((n) => n.dotSize)).size).toBe(1);
+  });
 });

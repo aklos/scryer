@@ -72,7 +72,7 @@ fn ingest(dir: &Path, tool: &str, report: &str, text: &str) {
     let _ = child.kill();
 }
 
-/// A styled crate with a well-worded claim no run covered passes, its outdated
+/// A styled crate with a well-worded claim no run covered passes, its unproven
 /// claim a note; --fail-on-outdated turns it into a failure, as does the
 /// flag's old name, --fail-on-stale.
 #[test]
@@ -80,11 +80,11 @@ fn check_passes_a_clean_project_and_gates_outdated_on_request() {
     let dir = project();
     let (code, out) = run(dir.path(), &["check"]);
     assert_eq!(code, 0, "{out}");
-    assert!(out.contains("1 outdated claim(s) (not gating"), "{out}");
+    assert!(out.contains("1 unproven claim(s) (not gating"), "{out}");
     for flag in ["--fail-on-outdated", "--fail-on-stale"] {
         let (code, out) = run(dir.path(), &["check", flag]);
         assert_eq!(code, 1, "{out}");
-        assert!(out.contains("outdated: crates/notes/src/lib.rs"), "{out}");
+        assert!(out.contains("unproven: crates/notes/src/lib.rs"), "{out}");
     }
 }
 

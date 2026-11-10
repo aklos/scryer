@@ -21,6 +21,7 @@ import { useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Flag,
+  GitCompare,
   Shapes,
 } from "lucide-react";
 import type { Node, ScryModel } from "../../entities/model/viewmodel";
@@ -177,6 +178,8 @@ function NodePageBody(props: PageProps & { node: Node }) {
     model,
     base,
     showChanges,
+    onToggleChanges,
+    changes,
     node,
     report,
     editor,
@@ -303,6 +306,12 @@ function NodePageBody(props: PageProps & { node: Node }) {
     <div className="flex min-w-0 flex-1 flex-col">
       <PageHeader
         crumbs={<Crumbs chain={ancestorChain(model, node.parentId)} onSelectNode={onSelectNode} />}
+        actions={
+          onToggleChanges &&
+          changes?.nodes.get(node.id) === "modified" && (
+            <ShowChangesToggle on={showChanges} onToggle={onToggleChanges} />
+          )
+        }
         name={node.name}
         typeLine={
           <>
@@ -511,9 +520,32 @@ function NodePageBody(props: PageProps & { node: Node }) {
               threads={threads}
               onOpen={(text) => comments.open(node.id, anchor, text)}
               onReply={comments.reply}
+              onDelete={comments.remove}
             />
           </div>
       </div>
     </div>
+  );
+}
+
+/** The page's changes since the base in full — word diffs and removed rows —
+ *  or only their marks. Drawn only on a page whose node changed. */
+export function ShowChangesToggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      data-changes-toggle
+      onClick={onToggle}
+      aria-pressed={on}
+      title={on ? "Show only the change marks" : "Show what changed on this page: word diffs and removed rows"}
+      className={`flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-xs whitespace-nowrap ${
+        on
+          ? "bg-[var(--surface-active)] text-[var(--text)]"
+          : "text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
+      }`}
+    >
+      <GitCompare className="h-3 w-3 shrink-0 text-amber-700 dark:text-amber-400" />
+      Show changes
+    </button>
   );
 }

@@ -1,7 +1,7 @@
 /**
  * The claim-state vocabulary every surface colours by: a claim is proven
- * (its test passed on the code as it is), outdated (wire name `stale`: it passed, but the code or
- * test changed since, or it never ran), failing, or todo (a todo test: work
+ * (its test passed on the code as it is), outdated (wire name `stale`: it ran, but the code or
+ * test changed since), unproven (written, never run), failing, or todo (a todo test: work
  * not done yet, or behaviour that exists with no test body written). The
  * wire name for todo is `planned`; every surface shows CLAIM_LABEL.
  * One hue per state, so a dot on the map, a letter in the tree and a row on
@@ -10,13 +10,14 @@
 
 import type { ClaimState, DerivedCounts } from "./derived";
 
-export const CLAIM_STATES: readonly ClaimState[] = ["proven", "stale", "failing", "planned"];
+export const CLAIM_STATES: readonly ClaimState[] = ["proven", "stale", "unproven", "failing", "planned"];
 
 /** Text hue per state (light 700 / dark 300). */
 export const CLAIM_TONE: Record<ClaimState, string> = {
   proven: "text-emerald-700 dark:text-emerald-300",
   planned: "text-sky-700 dark:text-sky-300",
   stale: "text-amber-700 dark:text-amber-300",
+  unproven: "text-slate-600 dark:text-slate-300",
   failing: "text-red-700 dark:text-red-300",
 };
 
@@ -25,6 +26,7 @@ export const CLAIM_FILL: Record<ClaimState, string> = {
   proven: "bg-emerald-500",
   planned: "bg-sky-500",
   stale: "bg-amber-500",
+  unproven: "bg-slate-400",
   failing: "bg-red-500",
 };
 
@@ -32,6 +34,7 @@ export const CLAIM_LABEL: Record<ClaimState, string> = {
   proven: "proven",
   planned: "todo",
   stale: "outdated",
+  unproven: "unproven",
   failing: "failing",
 };
 
@@ -41,12 +44,13 @@ export const CLAIM_LETTER: Record<ClaimState, string> = {
   proven: "P",
   planned: "T",
   stale: "O",
+  unproven: "U",
   failing: "F",
 };
 
 /** The state that needs a reader's attention, if any: a failing claim first,
- *  then a todo one. Proven and stale are the resting states and mark
- *  nothing. */
+ *  then a todo one. Proven, outdated and unproven are the resting states and
+ *  mark nothing. */
 export function attentionState(c: DerivedCounts | undefined): "failing" | "planned" | null {
   if (!c) return null;
   if (c.failing > 0) return "failing";
@@ -55,11 +59,11 @@ export function attentionState(c: DerivedCounts | undefined): "failing" | "plann
 }
 
 /** The one state a node reads as, from its subtree's counts: the most
- *  urgent its claims hold — failing, then todo, then outdated, then
- *  proven. Null for a subtree with no claims. */
+ *  urgent its claims hold — failing, then todo, then unproven, then
+ *  outdated, then proven. Null for a subtree with no claims. */
 export function overallState(c: DerivedCounts | undefined): ClaimState | null {
   if (!c) return null;
-  for (const s of ["failing", "planned", "stale", "proven"] as const) if (c[s] > 0) return s;
+  for (const s of ["failing", "planned", "unproven", "stale", "proven"] as const) if (c[s] > 0) return s;
   return null;
 }
 
@@ -71,7 +75,7 @@ export interface ChildTally {
 }
 
 export function childTally(children: (DerivedCounts | undefined)[]): ChildTally {
-  const byState: Record<ClaimState, number> = { proven: 0, stale: 0, failing: 0, planned: 0 };
+  const byState: Record<ClaimState, number> = { proven: 0, stale: 0, unproven: 0, failing: 0, planned: 0 };
   for (const c of children) {
     const s = overallState(c);
     if (s) byState[s]++;

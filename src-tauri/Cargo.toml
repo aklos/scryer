@@ -49,6 +49,8 @@ tree-sitter-c-sharp = "0.23"
 tree-sitter-php = "0.24"
 # The grammar-orchard fork — see crates/scryer-extract/Cargo.toml.
 tree-sitter-clojure = { package = "tree-sitter-clojure-orchard", version = "0.2.8" }
+tauri-plugin-deep-link = "2"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 
 
 [dev-dependencies]

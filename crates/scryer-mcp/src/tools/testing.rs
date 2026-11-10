@@ -20,8 +20,8 @@ use scryer_core::test_results::TestOutcome;
 use scryer_core::worktree;
 use scryer_core::ModelRef;
 use scryer_extract::test_status::{
-    ingest_coverage_report, ingest_mutation_report, ingest_report, record_probe_result, render_test_command, reports_dir, set_test_command,
-    test_command, RadiusTest,
+    ingest_coverage_report, ingest_mutation_report, ingest_report, plan_radius_runs, record_probe_result, reports_dir, set_test_command,
+    test_commands, RadiusTest,
 };
 
 /// How many radius tests a response lists by name; the command carries all.
@@ -283,8 +283,8 @@ A survivor is a finding: locate the files it names and strengthen their tests.")
     #[tool(
         description = "What to run: the tests that reach `files` by import (the files' own tests included), at \
          unit and integration level — e2e too when .scryer/structure.toml says `radius = \"all\"`. \
-         Omit `files` for this session's edits. Answers with the exact command once it is set \
-         via `command`. Never run the full suite. Then ingest_test_report."
+         Omit `files` for this session's edits. Answers with the exact command per runner once it is \
+         set via `command`. Never run the full suite. Then ingest_test_report."
     )]
     fn get_test_radius(
         &self,
@@ -337,20 +337,34 @@ A survivor is a finding: locate the files it names and strengthen their tests.")
             .collect();
         let nfiles = run.iter().map(|t| t.pattern.as_str()).collect::<std::collections::BTreeSet<_>>().len();
         let mut msg = format!("Radius — {} {scope} test(s) in {nfiles} file(s) reach the change.", run.len());
-        match test_command(&model_ref) {
-            Some(template) => {
-                let dir = reports_dir(&model_ref).unwrap_or_else(|_| ".scryer/reports".into());
-                let report = format!("{dir}/radius.xml");
+        let commands = test_commands(&model_ref);
+        if commands.is_empty() {
+            msg.push_str(
+                "\nNo test command set — set it once per runner: get_test_radius {command}, e.g. \
+                 \"[*.ts *.tsx] npx vitest run {files} -t '{names:|}' --reporter=junit --outputFile={report}\" \
+                 (a line without [globs] runs every file no other line claims). \
+                 Until then run these with a JUnit reporter and ingest_test_report:",
+            );
+        } else {
+            let dir = reports_dir(&model_ref).unwrap_or_else(|_| ".scryer/reports".into());
+            let (runs, unrun) = plan_radius_runs(&commands, &run, &dir);
+            if !runs.is_empty() {
+                msg.push_str("\nRun exactly:");
+                for r in &runs {
+                    msg.push_str(&format!("\n  {}", r.command));
+                }
+                let reports: Vec<&str> = runs.iter().map(|r| r.report.as_str()).collect();
+                msg.push_str(&format!("\nthen ingest_test_report each report they write ({}).", reports.join(", ")));
+            }
+            if !unrun.is_empty() {
+                let files: Vec<&str> =
+                    unrun.iter().map(|t| t.pattern.as_str()).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
                 msg.push_str(&format!(
-                    "\nRun exactly:\n  {}\nthen ingest_test_report each report it writes ({report}).",
-                    render_test_command(&template, &run, &report, &dir)
+                    "\nNo test command runs {} — tell the developer, and with their go-ahead add one for its runner: \
+                     get_test_radius {{command: \"[glob] <template>\"}}.",
+                    files.join(", ")
                 ));
             }
-            None => msg.push_str(
-                "\nNo test command set — set it once: get_test_radius {command}, e.g. \
-                 \"npx vitest run {files} -t '{names:|}' --reporter=junit --outputFile={report}\". \
-                 Until then run these with a JUnit reporter and ingest_test_report:",
-            ),
         }
         for h in hits.iter().take(TESTS_SHOWN) {
             msg.push_str(&format!(
@@ -401,7 +415,7 @@ A survivor is a finding: locate the files it names and strengthen their tests.")
             Some(ClaimState::Failing) => {
                 return error(format!("{} is failing — a probe needs a passing test.", claim.junit_name))
             }
-            Some(ClaimState::Stale) | None => {
+            Some(ClaimState::Stale | ClaimState::Unproven) | None => {
                 return error(format!(
                     "{} has no current verdict — run it, ingest_test_report, then probe.",
                     claim.junit_name
@@ -604,6 +618,29 @@ mod tests {
                 .unwrap(),
         );
         assert!(text.contains("cargo test keeps_draft -- --format junit > .scryer/reports/radius.xml"), "{text}");
+    }
+
+    /// If no runner's command runs a radius test's file, then names the file and asks for its runner's command.
+    #[test]
+    fn the_radius_names_files_no_runner_runs() {
+        let dir = project();
+        let ask = |command: &str| {
+            text_of(
+                &ScryerServer::new()
+                    .get_test_radius(Parameters(GetTestRadiusRequest {
+                        project: project_arg(&dir),
+                        files: Some(vec!["crates/notes/src/draft.rs".into()]),
+                        command: Some(command.into()),
+                    }))
+                    .unwrap(),
+            )
+        };
+        let text = ask("[*.ts] npx vitest run {files}");
+        assert!(!text.contains("Run exactly"), "{text}");
+        assert!(text.contains("No test command runs crates/notes/src/draft.rs"), "{text}");
+        let text = ask("[*.rs] cargo t {names}");
+        assert!(text.contains("Run exactly:\n  cargo t keeps_draft"), "{text}");
+        assert!(!text.contains("No test command runs"), "{text}");
     }
 
     fn open(server: &ScryerServer, dir: &tempfile::TempDir, test: &str) -> CallToolResult {

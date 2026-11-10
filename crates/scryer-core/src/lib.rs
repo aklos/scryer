@@ -29,7 +29,7 @@ pub use evidence::{coverage, test_results, verdicts};
 pub mod agent_integration;
 pub use agent_integration::{agent_entries, agent_settings};
 pub mod stores;
-pub use stores::{comment_store, session_store, verdict_store, settings_file, derived_tree_cache, edges_cache};
+pub use stores::{app_view, comment_store, session_store, verdict_store, settings_file, derived_tree_cache, edges_cache};
 pub mod project;
 pub use project::{codebase, derived_store, edges, git_worktrees, project_comments, settings_store, styles};
 

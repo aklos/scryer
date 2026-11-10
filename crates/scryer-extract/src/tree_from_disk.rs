@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 /// Bumped whenever derivation changes, so a cache from an older binary is
 /// never mistaken for current.
-pub(crate) const DERIVE_VERSION: u32 = 33;
+pub(crate) const DERIVE_VERSION: u32 = 34;
 
 thread_local! {
     static PARSER: RefCell<tree_sitter::Parser> = RefCell::new(tree_sitter::Parser::new());
@@ -139,6 +139,9 @@ fn derive_uncached(project: &Path, files: &[PathBuf], print: u64) -> Result<Deri
         architecture: architecture.as_deref(),
         fingerprint: print,
     });
+    if let Some(problem) = tree.structure_problems.first() {
+        return Err(problem.clone());
+    }
     // The styles structure.toml declares, checked against the real imports.
     let edges = ctx.build_edges();
     let graph = scryer_core::build_edges::derive_graph(&tree.planned, &edges);

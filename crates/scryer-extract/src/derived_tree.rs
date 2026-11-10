@@ -708,6 +708,104 @@ mod tests {
         assert!(tree.style_violations.is_empty(), "{:?}", tree.style_violations);
     }
 
+    /// When a relationship names a component by its path, the link sits on
+    /// that component with its label, and its container and system carry it
+    /// to every node it does not contain, so each map draws it at its level.
+    #[test]
+    fn a_relationship_on_a_component_is_implied_on_its_ancestors() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n");
+        write(d, "crates/host/Cargo.toml", "[package]\nname = \"host\"\nversion = \"0.1.0\"\n");
+        write(d, "crates/host/src/lib.rs", "pub mod preview;\npub mod store;\n");
+        write(d, "crates/host/src/preview.rs", "pub fn spawn() {}\n");
+        write(d, "crates/host/src/store.rs", "pub fn save() {}\n");
+        write(d, "sidecar/package.json", "{\"name\": \"sidecar\"}\n");
+        write(d, "sidecar/index.js", "export function serve() {}\n");
+        write(
+            d,
+            ".scryer/structure.toml",
+            "[system]\nname = \"Pay\"\npersons = [\"dev\"]\n\n\
+             [relationships]\n\"crates/host/src/preview.rs\" = [{ to = \"sidecar\", label = \"runs as its sidecar\" }]\n\
+             dev = [{ to = \"crates/host/src/store.rs#save\", label = \"saves with\" }]\n\n[containers.sidecar]\n",
+        );
+        let tree = derived_tree_uncached(d).unwrap();
+        let m = &tree.committed;
+        let id = |name: &str| m.nodes.iter().find(|n| n.name == name).unwrap().id.clone();
+        let link = |a: &str, b: &str| m.links.iter().find(|l| l.src == id(a) && l.dst == id(b));
+        let preview = link("preview", "sidecar").expect("on the component");
+        assert_eq!((preview.label.as_str(), preview.declared), ("runs as its sidecar", true));
+        assert_eq!(link("host", "sidecar").map(|l| l.label.as_str()), Some("runs as its sidecar"));
+        assert_eq!(link("dev", "save").map(|l| l.label.as_str()), Some("saves with"));
+        for above in ["store", "host", "Pay"] {
+            assert_eq!(link("dev", above).map(|l| l.label.as_str()), Some("saves with"), "dev → {above}");
+        }
+        assert!(link("preview", "Pay").is_none() && link("Pay", "sidecar").is_none(), "{:?}", m.links);
+    }
+
+    /// When Rust code builds in another container's file with `include_str!`
+    /// or `include_bytes!`, the including component depends on the
+    /// component holding it, and its container on that container, as through
+    /// an import.
+    #[test]
+    fn an_included_file_is_a_dependency() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n");
+        write(d, "crates/host/Cargo.toml", "[package]\nname = \"host\"\nversion = \"0.1.0\"\n");
+        write(d, "crates/host/src/lib.rs", "pub mod preview;\npub mod store;\n");
+        write(d, "crates/host/src/preview.rs", "pub const SERVER: &str = include_str!(\"../../../sidecar/index.js\");\n");
+        write(d, "crates/host/src/store.rs", "pub fn save() {}\n");
+        write(d, "sidecar/package.json", "{\"name\": \"sidecar\", \"main\": \"index.js\"}\n");
+        write(d, "sidecar/index.js", "export function serve() {}\n");
+        let tree = derived_tree_uncached(d).unwrap();
+        let m = &tree.committed;
+        let id = |name: &str| m.nodes.iter().find(|n| n.name == name).unwrap().id.clone();
+        let linked = |a: &str, b: &str| m.links.iter().any(|l| l.src == id(a) && l.dst == id(b));
+        assert!(linked("host", "sidecar") && linked("preview", "index"), "{:?}", m.links);
+        assert!(!linked("store", "sidecar") && !linked("store", "index"));
+    }
+
+    /// If a relationship relates a node to its own parent or child, or names
+    /// no node, then reading the project fails and says which.
+    #[test]
+    fn a_relationship_into_its_own_parent_or_nowhere_is_refused() {
+        for (rel, says) in [
+            ("\"crates/host/src/preview.rs\" = [\"host\"]", "contains it"),
+            ("\"host\" = [\"crates/host/src/preview.rs\"]", "contains it"),
+            ("dev = [\"crates/host/src/previwe.rs\"]", "names no node"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let d = dir.path();
+            write(d, "Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n");
+            write(d, "crates/host/Cargo.toml", "[package]\nname = \"host\"\nversion = \"0.1.0\"\n");
+            write(d, "crates/host/src/lib.rs", "pub mod preview;\n");
+            write(d, "crates/host/src/preview.rs", "pub fn spawn() {}\n");
+            write(d, ".scryer/structure.toml", &format!("[system]\npersons = [\"dev\"]\n\n[relationships]\n{rel}\n\n[containers.host]\n"));
+            let err = derived_tree_uncached(d).unwrap_err();
+            assert!(err.contains(says), "{rel}: {err}");
+        }
+    }
+
+    /// When a declared relationship joins two nodes the imports already
+    /// link, the declared one takes that link's place, with its label.
+    #[test]
+    fn a_declared_relationship_replaces_the_link_imports_imply() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "Cargo.toml", "[package]\nname = \"core\"\nversion = \"0.1.0\"\n");
+        write(d, "src/lib.rs", "pub mod draft;\npub mod store;\n");
+        write(d, "src/draft.rs", "use crate::store::save;\npub fn keep() { save() }\n");
+        write(d, "src/store.rs", "pub fn save() {}\n");
+        write(d, ".scryer/structure.toml", "[relationships]\n\"src/draft.rs\" = [{ to = \"src/store.rs\", label = \"persists drafts in\" }]\n");
+        let tree = derived_tree_uncached(d).unwrap();
+        let m = &tree.committed;
+        let id = |name: &str| m.nodes.iter().find(|n| n.name == name).unwrap().id.clone();
+        let links: Vec<_> = m.links.iter().filter(|l| l.src == id("draft") && l.dst == id("store")).collect();
+        assert_eq!(links.len(), 1, "{links:?}");
+        assert_eq!((links[0].label.as_str(), links[0].declared), ("persists drafts in", true));
+    }
+
     /// When a directory name starts with a dot, it never becomes a component or a container, and its files are neither symbols nor dark.
     #[test]
     fn dot_directories_are_never_the_product() {

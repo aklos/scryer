@@ -1273,6 +1273,7 @@ mod tests {
         let link = |dst: &str| {
             let mut m = client_and_sim();
             m.links.push(Link {
+                declared: false,
                 id: "l".into(), src: "view".into(), dst: dst.into(),
                 label: String::new(), method: None, kind: Some(LinkKind::Depends),
             });
@@ -1333,6 +1334,7 @@ mod tests {
         let link = |src: &str| {
             let mut m = server_hosting_sim();
             m.links.push(Link {
+                declared: false,
                 id: "l".into(), src: src.into(), dst: "world".into(),
                 label: String::new(), method: None, kind: Some(LinkKind::Depends),
             });
@@ -1375,6 +1377,7 @@ mod tests {
     fn a_declared_link_the_style_forbids_is_a_forbidden_link() {
         let mut m = hex_service();
         m.links.push(Link {
+            declared: false,
             id: "l-bad".into(), src: "dom".into(), dst: "infra".into(),
             label: String::new(), method: None, kind: Some(LinkKind::Depends),
         });
@@ -1407,6 +1410,7 @@ mod tests {
             anchor(&mut m, &format!("r-{id}"), file, sym);
         }
         m.links.push(Link {
+            declared: false,
             id: "l-in".into(), src: "film".into(), dst: "infra".into(),
             label: String::new(), method: None, kind: None,
         });
@@ -1451,6 +1455,7 @@ mod tests {
 
         // Declared → silent (Refunds has no public-surface file, so nothing to bypass).
         m.links.push(Link {
+            declared: false,
             id: "l".into(), src: "app".into(), dst: "app2".into(),
             label: String::new(), method: None, kind: Some(LinkKind::Uses),
         });
@@ -1476,6 +1481,7 @@ mod tests {
         let mut m = hex_service();
         let e = edge(("app", "checkout", "svc/application/checkout.rs"), ("app2", "refund", "svc/application/refunds/refund.rs"));
         m.links.push(Link {
+            declared: false,
             id: "l".into(), src: "app".into(), dst: "app2".into(),
             label: String::new(), method: None, kind: Some(LinkKind::Uses),
         });

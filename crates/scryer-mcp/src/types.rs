@@ -66,7 +66,8 @@ pub(crate) struct GetTestRadiusRequest {
     /// Project-relative files changed; omit for this session's edits.
     #[serde(default)]
     pub files: Option<Vec<String>>,
-    /// Set the test command once: {names} {files} {report}.
+    /// Set one runner's test command: `[*.rs] template` for the files its globs
+    /// match, or a bare template for the rest; {names} {files} {report}.
     #[serde(default)]
     pub command: Option<String>,
 }
@@ -111,4 +112,18 @@ pub(crate) struct CommentRequest {
     pub text: String,
     /// true marks the thread addressed (only once the ask is done); false reopens it. Omit for a plain reply.
     pub addressed: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct ShowRequest {
+    pub project: Option<String>,
+    /// The node: a node id, a project-relative file or a node name.
+    pub node: String,
+    /// "map" or "wiki"; omit to keep the view the developer is in.
+    pub view: Option<String>,
+    /// What to highlight once there: claims on the node (id or statement), "description", or other nodes.
+    #[serde(default)]
+    pub flash: Vec<String>,
+    /// One line the developer sees beside your session's name.
+    pub note: Option<String>,
 }

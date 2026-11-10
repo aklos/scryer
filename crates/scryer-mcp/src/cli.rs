@@ -435,11 +435,18 @@ pub(crate) fn check_report(tree: &DerivedTree, status: &DerivedStatus, gates: &G
     for c in in_state(ClaimState::Failing) {
         failures.push(format!("failing: {}", at(&c.resp_id)));
     }
-    let stale: Vec<String> = in_state(ClaimState::Stale).map(|c| at(&c.resp_id)).collect();
-    if gates.stale {
-        failures.extend(stale.iter().map(|s| format!("outdated: {s} — re-run it and ingest the report")));
-    } else if !stale.is_empty() {
-        notes.push(format!("{} outdated claim(s) (not gating — pass --fail-on-outdated)", stale.len()));
+    // Outdated and unproven claims both lack a verdict on the code as it is;
+    // one gate covers both.
+    for (state, word, fix) in [
+        (ClaimState::Stale, "outdated", "re-run it"),
+        (ClaimState::Unproven, "unproven", "run it"),
+    ] {
+        let found: Vec<String> = in_state(state).map(|c| at(&c.resp_id)).collect();
+        if gates.stale {
+            failures.extend(found.iter().map(|s| format!("{word}: {s} — {fix} and ingest the report")));
+        } else if !found.is_empty() {
+            notes.push(format!("{} {word} claim(s) (not gating — pass --fail-on-outdated)", found.len()));
+        }
     }
     // A surviving mutant marks the code a mutation run broke (per node), or
     // the test a probe or Stryker named (per claim).
@@ -527,10 +534,12 @@ pub(crate) fn run_setup(args: &[String]) -> Result<(), Box<dyn std::error::Error
 }
 
 /// The ambient one-liner: claims by status, then surviving mutants when there
-/// are any. "scryer: 120 proven · 3 outdated · 0 failing · 2 todo".
+/// are any. "scryer: 120 proven · 3 outdated · 0 failing · 2 todo", with
+/// "· 4 unproven" after proven when tests that never ran are there.
 pub(crate) fn status_line(t: &DerivedCounts) -> String {
+    let unproven = if t.unproven > 0 { format!(" · {} unproven", t.unproven) } else { String::new() };
     let mut line = format!(
-        "scryer: {} proven · {} outdated · {} failing · {} todo",
+        "scryer: {} proven{unproven} · {} outdated · {} failing · {} todo",
         t.proven, t.stale, t.failing, t.planned
     );
     if t.surviving_mutants > 0 {
@@ -617,7 +626,7 @@ mod tests {
         assert!(status_line(&t).ends_with(" · 2 surviving mutants"));
         let dir = project();
         let (_, s) = derived_status(dir.path()).unwrap();
-        assert_eq!(status_line(&s.totals), "scryer: 0 proven · 3 outdated · 0 failing · 1 todo");
+        assert_eq!(status_line(&s.totals), "scryer: 0 proven · 3 unproven · 0 outdated · 0 failing · 1 todo");
     }
 
     /// When the statusline is given a session, counts only what that session changed: a todo test already in the code its edits reach is not its own, and stale claims are left out.
@@ -639,7 +648,7 @@ mod tests {
         assert_eq!(statusline_session("not json"), None);
     }
 
-    /// With no report ingested, claims are stale: a note by default, a
+    /// With no report ingested, claims are unproven: a note by default, a
     /// failure under --fail-on-outdated. A todo test is never a failure, and
     /// neither is a container with no style chosen: both are notes.
     #[test]
@@ -651,10 +660,19 @@ mod tests {
         assert_eq!(structural(&lenient), 0, "the unstyled crate is no failure: {:?}", lenient.failures);
         assert!(lenient.failures.is_empty(), "{:?}", lenient.failures);
         assert!(lenient.notes.iter().any(|n| n.starts_with("no style chosen yet")), "{:?}", lenient.notes);
-        assert!(lenient.notes.iter().any(|n| n.contains("3 outdated")), "{:?}", lenient.notes);
+        assert!(lenient.notes.iter().any(|n| n.contains("3 unproven")), "{:?}", lenient.notes);
         assert!(lenient.notes.iter().any(|n| n.contains("1 todo test")), "{:?}", lenient.notes);
         let strict = check_report(&tree, &status, &Gates { stale: true, mutants: false });
-        assert_eq!(strict.failures.iter().filter(|f| f.starts_with("outdated: ")).count(), 3, "{:?}", strict.failures);
+        assert_eq!(strict.failures.iter().filter(|f| f.starts_with("unproven: ")).count(), 3, "{:?}", strict.failures);
+    }
+
+    /// When the status line is printed, names unproven claims only if there are some.
+    #[test]
+    fn the_status_line_names_unproven_claims_only_when_there_are_some() {
+        let mut t = DerivedCounts { proven: 3, stale: 2, failing: 1, planned: 4, ..Default::default() };
+        assert!(!status_line(&t).contains("unproven"));
+        t.unproven = 5;
+        assert_eq!(status_line(&t), "scryer: 3 proven · 5 unproven · 2 outdated · 1 failing · 4 todo");
     }
 
     /// A description that breaks the claim grammar fails check and lint.

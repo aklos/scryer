@@ -14,6 +14,8 @@ export interface Comments {
   threads: Thread[];
   open: (nodeId: string, anchor: string, text: string) => Promise<void>;
   reply: (thread: string, text: string, status?: ThreadStatus) => Promise<void>;
+  /** Delete one of your own comments; the opening one deletes the thread. */
+  remove: (thread: string, event: string) => Promise<void>;
 }
 
 export function useComments(projectPath: string | null): Comments {
@@ -52,5 +54,14 @@ export function useComments(projectPath: string | null): Comments {
     [projectPath, refresh],
   );
 
-  return { threads, open, reply };
+  const remove = useCallback(
+    async (thread: string, event: string) => {
+      if (!projectPath) return;
+      await invoke("delete_comment", { cwd: projectPath, thread, event });
+      await refresh();
+    },
+    [projectPath, refresh],
+  );
+
+  return { threads, open, reply, remove };
 }

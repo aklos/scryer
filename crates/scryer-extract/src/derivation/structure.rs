@@ -35,10 +35,11 @@ pub struct Structure {
     /// Keyed by the external's name under `[system]`.
     #[serde(default)]
     pub externals: BTreeMap<String, NameConfig>,
-    /// Relationships, keyed by the source's name: the system, a person, an
-    /// external, or a container `[containers]` declares (by key or display
-    /// name), which places the relationship on that container and lifts it to
-    /// the system for the context. Declared, not read off the code.
+    /// Relationships, keyed by the source's name. Either end is any node: the
+    /// system, a person, an external, a container `[containers]` declares (by
+    /// key or display name), a component by its path, a symbol as
+    /// `file#Name`. The link sits on the nodes it names and is implied on
+    /// their ancestors. Declared, not read off the code.
     #[serde(default)]
     pub relationships: BTreeMap<String, Vec<Relation>>,
 }
@@ -115,7 +116,8 @@ pub struct ContainerConfig {
     pub style: Option<String>,
     #[serde(default)]
     pub layers: Vec<String>,
-    /// The externals this container is the one to talk to.
+    /// What this container is the one to talk to: any node a relationship
+    /// may name.
     #[serde(default)]
     pub uses: Vec<Relation>,
     /// The packages this container is built from, by directory, when one
@@ -136,6 +138,12 @@ pub struct ContainerConfig {
     pub tooling: bool,
 }
 
+/// A name that points into the code rather than at a declared node: a
+/// component's directory or file, or a symbol as `file#Name`.
+fn is_code_path(name: &str) -> bool {
+    name.contains('/') || name.contains('#')
+}
+
 const DEFAULT_E2E: &[&str] = &["**/e2e/**", "**/*.e2e.*", "**/*.e2e-spec.*"];
 const DEFAULT_INTEGRATION: &[&str] = &["**/integration/**", "**/*.integration.*"];
 
@@ -152,19 +160,21 @@ impl Structure {
         Ok(s)
     }
 
-    /// Every name a relationship or a `uses` gives must be declared: under
-    /// `[system]`, or — for a relationship — as a container under
-    /// `[containers]`, the way a misspelt key is an error.
+    /// Every name a relationship or a `uses` gives must be declared, the way
+    /// a misspelt key is an error: under `[system]`, as a container under
+    /// `[containers]`, or as a path into the code (a component's directory
+    /// or file, a symbol as `file#Name`), which the derivation resolves.
     fn check_names(&self) -> Result<(), String> {
         let known = |name: &str| {
             self.system.name.as_deref() == Some(name)
                 || self.system.persons.iter().any(|p| p == name)
                 || self.system.externals.iter().any(|e| e == name)
                 || self.names_container(name)
+                || is_code_path(name)
         };
         let unknown = |name: &str| {
             format!(
-                "structure.toml: [relationships] names \"{name}\", which is not the system's name, a person or an external under [system], nor a container under [containers]"
+                "structure.toml: [relationships] names \"{name}\", which is not the system's name, a person or an external under [system], a container under [containers], nor a path into the code"
             )
         };
         for (src, targets) in &self.relationships {
@@ -192,9 +202,9 @@ impl Structure {
             }
         }
         for (key, c) in &self.containers {
-            if let Some(t) = c.uses.iter().find(|t| !self.system.externals.iter().any(|e| e == t.to())) {
+            if let Some(t) = c.uses.iter().find(|t| !known(t.to())) {
                 return Err(format!(
-                    "structure.toml: [containers.{key}] uses \"{}\", which is not an external under [system]",
+                    "structure.toml: [containers.{key}] uses \"{}\", which is not the system's name, a person or an external under [system], a container under [containers], nor a path into the code",
                     t.to()
                 ));
             }
@@ -209,7 +219,8 @@ impl Structure {
     }
 
     /// The declared relationships as (source, target, label). An end may be
-    /// the system, a person, an external or a declared container.
+    /// any node: the system, a person, an external, a container, or a path
+    /// into the code.
     pub fn relationships(&self) -> impl Iterator<Item = (&str, &str, Option<&str>)> {
         self.relationships
             .iter()
@@ -482,7 +493,7 @@ layers = ["domain", "application", "composition", "infrastructure"]
             "[relationships]\nshopper = [\"Pay\"]\n",
             "[relationships]\nmerchant = [{ too = \"Pay\" }]\n",
             "[relationships]\nbank = [\"bank\"]\n",
-            "[containers.ledger]\nuses = [\"merchant\"]\n",
+            "[containers.ledger]\nuses = [\"merchnat\"]\n",
         ] {
             let err = Structure::parse(&format!("{SYSTEM}\n{bad}")).err();
             assert!(err.is_some(), "accepted: {bad}");

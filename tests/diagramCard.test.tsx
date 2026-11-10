@@ -39,7 +39,7 @@ describe("DiagramCard", () => {
       counts({ proven: 2 }),
       undefined,
     ]);
-    expect(t).toEqual({ total: 6, byState: { failing: 1, planned: 2, stale: 0, proven: 2 } });
+    expect(t).toEqual({ total: 6, byState: { failing: 1, planned: 2, stale: 0, unproven: 0, proven: 2 } });
     const html = draw({ children: t });
     expect(html).toContain('aria-label="6 children, 1 failing, 2 todo, 2 proven"');
     expect(html.replace(/<[^>]+>/g, "")).toContain("6·1F2T2P");

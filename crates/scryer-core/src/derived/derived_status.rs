@@ -1,7 +1,8 @@
 //! What each derived claim's evidence says, never written by a tool:
 //! `proven` (green, and neither the test nor the code it exercises has
-//! changed since), `stale` (either changed, or no report has covered it since
-//! it was written), `failing` (red), `planned` (a todo stub). Probing is a
+//! changed since), `stale` (shown as outdated: it ran, and the test or code
+//! changed since), `unproven` (no report has covered it, nor the proven claim
+//! it rewords), `failing` (red), `planned` (a todo stub). Probing is a
 //! separate axis: a surviving break marks a crosshair, every break caught a
 //! double check. Health counts roll the states up the derived tree.
 
@@ -19,6 +20,9 @@ use std::collections::{BTreeMap, HashMap};
 pub enum ClaimState {
     Proven,
     Stale,
+    /// No report ever covered the claim, nor a proven claim it rewords: a
+    /// new test is unproven, not outdated, until its first run.
+    Unproven,
     Failing,
     Planned,
 }
@@ -59,6 +63,8 @@ pub struct DerivedCounts {
     pub claims: u32,
     pub proven: u32,
     pub stale: u32,
+    #[serde(default)]
+    pub unproven: u32,
     pub failing: u32,
     pub planned: u32,
     /// Components with code and not one claim in their subtree.
@@ -74,6 +80,7 @@ impl DerivedCounts {
         self.claims += o.claims;
         self.proven += o.proven;
         self.stale += o.stale;
+        self.unproven += o.unproven;
         self.failing += o.failing;
         self.planned += o.planned;
         self.untested_components += o.untested_components;
@@ -244,10 +251,14 @@ pub fn compute_derived_status(
         let record = cache.results.iter().find(|r| r.resp_id == c.id);
         // A claim that never ran may be a reworded one: its old record
         // remembers what it passed as.
+        let pred = match record {
+            None if !c.planned => predecessor(&cache.results, &is_live, &c.file, &c.description),
+            _ => None,
+        };
         let proven_as = match record {
             _ if c.planned => None,
             Some(r) => r.proven_as.as_ref(),
-            None => predecessor(&cache.results, &is_live, &c.file, &c.description).and_then(|p| p.proven_as.as_ref()),
+            None => pred.and_then(|p| p.proven_as.as_ref()),
         }
         .filter(|p| p.statement != c.description)
         .map(|p| p.statement.clone());
@@ -256,6 +267,7 @@ pub fn compute_derived_status(
             ClaimState::Planned
         } else {
             match current {
+                None if record.is_none() && pred.is_none() => ClaimState::Unproven,
                 None => ClaimState::Stale,
                 Some(r) if r.outcome == TestOutcome::Passed => ClaimState::Proven,
                 Some(_) => ClaimState::Failing,
@@ -306,6 +318,7 @@ pub fn compute_derived_status(
         match state {
             ClaimState::Proven => counts.proven += 1,
             ClaimState::Stale => counts.stale += 1,
+            ClaimState::Unproven => counts.unproven += 1,
             ClaimState::Failing => counts.failing += 1,
             ClaimState::Planned => counts.planned += 1,
         }
@@ -453,6 +466,7 @@ mod tests {
         m.nodes.push(node("core", Kind::Component, Some("app")));
         m.nodes.push(node("bare", Kind::Component, Some("app")));
         DerivedTree {
+            structure_problems: Vec::new(),
             fingerprint: 1,
             committed: m.clone(),
             planned: m,
@@ -510,7 +524,7 @@ mod tests {
 
     /// Each state is reachable: a current green verdict is proven, an edited
     /// test or code stale, a red verdict failing, a claim no report covered
-    /// stale, a todo stub planned whatever its record says.
+    /// unproven, a todo stub planned whatever its record says.
     #[test]
     fn every_state_follows_from_report_and_fingerprints() {
         let cache = TestStatusCache {
@@ -529,13 +543,13 @@ mod tests {
         assert_eq!(state("green"), ClaimState::Proven);
         assert_eq!(state("edited"), ClaimState::Stale);
         assert_eq!(state("red"), ClaimState::Failing);
-        assert_eq!(state("unrun"), ClaimState::Stale);
+        assert_eq!(state("unrun"), ClaimState::Unproven);
         assert_eq!(state("todo"), ClaimState::Planned);
         assert_eq!(s.tests.len(), 4, "the Tests lens lists every recorded verdict");
         assert!(s.tests.iter().find(|t| t.resp_id == "edited").unwrap().stale);
 
         let core = &s.nodes["core"].own;
-        assert_eq!((core.claims, core.proven, core.stale, core.failing, core.planned), (5, 1, 2, 1, 1));
+        assert_eq!((core.claims, core.proven, core.stale, core.unproven, core.failing, core.planned), (5, 1, 1, 1, 1, 1));
         assert_eq!(s.nodes["bare"].own.untested_components, 1, "code and no claims");
         assert_eq!(s.nodes["core"].own.untested_components, 0);
         assert_eq!(s.nodes["bare"].own.style_violations, 1);
@@ -543,6 +557,23 @@ mod tests {
         let app = &s.nodes["app"].subtree;
         assert_eq!((app.claims, app.untested_components, app.dark_files), (5, 1, 1));
         assert_eq!(s.totals, s.nodes["sys"].subtree);
+    }
+
+    /// If no report ever covered a claim and it rewords no proven one, then it reads as unproven, not outdated.
+    #[test]
+    fn a_claim_no_report_covered_is_unproven() {
+        let state = |cache: &TestStatusCache| {
+            let mut fresh = |_: &str, _: &BTreeMap<String, String>, _: u64| false;
+            let s = compute_derived_status(&tree(), cache, &MutationCache::default(), &mut fresh);
+            let st = s.claims.iter().find(|c| c.resp_id == "unrun").unwrap().state;
+            (st, s.nodes["core"].own.unproven)
+        };
+        // With no records at all, every claim but the todo stub never ran.
+        assert_eq!(state(&TestStatusCache::default()), (ClaimState::Unproven, 4), "never ran");
+        let ran = TestStatusCache { results: vec![record("unrun", TestOutcome::Failed, "old")], ..Default::default() };
+        assert_eq!(state(&ran).0, ClaimState::Stale, "ran once, changed since");
+        let moved = TestStatusCache { results: vec![proven("gone", "src/a.rs", "unrun")], ..Default::default() };
+        assert_eq!(state(&moved).0, ClaimState::Stale, "the same claim, proven under another id");
     }
 
     fn proven(id: &str, file: &str, statement: &str) -> ClaimRecord {

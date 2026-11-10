@@ -67,6 +67,20 @@ describe("routeAround", () => {
     expect(q.sharedRuns).toBe(0);
   });
 
+  it("Keeps every route's first and last stretch longer than an arrowhead, however its tracks are parted", () => {
+    // Two rows 50px apart: the runs that share the line between them were
+    // parted to 8px from the card one of them turns into.
+    const boxes = [card("c0", 0, 630), card("c2", 920, 210), card("c3", 690, 630), card("c4", 1150, 0), card("c5", 0, 840), card("c6", 460, 630), card("c7", 1150, 210)];
+    // Three links c0 → c3 (one per import pair) bunch on the line under c0.
+    const edges = [["c6", "c5"], ["c0", "c3"], ["c4", "c2"], ["c2", "c6"], ["c7", "c3"], ["c0", "c3"], ["c0", "c5"], ["c0", "c3"]].map(([source, target], i) => ({ id: `e${i}`, source, target }));
+    for (const l of drawn(boxes, edges)) {
+      const n = l.points.length;
+      const leg = (p: { x: number; y: number }, q: { x: number; y: number }) => Math.hypot(q.x - p.x, q.y - p.y);
+      expect(leg(l.points[0], l.points[1])).toBeGreaterThanOrEqual(16);
+      expect(leg(l.points[n - 2], l.points[n - 1])).toBeGreaterThanOrEqual(16);
+    }
+  });
+
   it("If no route clears the cards, then leaves the edge unrouted", () => {
     // A card walled in by four others, closer than a route's clearance.
     const boxes = [card("t", 300, 300), card("n", 300, 130), card("s", 300, 470), card("w", 110, 300), card("e", 490, 300), card("a", 900, 900)];

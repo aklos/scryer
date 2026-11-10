@@ -1,9 +1,11 @@
 /**
- * Where each edge's label pill goes, decided for all of a level's edges at
- * once so no pill covers what the drawing is trying to show. A pill is tried
- * at points along its own line, middle first, then just beside it; each spot
- * is charged for every other edge it would hide, every pill and card it would
- * sit on, and its distance from the middle. Longest labels choose first.
+ * Where each edge's label goes, decided for all of a level's edges at once so
+ * no label covers what the drawing is trying to show. A label is tried beside
+ * its own line at points along it, middle first, and on the line only when
+ * nothing beside is free; each spot is charged for every other edge it would
+ * hide, every label and card it would sit on, and its distance from the
+ * middle. Longest labels choose first. A label whose best spot still covers
+ * something is crowded: the map shows it once its edge is lit.
  */
 
 import type { Pt } from "./edgeGeometry";
@@ -82,10 +84,10 @@ function along(points: Pt[], f: number): { at: Pt; dir: Pt } {
 /** Fractions along the line, middle first. */
 const STOPS = [0.5, 0.42, 0.58, 0.34, 0.66, 0.26, 0.74, 0.18, 0.82];
 
-/** Steps off the line, in pill-clearances: on it, then out to either side.
- *  Positive is the edge's own outer side — where a reverse pair's lane
- *  already leans. */
-const SIDES = [0, 1, -1, 2, -2];
+/** Steps off the line: on it, then just clear of it to either side. Never
+ *  further: a label a whole label away reads as nobody's. Positive is the
+ *  edge's own outer side — where a reverse pair's lane already leans. */
+const SIDES = [0, 1, -1];
 
 /** Charges per spot: an edge hidden, a twin's lane hidden, a pill or card
  *  sat on, each step off the line (one more on the inner side), and each
@@ -96,19 +98,32 @@ const HIDES_TWIN = 8;
 const ON_PILL = 60;
 const ON_CARD = 40;
 const OFF_LINE = 6;
+/** On its own line, a label cuts the edge it names: dearer than any step
+ *  aside, cheaper than hiding another edge. */
+const ON_LINE = 30;
 const FROM_MIDDLE = 4;
 
-/** Pill centres per edge id, for the edges that carry a label or method. */
-export function placeLabels(edges: LabelRequest[], cards: Rect[]): Map<string, Pt> {
+/** Where a label goes: its centre, whether it sits on its own line, and
+ *  whether even its best spot covers another edge, a card or a label. Beside
+ *  an upright run, `hug` says which edge of the label meets the line at
+ *  `hugX`, so the words start at the line, not a label's width out. */
+export interface LabelSpot extends Pt {
+  onLine: boolean;
+  crowded: boolean;
+  hug?: { side: "left" | "right"; x: number };
+}
+
+/** Label centres per edge id, for the edges that carry a label or method. */
+export function placeLabels(edges: LabelRequest[], cards: Rect[]): Map<string, LabelSpot> {
   const legs = edges.map((e) => e.points.slice(1).map((q, i) => [e.points[i], q] as [Pt, Pt]));
   const want = edges
     .map((e, i) => ({ e, i, size: labelSize(e.label, e.method) }))
     .filter((w) => w.size.w > 0)
     .sort((a, b) => b.size.w * b.size.h - a.size.w * a.size.h || a.e.id.localeCompare(b.e.id));
   const placed: Rect[] = [];
-  const out = new Map<string, Pt>();
+  const out = new Map<string, LabelSpot>();
   for (const { e, i, size } of want) {
-    let best: { at: Pt; cost: number } | null = null;
+    let best: { at: Pt; cost: number; side: number; covers: number; line: Pt; upright: boolean } | null = null;
     for (const f of STOPS) {
       const { at, dir } = along(e.points, f);
       // On the line, then pushed off it to either side: far enough that the
@@ -118,17 +133,27 @@ export function placeLabels(edges: LabelRequest[], cards: Rect[]): Map<string, P
       for (const side of SIDES) {
         const c = { x: at.x + nx * clear * side, y: at.y + ny * clear * side };
         const r = { x: c.x - size.w / 2, y: c.y - size.h / 2, w: size.w, h: size.h };
-        let cost = Math.abs(f - 0.5) * FROM_MIDDLE + Math.abs(side) * OFF_LINE + (side < 0 ? 1 : 0);
+        let cost =
+          Math.abs(f - 0.5) * FROM_MIDDLE + (side === 0 ? ON_LINE : (Math.abs(side) - 1) * OFF_LINE) + (side < 0 ? 1 : 0);
+        let covers = 0;
         edges.forEach((o, j) => {
-          if (j === i) return;
-          if (legs[j].some(([p, q]) => segmentHits(p, q, r))) cost += o.pair && o.pair === e.pair ? HIDES_TWIN : HIDES_EDGE;
+          if (j === i || !legs[j].some(([p, q]) => segmentHits(p, q, r))) return;
+          cost += o.pair && o.pair === e.pair ? HIDES_TWIN : HIDES_EDGE;
+          covers++;
         });
-        for (const p of placed) if (overlaps(r, p, 4)) cost += ON_PILL;
-        for (const card of cards) if (overlaps(r, card)) cost += ON_CARD;
-        if (!best || cost < best.cost) best = { at: c, cost };
+        for (const p of placed) if (overlaps(r, p, 4)) (cost += ON_PILL), covers++;
+        for (const card of cards) if (overlaps(r, card)) (cost += ON_CARD), covers++;
+        if (!best || cost < best.cost) best = { at: c, cost, side, covers, line: at, upright: Math.abs(dir.y) > Math.abs(dir.x) };
       }
     }
-    out.set(e.id, best!.at);
+    const b = best!;
+    const right = b.at.x > b.line.x;
+    out.set(e.id, {
+      ...b.at,
+      onLine: b.side === 0,
+      crowded: b.covers > 0,
+      ...(b.side !== 0 && b.upright ? { hug: { side: right ? "left" : "right", x: b.line.x + (right ? 4 : -4) } } : {}),
+    });
     placed.push({ x: best!.at.x - size.w / 2, y: best!.at.y - size.h / 2, w: size.w, h: size.h });
   }
   return out;

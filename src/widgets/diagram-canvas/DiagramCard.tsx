@@ -74,7 +74,7 @@ const KIND_WORD: Partial<Record<DiagramNode["kind"], string>> = {
  *  many of them read as each state, the ones needing a look first, in the
  *  tree's letters: "6 · 1F 2T 3P". A child with no claims counts only in
  *  the total. */
-const FOOT_ORDER = ["failing", "planned", "stale", "proven"] as const;
+const FOOT_ORDER = ["failing", "planned", "unproven", "stale", "proven"] as const;
 
 function ChildCounts({ t }: { t: ChildTally }) {
   const shown = FOOT_ORDER.filter((k) => t.byState[k] > 0);

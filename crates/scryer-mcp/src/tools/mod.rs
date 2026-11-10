@@ -1,4 +1,5 @@
 mod comments;
+mod show;
 pub(crate) mod read;
 mod testing;
 #[cfg(test)]

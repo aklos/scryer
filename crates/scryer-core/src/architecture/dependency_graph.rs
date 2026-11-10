@@ -428,6 +428,7 @@ mod tests {
         anchor(&mut m, "syma2", "a/src/z.ts", "zed");
         anchor(&mut m, "symb", "b/src/y.ts", "thing");
         m.links.push(Link {
+            declared: false,
             kind: None,
             id: "link-1".into(),
             src: "ca".into(),
@@ -436,6 +437,7 @@ mod tests {
             method: None,
         });
         m.links.push(Link {
+            declared: false,
             kind: None,
             id: "link-2".into(),
             src: "cb".into(),
@@ -586,6 +588,7 @@ mod tests {
         m.nodes.push(sa);
         m.nodes.push(node("symb", Kind::Symbol, Some("sys")));
         m.links.push(Link {
+            declared: false,
             kind: None,
             id: "link-1".into(),
             src: "syma".into(),

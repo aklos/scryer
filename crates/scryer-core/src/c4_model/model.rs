@@ -233,6 +233,11 @@ pub struct Link {
     /// Required when both endpoints sit inside styled containers (component or symbol level); optional on prose links at system and container level.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<LinkKind>,
+    /// Declared in `structure.toml`, not read off the code: it carries what
+    /// the developer says the relationship is, and outranks a link the
+    /// imports imply between the same two nodes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub declared: bool,
 }
 
 // --- Model ---

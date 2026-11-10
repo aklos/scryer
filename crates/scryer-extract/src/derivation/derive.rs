@@ -859,55 +859,100 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         }
     }
 
-    // Declared links: the relationships structure.toml gives, and the
-    // externals a container says it is the one to talk to. Facts the config
-    // states, not read off imports. A relationship with a container at one
-    // end sits on that container, and on the system too for the context, with
-    // its label, unless the config relates the two itself; so does a
-    // container's use of an external.
-    let declared_container = |name: &str| -> Option<&String> {
-        containers_sorted
-            .iter()
-            .find(|c| {
-                c.dir == name
-                    || c.name == name
-                    || s.container(&c.name, &c.dir).and_then(|k| k.name.as_deref()) == Some(name)
-            })
-            .map(|c| &container_ids[c.dir.as_str()])
+    // Declared links: the relationships structure.toml gives, and what a
+    // container says it uses. Facts the config states, not read off imports.
+    // An end is any node: the system, a person or an external by its key, a
+    // container by its key or name, a component by its path, a symbol as
+    // `file#Name`. Each link sits on the nodes it names, which may be on
+    // different levels, never a node and its own ancestor (C4 relates no
+    // element to what contains it). Every pair of their ancestors that is
+    // not one inside the other has the link too, with its label: what a
+    // component does, its container and system do, on each map above.
+    let parent_of: HashMap<String, String> =
+        model.nodes.iter().filter_map(|n| Some((n.id.clone(), n.parent_id.clone()?))).collect();
+    let line_of = |id: &str| -> Vec<String> {
+        let mut line = vec![id.to_string()];
+        while let Some(p) = parent_of.get(line.last().unwrap()) {
+            line.push(p.clone());
+        }
+        line
+    };
+    let kind_of: HashMap<&str, Kind> = model.nodes.iter().map(|n| (n.id.as_str(), n.kind)).collect();
+    let resolve = |name: &str| -> Option<String> {
+        if let Some(id) = context_ids.get(name) {
+            return Some(id.clone());
+        }
+        if let Some(c) = containers_sorted.iter().find(|c| {
+            c.dir == name || c.name == name || s.container(&c.name, &c.dir).and_then(|k| k.name.as_deref()) == Some(name)
+        }) {
+            return Some(container_ids[c.dir.as_str()].clone());
+        }
+        if let Some((file, symbol)) = name.split_once('#') {
+            return model.source_map.iter().find_map(|(id, locs)| {
+                (kind_of.get(id.as_str()) == Some(&Kind::Symbol)
+                    && locs.iter().any(|l| l.pattern == file && l.symbol.as_deref() == Some(symbol)))
+                .then(|| id.clone())
+            });
+        }
+        let dir = format!("{}/**", name.trim_end_matches('/'));
+        model.boundaries.iter().find_map(|(id, sources)| {
+            (kind_of.get(id.as_str()) == Some(&Kind::Component)
+                && sources.iter().any(|src| src.pattern == name || src.pattern == dir))
+            .then(|| id.clone())
+        })
     };
     let mut related: HashSet<&str> = HashSet::new();
-    let mut lifted: Vec<(String, String, &str)> = Vec::new();
+    let mut declared: Vec<(String, String, String)> = Vec::new();
+    let declare = |src: &str, dst: &str, label: &str, problems: &mut Vec<String>| {
+        let (Some(a), Some(b)) = (resolve(src), resolve(dst)) else {
+            let missing = if resolve(src).is_none() { src } else { dst };
+            problems.push(format!(
+                "structure.toml: \"{missing}\" names no node: not the system, a person or an external under [system], a container, a component's path, or a symbol as file#Name"
+            ));
+            return None;
+        };
+        if line_of(&a).contains(&b) || line_of(&b).contains(&a) {
+            problems.push(format!(
+                "structure.toml: relates \"{src}\" to \"{dst}\", which contains it or sits inside it; C4 relates no element to its own parent or child"
+            ));
+            return None;
+        }
+        Some((a, b, label.to_string()))
+    };
+    let mut problems: Vec<String> = Vec::new();
     for (src, dst, label) in s.relationships() {
         related.insert(src);
         related.insert(dst);
-        let label = label.unwrap_or_default();
-        let (ca, cb) = (context_ids.get(src), context_ids.get(dst));
-        if let (Some(a), Some(b)) = (ca, cb) {
-            push_link(&mut model, &mut seen, &mut taken, a, b, None, label);
-            continue;
-        }
-        let (Some(a), Some(b)) = (ca.or_else(|| declared_container(src)), cb.or_else(|| declared_container(dst))) else {
-            continue;
-        };
-        push_link(&mut model, &mut seen, &mut taken, a, b, None, label);
-        let lift = |end: Option<&String>, id: &String| end.map_or(system_id.clone(), |_| id.clone());
-        let (la, lb) = (lift(ca, a), lift(cb, b));
-        if la != lb {
-            lifted.push((la, lb, label));
+        if let Some(l) = declare(src, dst, label.unwrap_or_default(), &mut problems) {
+            declared.push(l);
         }
     }
     for c in &containers_sorted {
         let Some(config) = s.container(&c.name, &c.dir) else { continue };
         for u in &config.uses {
-            let Some(external) = context_ids.get(u.to()) else { continue };
             related.insert(u.to());
-            let label = u.label().unwrap_or_default();
-            push_link(&mut model, &mut seen, &mut taken, &container_ids[c.dir.as_str()], external, None, label);
-            lifted.push((system_id.clone(), external.clone(), label));
+            if let Some(l) = declare(&c.dir, u.to(), u.label().unwrap_or_default(), &mut problems) {
+                declared.push(l);
+            }
         }
     }
-    for (a, b, label) in &lifted {
-        push_link(&mut model, &mut seen, &mut taken, a, b, None, label);
+    for (a, b, label) in &declared {
+        push_declared(&mut model, &mut seen, &mut taken, a, b, label);
+    }
+    for (a, b, label) in &declared {
+        let (la, lb) = (line_of(a), line_of(b));
+        for x in &la {
+            for y in &lb {
+                if (x == a && y == b) || la.contains(y) || lb.contains(x) {
+                    continue;
+                }
+                // Implied, not declared: it only names a link that has no label.
+                push_link(&mut model, &mut seen, &mut taken, x, y, None, "");
+                if let Some(l) = model.links.iter_mut().find(|l| &l.src == x && &l.dst == y && l.label.is_empty()) {
+                    l.label = label.to_string();
+                }
+            }
+        }
     }
     // An actor nothing relates is still the system's: a person uses it, and
     // it uses an external. Unlabelled, since nothing says how.
@@ -1061,6 +1106,7 @@ pub fn derive_tree(input: &DeriveInput) -> DerivedTree {
         dark_files,
         style_violations: Vec::new(),
         layer_exempt,
+        structure_problems: problems,
         tooling,
     }
 }
@@ -1254,7 +1300,34 @@ fn push_link(
     kind: Option<LinkKind>,
     label: &str,
 ) {
+    push_link_as(model, seen, taken, src, dst, kind, label, false);
+}
+
+/// A link `structure.toml` declares: it takes the place of one the imports
+/// drew between the same two nodes, and fills in the label of one implied
+/// above, without overwriting another declared label there.
+fn push_declared(model: &mut ScryModel, seen: &mut HashSet<(String, String)>, taken: &mut HashSet<String>, src: &str, dst: &str, label: &str) {
+    push_link_as(model, seen, taken, src, dst, None, label, true);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_link_as(
+    model: &mut ScryModel,
+    seen: &mut HashSet<(String, String)>,
+    taken: &mut HashSet<String>,
+    src: &str,
+    dst: &str,
+    kind: Option<LinkKind>,
+    label: &str,
+    declared: bool,
+) {
     if !seen.insert((src.to_string(), dst.to_string())) {
+        if declared {
+            if let Some(l) = model.links.iter_mut().find(|l| l.src == src && l.dst == dst && !l.declared) {
+                l.declared = true;
+                l.label = label.to_string();
+            }
+        }
         return;
     }
     let id = stable_id("link", &format!("{src}->{dst}"), taken);
@@ -1265,6 +1338,7 @@ fn push_link(
         label: label.to_string(),
         method: None,
         kind,
+        declared,
     });
 }
 

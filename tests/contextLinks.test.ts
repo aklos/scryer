@@ -63,4 +63,42 @@ describe("context relationships", () => {
     expect(at("agent").y).toBeLessThan(at("sys").y);
     expect(at("bank").x).toBeGreaterThan(at("sys").x);
   });
+
+  it("Labels a link into a node outside the level as authored, and leaves one read off imports unlabelled", async () => {
+    const withImports = {
+      ...model,
+      nodes: [...model.nodes, { id: "billing", kind: "system", name: "Billing" }],
+    } as unknown as ScryModel;
+    const imports = {
+      ...report,
+      derived: { resolvedEdges: [{ srcNode: "gateway", dstNode: "billing", count: 3 }] },
+    } as unknown as ModelHealthReport;
+    const scene = await buildDiagramScene(withImports, "sys", imports);
+    expect(pairs(scene.edges)).toEqual(["gateway>billing:", "ledger>db:stores entries in"]);
+  });
+
+  it("When a declared link sits on a component, draws it on that component's container map to the other end at its level, labelled and never quiet", async () => {
+    const nested = {
+      ...model,
+      nodes: [
+        ...model.nodes,
+        { id: "spawner", kind: "component", name: "spawner", parentId: "gateway" },
+        { id: "router", kind: "component", name: "router", parentId: "gateway" },
+        { id: "sidecar", kind: "container", name: "Sidecar", parentId: "sys" },
+        { id: "server", kind: "component", name: "server", parentId: "sidecar" },
+      ],
+      links: [
+        ...model.links,
+        { id: "l-run", src: "spawner", dst: "sidecar", label: "runs as its sidecar", declared: true },
+        { id: "l-imp", src: "router", dst: "spawner", label: "", kind: "depends" },
+        { id: "l-why", src: "router", dst: "spawner", label: "hands requests to", declared: true },
+        { id: "l-code", src: "router", dst: "server", label: "" },
+      ],
+    } as unknown as ScryModel;
+    const scene = await buildDiagramScene(nested, "gateway", report);
+    expect(pairs(scene.edges)).toEqual(["router>sidecar:", "router>spawner:hands requests to", "spawner>sidecar:runs as its sidecar"]);
+    expect(scene.edges.filter((e) => e.declared).every((e) => !e.conforming)).toBe(true);
+    expect(scene.nodes.find((n) => n.id === "sidecar")?.reference).toBe(true);
+    expect(scene.nodes.some((n) => n.id === "server")).toBe(false);
+  });
 });

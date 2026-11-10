@@ -40,11 +40,23 @@ if [ ! -S /tmp/.X11-unix/X99 ]; then
   echo "Xvfb :99 is not up (see $RUN_DIR/xvfb.log); refusing to start the app on any other display" >&2
   exit 1
 fi
+# A private D-Bus session bus. The app is single-instance, keyed on a name on
+# the session bus: on the developer's bus, a headless launch would find their
+# running scryer, hand it its arguments (raising their window) and exit. On its
+# own bus the headless copy never sees theirs.
+if ! running dbus; then
+  out=$(dbus-daemon --session --fork --print-address=1 --print-pid=1)
+  head -n1 <<<"$out" >"$RUN_DIR/dbus.addr"
+  tail -n1 <<<"$out" >"$RUN_DIR/dbus.pid"
+fi
+export DBUS_SESSION_BUS_ADDRESS=$(cat "$RUN_DIR/dbus.addr")
 # A driver left from a run that could still see the developer's session
-# would hand the window to it: refuse to reuse one that does.
+# (their display or their bus) would hand the window to it: refuse to reuse
+# one that does.
 if running driver; then
   env_of=$(tr '\0' '\n' <"/proc/$(cat "$RUN_DIR/driver.pid")/environ")
-  if grep -q '^WAYLAND_DISPLAY=' <<<"$env_of" || ! grep -qx 'DISPLAY=:99' <<<"$env_of"; then
+  if grep -q '^WAYLAND_DISPLAY=' <<<"$env_of" || ! grep -qx 'DISPLAY=:99' <<<"$env_of" \
+    || ! grep -qxF "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" <<<"$env_of"; then
     echo "tauri-driver (pid $(cat "$RUN_DIR/driver.pid")) can see the desktop session; run stop.sh first" >&2
     exit 1
   fi

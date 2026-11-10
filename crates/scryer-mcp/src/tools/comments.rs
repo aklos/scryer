@@ -21,7 +21,7 @@ fn error(text: impl Into<String>) -> Result<CallToolResult, McpError> {
 
 /// The node `on` names: a node id, a project-relative file, or a node name
 /// (exact, ignoring case; refused when two nodes share it).
-fn resolve_on(model: &ScryModel, tree: &scryer_core::derived_tree::DerivedTree, on: &str) -> Result<String, String> {
+pub(crate) fn resolve_on(model: &ScryModel, tree: &scryer_core::derived_tree::DerivedTree, on: &str) -> Result<String, String> {
     let on = on.trim();
     if model.nodes.iter().any(|n| n.id == on) {
         return Ok(on.to_string());

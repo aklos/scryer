@@ -7,7 +7,9 @@
 //! thread is addressed only when someone says so explicitly — an agent's
 //! reply never closes it on its own. Folding the events in time order gives
 //! the thread; nothing is ever rewritten, so two branches replying to one
-//! thread merge without conflict.
+//! thread merge without conflict. Deleting is an event too: a retraction
+//! names the event it takes back, so every checkout holding a copy of that
+//! event stops showing it.
 
 use serde::{Deserialize, Serialize};
 
@@ -31,6 +33,9 @@ pub enum Author {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommentEvent {
+    /// The event's id — its file's stem, set when read and never stored.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
     /// Unix milliseconds.
     pub at: u64,
     pub author: Author,
@@ -46,6 +51,10 @@ pub struct CommentEvent {
     /// `open` reopens it. Absent on a plain reply.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<ThreadStatus>,
+    /// The id of an event this one takes back. A retraction shows nowhere,
+    /// and neither does the event it names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retracts: Option<String>,
 }
 
 /// A thread, folded from its events.
@@ -68,8 +77,11 @@ impl Thread {
 
 /// Fold a thread's events. The earliest event carrying a node opens it;
 /// without one there is no thread. Status follows the last event that
-/// changes it.
+/// changes it. Retractions and the events they name are dropped first, so a
+/// retracted opening takes the thread with it.
 pub fn fold(id: &str, mut events: Vec<CommentEvent>) -> Option<Thread> {
+    let retracted: Vec<String> = events.iter().filter_map(|e| e.retracts.clone()).collect();
+    events.retain(|e| e.retracts.is_none() && !retracted.contains(&e.id));
     events.sort_by_key(|e| e.at);
     let opening = events.iter().find(|e| e.node.is_some())?;
     let node = opening.node.clone()?;
@@ -92,7 +104,7 @@ mod tests {
     use super::*;
 
     fn ev(at: u64, author: Author, text: &str) -> CommentEvent {
-        CommentEvent { at, author, text: text.into(), node: None, anchor: None, status: None }
+        CommentEvent { id: format!("e{at}"), at, author, text: text.into(), node: None, anchor: None, status: None, retracts: None }
     }
 
     fn opening(at: u64) -> CommentEvent {
@@ -124,6 +136,22 @@ mod tests {
     #[test]
     fn a_thread_without_an_opening_is_dropped() {
         assert!(fold("t1", vec![ev(2, Author::Agent, "orphan reply")]).is_none());
+    }
+
+    /// If an event is retracted, then neither it nor the retraction shows in the thread.
+    #[test]
+    fn a_retracted_event_is_dropped() {
+        let undo = CommentEvent { retracts: Some("e3".into()), ..ev(4, Author::Human, "") };
+        let t = fold("t1", vec![opening(1), ev(3, Author::Human, "oops"), undo]).unwrap();
+        let texts: Vec<_> = t.events.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(texts, ["why?"]);
+    }
+
+    /// If the opening event is retracted, then there is no thread.
+    #[test]
+    fn a_retracted_opening_drops_the_thread() {
+        let undo = CommentEvent { retracts: Some("e1".into()), ..ev(4, Author::Human, "") };
+        assert!(fold("t1", vec![opening(1), ev(2, Author::Agent, "looking"), undo]).is_none());
     }
 
     /// Orders open threads before addressed ones, newest activity first.

@@ -53,15 +53,17 @@ pub fn open_thread(project: &Path, node: &str, anchor: &str, author: Author, tex
     }
     let at = now_ms();
     let id = format!("t{at:x}{}", comment_store::nonce());
-    let event = CommentEvent {
+    let mut event = CommentEvent {
+        id: String::new(),
         at,
         author,
         text: text.to_string(),
         node: Some(node.to_string()),
         anchor: Some(anchor.to_string()),
         status: None,
+        retracts: None,
     };
-    comment_store::write(project, &id, &event)?;
+    event.id = comment_store::write(project, &id, &event)?;
     fold(&id, vec![event]).ok_or_else(|| "the thread did not open".into())
 }
 
@@ -81,7 +83,78 @@ pub fn reply(
     if thread(project, id).is_none() {
         return Err(format!("no comment thread '{id}'"));
     }
-    let event = CommentEvent { at: now_ms(), author, text: text.to_string(), node: None, anchor: None, status };
+    let event = CommentEvent {
+        id: String::new(),
+        at: now_ms(),
+        author,
+        text: text.to_string(),
+        node: None,
+        anchor: None,
+        status,
+        retracts: None,
+    };
     comment_store::write(project, id, &event)?;
     thread(project, id).ok_or_else(|| format!("no comment thread '{id}'"))
+}
+
+/// Delete an event of a thread; only its author may. Deleting the opening
+/// event deletes the whole thread. The event's file leaves this checkout,
+/// and a retraction is written beside it so copies in other worktrees and
+/// on other branches stop showing too.
+pub fn delete(project: &Path, id: &str, event: &str, author: Author) -> Result<(), String> {
+    let Some(t) = thread(project, id) else {
+        return Err(format!("no comment thread '{id}'"));
+    };
+    let Some(target) = t.events.iter().find(|e| e.id == event) else {
+        return Err(format!("no comment '{event}' in thread '{id}'"));
+    };
+    if target.author != author {
+        return Err("only its author can delete a comment".into());
+    }
+    let retraction = CommentEvent {
+        id: String::new(),
+        at: now_ms(),
+        author,
+        text: String::new(),
+        node: None,
+        anchor: None,
+        status: None,
+        retracts: Some(event.to_string()),
+    };
+    comment_store::write(project, id, &retraction)?;
+    comment_store::remove_event(project, id, event)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// When its author deletes a reply, the thread no longer shows it.
+    #[test]
+    fn deleting_a_reply_drops_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = open_thread(dir.path(), "node-a", "sys / a", Author::Human, "why?").unwrap();
+        let t = reply(dir.path(), &t.id, Author::Human, "never mind", None).unwrap();
+        delete(dir.path(), &t.id, &t.events[1].id, Author::Human).unwrap();
+        let texts: Vec<_> = thread(dir.path(), &t.id).unwrap().events.into_iter().map(|e| e.text).collect();
+        assert_eq!(texts, ["why?"]);
+    }
+
+    /// When its author deletes a thread's opening comment, the thread is gone.
+    #[test]
+    fn deleting_the_opening_drops_the_thread() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = open_thread(dir.path(), "node-a", "sys / a", Author::Human, "what?").unwrap();
+        delete(dir.path(), &t.id, &t.events[0].id, Author::Human).unwrap();
+        assert!(threads(dir.path()).is_empty());
+    }
+
+    /// If someone other than its author deletes a comment, then it is refused and the comment stays.
+    #[test]
+    fn only_the_author_deletes() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = open_thread(dir.path(), "node-a", "sys / a", Author::Human, "why?").unwrap();
+        assert!(delete(dir.path(), &t.id, &t.events[0].id, Author::Agent).is_err());
+        assert_eq!(threads(dir.path()).len(), 1);
+    }
 }

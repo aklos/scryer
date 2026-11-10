@@ -266,6 +266,7 @@ export function claimMark(
 ): ClaimMark {
   if (state === "planned") return "todo";
   if (state === "failing") return "failing";
+  if (state === "unproven") return "unrun";
   if (state === "stale") return verdict || reworded ? "changed" : "unrun";
   const mark = probeMark(probe);
   return mark === "none" ? "proven" : mark;

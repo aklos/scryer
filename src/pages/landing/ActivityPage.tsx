@@ -1,7 +1,7 @@
 /**
  * Activity — what happened to the model, the way a forge shows a
  * repository's commits. The agents working here now come first, each one
- * followable: the wiki and the map then go where it edits. Then what is
+ * followable: the wiki and the map then go where it works. Then what is
  * uncommitted, then HEAD's commits newest first, each with what it changed
  * in the model: per node, added, modified or removed, its claims added,
  * reworded or removed under it, and its other changes in words. A node or
@@ -181,7 +181,7 @@ export function ActivityPage({
   );
 }
 
-function LiveRow({
+export function LiveRow({
   session,
   title,
   following,
@@ -206,7 +206,7 @@ function LiveRow({
         type="button"
         aria-pressed={following}
         onClick={() => onFollow(following ? null : session.session)}
-        title={following ? "Stop following this session" : "Follow this session: the wiki and map go where it edits"}
+        title={following ? "Stop following this session" : "Follow this session: the wiki and map go where it works"}
         className={`flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-2 py-0.5 text-xs font-medium ${
           following
             ? "bg-violet-600 text-white dark:bg-violet-500"

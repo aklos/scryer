@@ -8,7 +8,8 @@ No tool writes a claim's status. It is computed from the last ingested test repo
 | Status | Means |
 |--------|-------|
 | **proven** | the test was green, and neither it nor the code it exercises has changed since |
-| **outdated** | the test or the code it exercises changed since its verdict, or no report has covered it yet — re-running it settles it to proven or failing |
+| **outdated** | the test or the code it exercises changed since its verdict — re-running it settles it to proven or failing |
+| **unproven** | the test is written but no report has covered it yet — running it settles it to proven or failing |
 | **failing** | the test was red |
 | **todo** | the test is a todo: work not done yet, or behaviour with no test body written |
 
@@ -20,7 +21,7 @@ A separate mark asks whether a green test would notice a bug. An agent's probe (
 
 ## Health
 
-The status bar and node pages count what needs attention: todo, outdated and failing claims, components with code and no claims, files no test reaches by import (dark code), surviving mutants, and [style](/scryer/concepts/structure/) violations.
+The status bar and node pages count what needs attention: todo, unproven, outdated and failing claims, components with code and no claims, files no test reaches by import (dark code), surviving mutants, and [style](/scryer/concepts/structure/) violations.
 
 ## Since you last looked
 

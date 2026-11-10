@@ -12,7 +12,7 @@ The server reads the C4 tree derived from your code — containers from packagin
 - `orient` — the front door for a coding task: per file its node chain, layer, module description, claims with status, and the test file where new todo stubs go; per task the nodes it matches. Capped at about 4k characters.
 - `locate` — one file in full: every claim that speaks for it with status, test level and JUnit name, and where its stubs go.
 - `read_model` / `search_model` — the derived tree, as an overview, a subtree, or ranked text search.
-- `get_test_radius` — which tests a change reaches by import, at unit and integration level (e2e too with `radius = "all"` in `.scryer/structure.toml`), as the exact command to run.
+- `get_test_radius` — which tests a change reaches by import, at unit and integration level (e2e too with `radius = "all"` in `.scryer/structure.toml`), as the exact command to run, one per runner (`[*.rs] …`, `[*.ts *.tsx] …`) in a mixed project.
 - `ingest_test_report` — record a run's JUnit XML against the claims; a later edit to the test or the code it exercises makes the verdict outdated.
 - `ingest_mutation_report` — record a cargo-mutants or Stryker run; surviving mutants mark the code they landed in.
 - `open_probe` / `close_probe` — break the code a passing test exercises in an isolated worktree and see whether the test notices; a surviving break is a finding.

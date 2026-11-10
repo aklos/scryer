@@ -39,7 +39,8 @@ pub fn read_all(roots: &[PathBuf]) -> BTreeMap<String, Vec<CommentEvent>> {
                     continue;
                 }
                 let Ok(text) = std::fs::read_to_string(event.path()) else { continue };
-                let Ok(parsed) = serde_json::from_str::<CommentEvent>(&text) else { continue };
+                let Ok(mut parsed) = serde_json::from_str::<CommentEvent>(&text) else { continue };
+                parsed.id = name.trim_end_matches(".json").to_string();
                 seen.entry(id.clone()).or_default().insert(name, parsed);
             }
         }
@@ -47,19 +48,39 @@ pub fn read_all(roots: &[PathBuf]) -> BTreeMap<String, Vec<CommentEvent>> {
     seen.into_iter().map(|(id, events)| (id, events.into_values().collect())).collect()
 }
 
-/// Write one event of `thread` into `root`'s comments. The file name is the
-/// event's time plus a nonce, so two writers never pick the same one.
-pub fn write(root: &Path, thread: &str, event: &CommentEvent) -> Result<(), String> {
+/// Write one event of `thread` into `root`'s comments and return its id. The
+/// file name is the event's time plus a nonce, so two writers never pick the
+/// same one; the id is that name's stem.
+pub fn write(root: &Path, thread: &str, event: &CommentEvent) -> Result<String, String> {
     if !valid_id(thread) {
         return Err(format!("invalid thread id '{thread}'"));
     }
     let dir = dir(root).join(thread);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let name = format!("{:013}-{}.json", event.at, nonce());
-    let text = serde_json::to_string_pretty(event).map_err(|e| e.to_string())?;
+    let id = format!("{:013}-{}", event.at, nonce());
+    let name = format!("{id}.json");
+    let stored = CommentEvent { id: String::new(), ..event.clone() };
+    let text = serde_json::to_string_pretty(&stored).map_err(|e| e.to_string())?;
     let tmp = dir.join(format!(".{name}.tmp"));
     std::fs::write(&tmp, text + "\n").map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, dir.join(name)).map_err(|e| e.to_string())
+    std::fs::rename(&tmp, dir.join(name)).map_err(|e| e.to_string())?;
+    Ok(id)
+}
+
+/// Remove one event's file from `root`'s copy of `thread`, if it is there,
+/// and the thread's directory once it is empty.
+pub fn remove_event(root: &Path, thread: &str, event: &str) -> Result<(), String> {
+    if !valid_id(thread) || !valid_id(event) {
+        return Err(format!("invalid comment id '{thread}/{event}'"));
+    }
+    let dir = dir(root).join(thread);
+    match std::fs::remove_file(dir.join(format!("{event}.json"))) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.to_string()),
+    }
+    let _ = std::fs::remove_dir(&dir); // fails while other events remain
+    Ok(())
 }
 
 /// Six hex digits from the clock and the process id: enough to keep two
@@ -78,7 +99,7 @@ mod tests {
     use crate::comment_threads::Author;
 
     fn ev(at: u64, text: &str) -> CommentEvent {
-        CommentEvent { at, author: Author::Agent, text: text.into(), node: None, anchor: None, status: None }
+        CommentEvent { id: String::new(), at, author: Author::Agent, text: text.into(), node: None, anchor: None, status: None, retracts: None }
     }
 
     /// When two checkouts hold events of one thread, reads each event once, from either.

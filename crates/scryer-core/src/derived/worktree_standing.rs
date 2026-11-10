@@ -133,6 +133,7 @@ mod tests {
             planned: false,
         };
         DerivedTree {
+            structure_problems: Vec::new(),
             fingerprint: 0,
             committed: planned.clone(),
             planned,

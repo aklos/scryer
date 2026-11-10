@@ -354,6 +354,7 @@ pub fn parse_file_with(path: &Path, source: &str, parser: &mut Parser) -> Option
         Family::Python => collect_py_imports(root, bytes, &mut imports),
         Family::Go => collect_go_imports(root, bytes, &mut imports),
         Family::Clojure => collect_clj_imports(root, bytes, &mut imports),
+        Family::Rust => collect_rust_includes(root, bytes, &mut imports),
         _ => {}
     }
 
@@ -2168,6 +2169,40 @@ fn collect_idents(root: Node, bytes: &[u8], out: &mut Vec<Ident>) {
         for child in named_children(n) {
             stack.push(child);
         }
+    }
+}
+
+/// `include_str!` / `include_bytes!` with a literal path: the file is built
+/// into this one, a dependency on it as real as an import. Its path is
+/// relative to the including file, so it is kept as a relative spec; one
+/// built from `concat!`/`env!` is left out rather than guessed.
+fn collect_rust_includes(node: Node, bytes: &[u8], out: &mut Vec<ImportRef>) {
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "macro_invocation" {
+            let name = n.child_by_field_name("macro").and_then(|m| m.utf8_text(bytes).ok()).unwrap_or("");
+            if matches!(name, "include_str" | "include_bytes") {
+                let tree = named_children(n).into_iter().find(|c| c.kind() == "token_tree");
+                let lits: Vec<Node> = tree.map(named_children).unwrap_or_default();
+                if let [lit] = lits.as_slice() {
+                    if lit.kind() == "string_literal" {
+                        let raw = lit.utf8_text(bytes).unwrap_or("").trim_matches('"');
+                        if !raw.is_empty() && !raw.starts_with('/') && !raw.contains('\\') {
+                            let spec = if raw.starts_with('.') { raw.to_string() } else { format!("./{raw}") };
+                            out.push(ImportRef {
+                                spec,
+                                names: Vec::new(),
+                                line: n.start_position().row as u32 + 1,
+                                alias: None,
+                                type_only: false,
+                            });
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+        stack.extend(named_children(n));
     }
 }
 

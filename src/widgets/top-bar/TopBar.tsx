@@ -3,10 +3,11 @@
  * (open / close project, settings) with the project name beside it and, when
  * the project has several git worktrees, the open checkout's branch, a menu
  * that switches to another checkout, and what the checkout changed — "Uncommitted
- * changes" or "N commits ahead of main" — as a toggle that shows those changes
- * on the wiki page; search sits
- * dead-centre; the Wiki / Map view switch (plus Activity, when the host passes
- * an activity page), theme toggle and window controls are on the right. Page
+ * changes" or "N commits ahead of main" — which opens Activity, where those
+ * changes are listed; search sits
+ * dead-centre; the switch that lets agents move the view, the Wiki / Map view
+ * switch (plus Activity, when the host passes an activity page), theme toggle
+ * and window controls are on the right. Page
  * content lives below; this bar is app chrome only.
  *
  * The window is frameless (`decorations: false`), so this bar IS the titlebar:
@@ -15,12 +16,14 @@
  * needs its own. On macOS the OS draws its own traffic lights and the bar leaves
  * room for them; elsewhere the bar draws minimize / maximize / close.
  *
- * As the window narrows the bar sheds words, never controls: the path goes
- * first, then the branch, then the search and view labels down to their
- * icons. The right side never shrinks below its controls; the left gives way.
+ * As the window narrows the bar sheds words, never controls, one at a time and
+ * only when they no longer fit (see `useShedStage`): the path goes first, then
+ * the changes label, the branch, the search label and
+ * last the view labels, each down to its icon. Only then does the project name
+ * truncate. Nothing is cut mid-word before that.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
@@ -44,6 +47,7 @@ import { ContextMenu, type ContextMenuItem } from "../../features/search/Context
 import { useWorktreeList } from "../../features/worktrees/useWorktrees";
 import type { ChangeBase } from "../../features/model-storage/useModelStorage";
 import type { ModelChanges } from "../../entities/model/changes";
+import { useShedStage } from "./useShedStage";
 import { applyColorMode, loadTheme, saveTheme, type ColorMode } from "../../shared/theme/theme";
 
 export type WorkspaceView = "wiki" | "diagram";
@@ -55,6 +59,11 @@ export const IS_MAC = /Mac|iP/.test(navigator.userAgent);
  *  the top bar leaves them. */
 const MAC_TRAFFIC_LIGHTS_WIDTH = 72;
 const SEARCH_KEY = IS_MAC ? "⌘K" : "Ctrl K";
+
+/** The words the bar sheds as it narrows, in order: at stage n, every piece
+ *  numbered below n is gone. Past the last, the project name truncates. */
+const SHED = { path: 1, changes: 2, branch: 3, search: 4, views: 5 } as const;
+const LAST_STAGE = SHED.views;
 
 export function TopBar({
   projectPath,
@@ -73,8 +82,6 @@ export function TopBar({
   onToggleTree,
   changeBase = null,
   changes,
-  showChanges = false,
-  onToggleChanges,
 }: {
   projectPath: string | null;
   view: WorkspaceView;
@@ -100,15 +107,19 @@ export function TopBar({
   changeBase?: ChangeBase | null;
   /** What changed in the model since `changeBase`. */
   changes?: ModelChanges;
-  /** The wiki page shows its changes in full. */
-  showChanges?: boolean;
-  onToggleChanges?: () => void;
 }) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [worktreeMenu, setWorktreeMenu] = useState<{ x: number; y: number } | null>(null);
   const worktrees = useWorktreeList(projectPath);
   const here = worktrees.list.find((w) => w.current);
   const projectName = projectPath?.split("/").filter(Boolean).pop() ?? "scryer";
+  const bar = useRef<HTMLDivElement>(null);
+  const stage = useShedStage(
+    bar,
+    LAST_STAGE,
+    [projectPath, worktrees.list.length > 1 && here?.branch, changesLabel(changeBase), sessionBadge, sessionLive, !!onOpenSession].join("|"),
+  );
+  const shows = (piece: keyof typeof SHED) => stage < SHED[piece];
 
   const items: ContextMenuItem[] = [
     {
@@ -129,13 +140,17 @@ export function TopBar({
     // (the command-center idiom): equal flex wings on either side keep it
     // centered regardless of how long the project path runs.
     <div
+      ref={bar}
       data-tauri-drag-region
-      className="flex h-9 shrink-0 items-center border-b border-[var(--border)] bg-[var(--surface)] px-2 select-none"
+      className="flex h-9 shrink-0 items-center overflow-hidden border-b border-[var(--border)] bg-[var(--surface)] px-2 select-none"
     >
       {/* Box-centered, with a 1px optical nudge on the path below. NOT
           items-baseline: the button's exported baseline is its first child's —
           the logo image, i.e. its bottom edge — which drags the path ~3px low. */}
-      <div data-tauri-drag-region className="flex min-w-0 flex-1 items-center">
+      <div
+        data-tauri-drag-region
+        className={`flex flex-1 items-center ${stage >= LAST_STAGE ? "min-w-0" : "min-w-max"}`}
+      >
         {IS_MAC && (
           <div data-tauri-drag-region className="shrink-0" style={{ width: MAC_TRAFFIC_LIGHTS_WIDTH }} />
         )}
@@ -176,25 +191,29 @@ export function TopBar({
               setWorktreeMenu({ x: r.left, y: r.bottom + 2 });
             }}
             title="Switch to another worktree of this project"
-            className="ml-1 hidden min-w-0 items-center gap-1 rounded-md px-1.5 py-1 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] sm:flex"
+            aria-label={`Branch ${here?.branch ?? "detached"}: switch worktree`}
+            className="ml-1 flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-xs whitespace-nowrap text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
           >
             <GitBranch className="h-3 w-3 shrink-0 text-[var(--text-ghost)]" />
-            <span className="truncate font-mono">{here?.branch ?? "detached"}</span>
+            {shows("branch") && <span className="font-mono">{here?.branch ?? "detached"}</span>}
             <ChevronDown className="h-3 w-3 shrink-0 text-[var(--text-ghost)]" />
           </button>
         )}
 
-        {onToggleChanges && (
-          <ChangesToggle base={changeBase} changes={changes} on={showChanges} onToggle={onToggleChanges} />
-        )}
+        <ChangesStatus
+          base={changeBase}
+          changes={changes}
+          onOpen={onOpenSession}
+          compact={!shows("changes")}
+        />
 
-        {projectPath && (
+        {projectPath && shows("path") && (
           <span
             data-tauri-drag-region
             title={projectPath}
             // translate-y-px: 11px mono centered next to 12px sans sits ~1px
             // high by box math; the nudge lands the two baselines together.
-            className="ml-2 hidden min-w-0 max-w-[340px] translate-y-px truncate font-mono text-2xs text-[var(--text-ghost)] lg:block"
+            className="ml-2 block max-w-[340px] translate-y-px truncate font-mono text-2xs text-[var(--text-ghost)]"
           >
             {projectPath}
           </span>
@@ -206,13 +225,19 @@ export function TopBar({
         onClick={onOpenSearch}
         title={`Search the model (${SEARCH_KEY})`}
         aria-label="Search the model"
-        className="mx-1 flex h-7 w-7 shrink-0 items-center justify-center gap-2 rounded-md border border-[var(--border)] bg-[var(--surface-canvas)] text-xs text-[var(--text-tertiary)] transition-colors hover:border-[var(--border-strong)] hover:text-[var(--text-secondary)] cursor-text md:mx-0 md:w-[280px] md:max-w-[38vw] md:justify-start md:px-3"
+        className={`flex h-7 shrink-0 items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--surface-canvas)] text-xs whitespace-nowrap text-[var(--text-tertiary)] transition-colors hover:border-[var(--border-strong)] hover:text-[var(--text-secondary)] cursor-text ${
+          shows("search") ? "mx-2 w-[280px] justify-start px-3" : "mx-1 w-7 justify-center"
+        }`}
       >
         <Search className="h-3.5 w-3.5 shrink-0" />
-        <span className="hidden truncate md:block">Search the model</span>
-        <span className="ml-auto hidden shrink-0 rounded border border-[var(--border-strong)] px-1 font-mono text-2xs text-[var(--text-tertiary)] md:block">
-          {SEARCH_KEY}
-        </span>
+        {shows("search") && (
+          <>
+            <span>Search the model</span>
+            <span className="ml-auto shrink-0 rounded border border-[var(--border-strong)] px-1 font-mono text-2xs text-[var(--text-tertiary)]">
+              {SEARCH_KEY}
+            </span>
+          </>
+        )}
       </button>
 
       <div data-tauri-drag-region className="flex min-w-max flex-1 items-center justify-end">
@@ -220,7 +245,7 @@ export function TopBar({
             exactly one lit. Activity is a wiki page underneath,
             but to the user it is its own place: lighting Wiki too read as two
             selections. Its cell carries a badge when a caller passes one. */}
-        <div className="ml-2 flex items-stretch overflow-hidden rounded-md border border-[var(--border)] divide-x divide-[var(--border)]">
+        <div className="ml-2 flex shrink-0 items-stretch overflow-hidden rounded-md border border-[var(--border)] divide-x divide-[var(--border)]">
           {([
             { id: "wiki", label: "Wiki", Icon: FileText, title: "Wiki view (Ctrl+Space to switch)" },
             { id: "diagram", label: "Map", Icon: Network, title: "Map view (Ctrl+Space to switch)" },
@@ -243,14 +268,14 @@ export function TopBar({
                 aria-label={label}
                 aria-pressed={lit}
                 onClick={() => (id === "session" ? onOpenSession?.() : onSetView(id as WorkspaceView))}
-                className={`flex items-center gap-1.5 px-2 py-1 text-xs font-medium transition-colors md:px-3 ${
+                className={`flex items-center gap-1.5 py-1 text-xs font-medium whitespace-nowrap transition-colors ${shows("views") ? "px-3" : "px-2"} ${
                   lit
                     ? "bg-[var(--surface-active)] text-[var(--text)]"
                     : "text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
                 }`}
               >
                 <Icon className="h-3.5 w-3.5" />
-                <span className="hidden md:inline">{label}</span>
+                {shows("views") && <span>{label}</span>}
                 {id === "session" && sessionBadge > 0 && (
                   <span
                     className={`inline-flex min-w-[18px] items-center justify-center rounded-full px-1 font-mono text-2xs font-semibold tabular-nums ${
@@ -449,18 +474,20 @@ export function changesLabel(base: ChangeBase | null): string | null {
   return base.dirty ? "Uncommitted changes" : null;
 }
 
-/** The checkout's changes as a toggle: lit, the wiki page shows them in
- *  full. Drawn only while there is something to say. */
-export function ChangesToggle({
+/** What the checkout changed, as a status: opens Activity, where the changes
+ *  are listed, when the host passes it. Drawn only while there is something
+ *  to say. */
+export function ChangesStatus({
   base,
   changes,
-  on,
-  onToggle,
+  onOpen,
+  compact = false,
 }: {
   base: ChangeBase | null;
   changes?: ModelChanges;
-  on: boolean;
-  onToggle: () => void;
+  onOpen?: () => void;
+  /** Icon only; the words stay in the tooltip. */
+  compact?: boolean;
 }) {
   const label = changesLabel(base);
   if (!label) return null;
@@ -475,18 +502,15 @@ export function ChangesToggle({
   return (
     <button
       type="button"
-      data-changes-toggle
-      onClick={onToggle}
-      aria-pressed={on}
-      title={`${label}: ${tally}. ${on ? "Hide" : "Show"} the changes on the page.`}
-      className={`ml-1 hidden min-w-0 items-center gap-1 rounded-md px-1.5 py-1 text-xs sm:flex ${
-        on
-          ? "bg-[var(--surface-active)] text-[var(--text)]"
-          : "text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
-      }`}
+      data-changes-status
+      onClick={onOpen}
+      disabled={!onOpen}
+      title={`${label}: ${tally}.${onOpen ? " Open Activity to see them." : ""}`}
+      aria-label={label}
+      className="ml-1 flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-xs whitespace-nowrap text-[var(--text-secondary)] enabled:hover:bg-[var(--surface-hover)]"
     >
       <GitCompare className="h-3 w-3 shrink-0 text-amber-700 dark:text-amber-400" />
-      <span className="truncate">{label}</span>
+      {!compact && <span>{label}</span>}
     </button>
   );
 }

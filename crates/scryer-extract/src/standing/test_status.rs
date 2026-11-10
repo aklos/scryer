@@ -6,7 +6,7 @@ use crate::verdict_cache as store;
 // Declared in the domain, named here so the crate has one public path per area.
 pub use crate::test_evidence::{CoverageSummary, MutationSummary};
 pub use crate::test_evidence::{
-    render_test_command, ClaimProbeStatus, ClaimRecord, ClaimTestStatus, IngestSummary, ProbeRecord, RadiusTest,
+    parse_test_commands, plan_radius_runs, render_test_command, RadiusRun, RunnerCommand, ClaimProbeStatus, ClaimRecord, ClaimTestStatus, IngestSummary, ProbeRecord, RadiusTest,
     TestStatusCache, SLOW_TEST_MILLIS,
 };
 use scryer_core::ModelRef;
@@ -37,14 +37,16 @@ pub fn test_statuses(r: &ModelRef) -> Result<Vec<ClaimTestStatus>, String> {
     store::read_test_statuses(r)
 }
 
-/// The project's radius test-command template, when one is set.
-pub fn test_command(r: &ModelRef) -> Option<String> {
-    store::read_test_command(r)
+/// The project's radius test commands, one per runner, when any is set.
+pub fn test_commands(r: &ModelRef) -> Vec<RunnerCommand> {
+    store::read_test_command(r).map(|raw| parse_test_commands(&raw)).unwrap_or_default()
 }
 
-/// Store the project's radius test-command template.
-pub fn set_test_command(r: &ModelRef, template: &str) -> Result<(), String> {
-    store::write_test_command(r, template)
+/// Set one runner's radius command (`[*.rs] cargo …`, or a bare template for
+/// the files no other runner claims), keeping the other runners'.
+pub fn set_test_command(r: &ModelRef, line: &str) -> Result<(), String> {
+    let raw = store::read_test_command(r).unwrap_or_default();
+    store::write_test_command(r, &crate::test_evidence::set_runner_command(&raw, line))
 }
 
 /// Create the git-ignored directory radius runs report into; returns its

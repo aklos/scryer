@@ -1057,6 +1057,7 @@ mod tests {
         m.nodes.push(node("worker", Kind::Container, Some("sys"))); // wired to nothing
         m.nodes.push(node("fn", Kind::Symbol, Some("api"))); // symbol: exempt
         m.links.push(crate::c4_model::Link {
+            declared: false,
             kind: None,
             id: "l1".into(),
             src: "sys".into(),

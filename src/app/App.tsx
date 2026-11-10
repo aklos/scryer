@@ -9,6 +9,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ErrorBoundary } from "./ErrorBoundary";
@@ -34,8 +35,22 @@ import { useAgentSession } from "../features/agent-launch/useAgentSession";
 import { previewableNodeIds, usePreviewServer } from "../features/preview-client/usePreviewServer";
 import { useModelHealth } from "../features/health-feed/useModelHealth";
 import { useTestStatuses } from "../features/health-feed/useTestStatuses";
+import {
+  DirectionNotice,
+  direct,
+  linkIsFor,
+  movement,
+  placeOf,
+  useDirections,
+  useLinks,
+  type Direction,
+  type LinkTarget,
+  type Place,
+} from "../features/agent-direction";
 import { useFollow } from "../features/sessions/useFollow";
-import { sessionTitle, stepLine } from "../features/sessions/useSessions";
+import { FollowOffer } from "../features/sessions/FollowOffer";
+import { stepLine } from "../features/sessions/follow";
+import { sessionTitle } from "../features/sessions/useSessions";
 import { structuralBySubtree } from "../entities/model/health";
 import { modelConcerns, type ScryModel } from "../entities/model/viewmodel";
 import { modelChanges } from "../entities/model/changes";
@@ -92,11 +107,13 @@ function AppBody() {
     });
     return () => void un.then((f) => f());
   }, [openProject]);
+  // A clicked scryer:// link opens its project here; the workspace then goes to its node.
+  const links = useLinks({ projectPath, openProject });
   const model = storage.model;
   if (!model || storage.status !== "ready") {
     return <ProjectPicker storage={storage} />;
   }
-  return <Workspace model={model} storage={storage} />;
+  return <Workspace model={model} storage={storage} link={links.link} onLinkDone={links.done} />;
 }
 
 const SHOW_CHANGES_KEY = "scryer:show-changes";
@@ -117,10 +134,21 @@ function writeShowChanges(on: boolean) {
   }
 }
 
-function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage }) {
+function Workspace({
+  model,
+  storage,
+  link,
+  onLinkDone,
+}: {
+  model: ScryModel;
+  storage: ModelStorage;
+  /** A clicked link waiting to be followed. */
+  link: LinkTarget | null;
+  onLinkDone: () => void;
+}) {
   const { base, changeBase, projectPath, showEdit, externalGeneration, openProject, closeProject } = storage;
   // What changed since the base: decorates the tree and the map, and marks
-  // the wiki page's rows; the toggle shows the page's changes in full.
+  // the wiki page's rows; the page's toggle shows its changes in full.
   const changes = useMemo(() => modelChanges(base, model), [base, model]);
   const [showChanges, setShowChanges] = useState(() => readShowChanges());
   const toggleChanges = useCallback(() => {
@@ -336,22 +364,97 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
     setSelected({ kind: "special", id: "session" });
   }, [projectPath]);
 
-  // Following a live agent session: its edits take the wiki and map along.
+  // Agents' directions: an agent points the app at a node, and (while the developer follows agents) the view
+  // moves there with a transition, then flashes what the agent wanted seen.
   const hasNode = useCallback((id: string) => modelRef.current.nodes.some((n) => n.id === id), []);
+  const nodeName = useCallback((id: string) => modelRef.current.nodes.find((n) => n.id === id)?.name ?? id, []);
+  // The pane the map or the wiki fills; directed moves play on it.
+  const stageRef = useRef<HTMLDivElement>(null);
+  // While a directed move commits, the map fits its new level at once: the move itself shows the change.
+  const [instantFit, setInstantFit] = useState(false);
+  const here = useRef<Place>({ view: "wiki", focus: null, page: null });
+  here.current = {
+    view,
+    focus: diagramFocus,
+    page: view === "wiki" && selected?.kind === "node" ? selected.id : null,
+  };
+  // One move at a time; a direction arriving mid-move waits, and only the newest waiting one plays.
+  const directing = useRef<Promise<void> | null>(null);
+  const waiting = useRef<Direction | null>(null);
+  const runDirection = useCallback(
+    async (d: Direction) => {
+      // Start outside whatever React work is in flight (a link is followed from an effect): `flushSync` below must
+      // commit the new place at once, or the move animates the old view.
+      await new Promise((r) => requestAnimationFrame(r));
+      const stage = stageRef.current;
+      const m = modelRef.current;
+      if (!stage || !m.nodes.some((n) => n.id === d.node)) return;
+      const from = here.current;
+      const toView = d.view === "map" ? "diagram" : d.view === "wiki" ? "wiki" : from.view;
+      const to = placeOf(m, d.node, toView);
+      const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+      await direct({
+        stage,
+        move: movement(m, from, to),
+        to,
+        target: d.node,
+        apply: () =>
+          flushSync(() => {
+            setInstantFit(true);
+            setWorkspaceView(toView);
+            selectNode(d.node);
+          }),
+        ready: () =>
+          toView === "wiki" || !!stage.querySelector(`[data-map-ready][data-map-level="${CSS.escape(to.focus ?? "")}"]`),
+        name: nodeName,
+        flash: { claims: d.claims ?? [], fields: d.fields ?? [], nodes: d.nodes ?? [] },
+        reduced,
+      });
+      setInstantFit(false);
+    },
+    [setWorkspaceView, selectNode, nodeName],
+  );
+  const onDirect = useCallback(
+    (d: Direction) => {
+      if (directing.current) {
+        waiting.current = d;
+        return;
+      }
+      const run = async (next: Direction) => {
+        await runDirection(next);
+        const queued = waiting.current;
+        waiting.current = null;
+        if (queued) await run(queued);
+      };
+      directing.current = run(d).finally(() => {
+        directing.current = null;
+      });
+    },
+    [runDirection],
+  );
+  const directions = useDirections({ hasNode, onDirect });
+  // Following a session: the view goes where it works, settled, with the same moves a show plays. A show the
+  // developer accepts, or a link they click, pauses it.
   const follow = useFollow({
     projectPath,
-    model,
-    selected,
+    selectedId: selected?.kind === "node" ? selected.id : null,
     hasNode,
-    onGo: selectNode,
-    onView: setWorkspaceView,
-    onEnded: (s) => toast(`${sessionTitle(s, "this branch")} ended — stopped following`),
+    onMove: (node, s) => onDirect({ session: s.session, sender: sessionTitle(s, s.branch ?? "detached"), node, at: Date.now() }),
+    onEnded: (s) => toast(`${sessionTitle(s, s.branch ?? "this branch")} ended — stopped following`),
   });
   const followedIds = useMemo<ReadonlySet<string>>(
-    () => (follow.target ? new Set([follow.target]) : EMPTY_IDS),
-    [follow.target],
+    () => (follow.state && !follow.state.paused && follow.target ? new Set([follow.target]) : EMPTY_IDS),
+    [follow.state, follow.target],
   );
-  const nodeNames = useMemo(() => new Map(model.nodes.map((n) => [n.id, n.name])), [model]);
+  // A clicked link, once its project is the one open: go there, or say why not.
+  useEffect(() => {
+    if (!link || !linkIsFor(link, projectPath)) return;
+    onLinkDone();
+    if (hasNode(link.direction.node)) {
+      follow.pause();
+      directions.follow(link.direction);
+    } else toast("That link points to a node this project's tree no longer has.");
+  }, [link, projectPath, hasNode, directions.follow, follow.pause, onLinkDone, toast]);
 
   useEffect(() => {
     const un = listen<Navigate>("navigate", ({ payload: nav }) => {
@@ -436,8 +539,6 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
         onToggleTree={toggleTree}
         changeBase={changeBase}
         changes={changes}
-        showChanges={showChanges}
-        onToggleChanges={toggleChanges}
       />
       <ProjectNotices projectPath={projectPath} />
       <div className="relative flex min-h-0 flex-1">
@@ -464,7 +565,7 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
             onSelectNode={selectNodeFromTree}
             onToggle={toggle}
             editor={pageEditor}
-            // Where the followed session is editing now.
+            // Where the followed session is working now.
             activeNodeIds={followedIds}
             // The map's current level — tinted in the tree so it mirrors what
             // the diagram is showing. Only while in map view.
@@ -476,6 +577,8 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
             changes={changes}
           />
         </div>
+        {/* The pane directed moves play on: overlays stack in it (isolate), its one live child is the view. */}
+        <div ref={stageRef} data-direct-stage className="relative isolate flex min-w-0 flex-1">
         {view === "diagram" ? (
           <DiagramView
             model={model}
@@ -487,6 +590,7 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
             onSelectNode={selectFromDiagram}
             concernLens={concernLens}
             changes={changes}
+            fitDuration={instantFit ? 0 : undefined}
           />
         ) : selected?.kind === "special" ? (
           selected.id === "dark" ? (
@@ -497,8 +601,8 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
               model={model}
               changeBase={changeBase}
               generation={externalGeneration}
-              following={follow.following}
-              onFollow={follow.follow}
+              following={follow.state?.session ?? null}
+              onFollow={(id) => (id ? follow.follow(id) : follow.stop())}
               onSelectNode={selectNode}
             />
           )
@@ -507,6 +611,8 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
             model={model}
             base={base ?? model}
             showChanges={showChanges}
+            onToggleChanges={toggleChanges}
+            changes={changes}
             selected={selected}
             report={healthReport}
             testVerdicts={testVerdicts}
@@ -522,7 +628,19 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
             Select a node from the tree.
           </div>
         )}
+        </div>
       </div>
+      <DirectionNotice
+        notice={directions.notice}
+        nodeName={nodeName}
+        onGo={() => {
+          if (!directions.notice) return;
+          follow.pause();
+          directions.go(directions.notice.direction);
+        }}
+        onDismiss={directions.dismiss}
+      />
+      <FollowOffer offer={follow.offer} onFollow={follow.acceptOffer} onDismiss={follow.dismissOffer} />
       <Powerline
         model={model}
         agent={agent}
@@ -531,12 +649,14 @@ function Workspace({ model, storage }: { model: ScryModel; storage: ModelStorage
         onOpenSpecial={openSpecial}
         onOpenSettings={() => setSettingsOpen(true)}
         follow={
-          follow.following
+          follow.state
             ? {
                 title: follow.session ? sessionTitle(follow.session, follow.sessions?.branch ?? "detached") : "session",
                 now: follow.session?.steps?.length
-                  ? stepLine(follow.session.steps[follow.session.steps.length - 1], (id) => nodeNames.get(id) ?? id)
+                  ? stepLine(follow.session.steps[follow.session.steps.length - 1], nodeName)
                   : undefined,
+                paused: follow.state.paused,
+                onResume: follow.resume,
                 onStop: follow.stop,
               }
             : undefined

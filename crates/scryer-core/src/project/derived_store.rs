@@ -165,6 +165,7 @@ mod tests {
             decisions: None,
         });
         let tree = DerivedTree {
+            structure_problems: Vec::new(),
             fingerprint: 7,
             committed: ScryModel::new(),
             planned,
@@ -201,6 +202,7 @@ mod tests {
             vec![SourceLocation { pattern: "t.rs".into(), symbol: Some("ok".into()), line: Some(1), end_line: Some(1) }],
         );
         let tree = DerivedTree {
+            structure_problems: Vec::new(),
             fingerprint: 1,
             committed: planned.clone(),
             planned,

@@ -76,7 +76,7 @@ const MARK_TONE: Record<ClaimMark, string> = {
   hollow: CLAIM_TONE.failing,
   failing: CLAIM_TONE.failing,
   changed: CLAIM_TONE.stale,
-  unrun: CLAIM_TONE.stale,
+  unrun: CLAIM_TONE.unproven,
   todo: CLAIM_TONE.planned,
 };
 

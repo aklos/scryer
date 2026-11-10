@@ -102,6 +102,8 @@
      palette swap carries through. */
   --map-card-stroke: color-mix(in srgb, var(--text-muted) 75%, var(--surface-raised));
   --map-edge: var(--text-tertiary);
+  /* Implied edges: beads a step fainter than the dashes that say something. */
+  --map-edge-quiet: var(--text-muted);
   --map-boundary: var(--text-muted);
   /* A card's name and description: the page's own ink in light mode. */
   --map-title: var(--text);
@@ -168,6 +170,8 @@
      a step up, so a card reads as a crisp object on the canvas. */
   --map-card-stroke: color-mix(in srgb, var(--text-tertiary) 80%, var(--surface-raised));
   --map-edge: var(--text-tertiary);
+  /* Implied edges: beads a step fainter than the dashes that say something. */
+  --map-edge-quiet: var(--text-ghost);
   --map-boundary: var(--text-muted);
   --map-title: color-mix(in srgb, var(--text) 50%, #ffffff);
   --map-desc: var(--text-tertiary);
@@ -195,6 +199,16 @@
 }
 
 /* --- Diagram view: ported edge + card animations from main --- */
+/* A label on its own line: the canvas colour rings each letter, so the line
+   shows between the words instead of stopping at a box. */
+.edge-label-halo {
+  text-shadow:
+    1px 0 0 var(--surface-canvas), -1px 0 0 var(--surface-canvas),
+    0 1px 0 var(--surface-canvas), 0 -1px 0 var(--surface-canvas),
+    1px 1px 0 var(--surface-canvas), -1px -1px 0 var(--surface-canvas),
+    1px -1px 0 var(--surface-canvas), -1px 1px 0 var(--surface-canvas);
+}
+
 @keyframes dash-flow {
   to { stroke-dashoffset: -9; }
 }
@@ -339,16 +353,6 @@
   overflow: hidden;
   padding: 0 16px;
 }
-/* A followed session's latest step slides in as it lands. */
-.pl .pl-step {
-  animation: pl-step-in 0.35s ease-out;
-}
-@keyframes pl-step-in {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-}
 .pl .rseg {
   display: flex;
   align-items: center;
@@ -479,4 +483,36 @@
 [data-film] *::after {
   transition: none !important;
   animation: none !important;
+}
+
+/* --- Agent directions: the overlays a directed move draws (features/agent-direction/motion.ts) --- */
+/* The pane's view lives on its own layer for good, so a directed move never changes how its text renders: dropping
+   a layer when a move ends shifts text by a subpixel. Safe because every fixed-position menu and dialog is portaled
+   out of the pane. */
+[data-direct-stage] > * {
+  will-change: transform;
+}
+/* The card that opens into its page, or that a page folds back into. */
+.direct-ghost {
+  box-sizing: border-box;
+  overflow: hidden;
+  padding: 10px 12px;
+  border: 1px solid var(--map-card-stroke);
+  border-radius: 6px;
+  background: var(--scryer-node-bg);
+  color: var(--map-title);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+/* The wash over a flashed field or claim. */
+.direct-sweep {
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  transform-origin: left center;
+}
+/* The ring around a flashed card on the map. */
+.direct-ring {
+  border-radius: 8px;
+  box-shadow: 0 0 0 2px var(--accent), 0 0 0 6px color-mix(in srgb, var(--accent) 18%, transparent);
 }

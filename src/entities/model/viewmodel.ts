@@ -117,6 +117,9 @@ export interface Link {
   /** Required inside a styled container; optional prose-only links remain
    *  legal at system and container level. Mirrors Rust `Link.kind`. */
   kind?: LinkKind;
+  /** Declared in structure.toml, not read off the code. Mirrors Rust
+   *  `Link.declared`. */
+  declared?: boolean;
 }
 
 export interface ScryModel {

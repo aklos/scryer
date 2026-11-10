@@ -117,7 +117,7 @@ mod tests {
         write(d, "src/store.rs", "pub fn put() {}\n");
         let report = super::model_health(d).unwrap();
         assert_eq!(report.derived_status.totals.claims, 1);
-        assert_eq!(report.derived_status.totals.stale, 1, "no report has covered it yet");
+        assert_eq!(report.derived_status.totals.unproven, 1, "no report has covered it yet");
         let dark: Vec<&String> = report.derived_status.nodes.values().flat_map(|n| n.dark_files.iter()).collect();
         assert!(dark.iter().any(|f| f.as_str() == "src/store.rs"), "{dark:?}");
     }

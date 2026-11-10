@@ -2,6 +2,12 @@
 //! and testing tools — their input schemas stripped of generator noise once at
 //! construction — and the connect-time instructions. The session it serves is
 //! the one its harness process last bound, else the one named in the env.
+//!
+//! `show` is listed only while the desktop app has the working project open,
+//! and the client hears `tools/list_changed` when that flips: the server
+//! checks every couple of seconds once the client is initialized. Polling,
+//! because the alternative, a file watcher per agent process, costs more than
+//! the one `stat` a check is.
 
 use crate::instructions::instructions_for;
 use rmcp::{
@@ -10,7 +16,7 @@ use rmcp::{
         CallToolRequestParams, CallToolResult, Implementation, InitializeRequestParams,
         InitializeResult, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
     },
-    service::{RequestContext, RoleServer},
+    service::{NotificationContext, RequestContext, RoleServer},
     ErrorData as McpError, ServerHandler,
 };
 use scryer_core::agent_integration::Tool as AgentTool;
@@ -32,7 +38,8 @@ pub struct ScryerServer {
 
 impl ScryerServer {
     pub fn new() -> Self {
-        let tool_router = Self::tool_router_read() + Self::tool_router_testing() + Self::tool_router_comments();
+        let tool_router =
+            Self::tool_router_read() + Self::tool_router_testing() + Self::tool_router_comments() + Self::tool_router_show();
         let tools = tool_router
             .list_all()
             .into_iter()
@@ -64,10 +71,36 @@ impl ScryerServer {
         &self.detected
     }
 
-    /// The advertised tools (slimmed schemas) — what `tools/list` returns.
+    /// Every tool this server has (slimmed schemas), `show` included.
     #[cfg(test)]
     pub(crate) fn tools(&self) -> &[Tool] {
         &self.tools
+    }
+
+    /// The tools `tools/list` returns: all of them while the app is open, else all but `show`.
+    pub(crate) fn listed_tools(&self, app_open: bool) -> Vec<Tool> {
+        self.tools.iter().filter(|t| app_open || t.name != "show").cloned().collect()
+    }
+
+    /// What the app calls this session when it shows something for it: the session's task, else "an agent".
+    pub(crate) fn sender(&self, model_ref: &scryer_core::ModelRef) -> String {
+        self.session_id(model_ref)
+            .and_then(|s| scryer_core::session_hooks::session_task(model_ref, &s))
+            .unwrap_or_else(|| "an agent".into())
+    }
+
+    /// A markdown link that opens the app at node `id`, named `name`.
+    pub(crate) fn node_link(&self, model_ref: &scryer_core::ModelRef, id: &str, name: &str) -> String {
+        let d = scryer_core::app_view::Direction { sender: self.sender(model_ref), node: id.into(), ..Default::default() };
+        format!("[{name}]({})", scryer_core::app_view::link_for(model_ref.project_path(), &d))
+    }
+
+    /// Whether the desktop app has the working project open.
+    pub(crate) fn app_is_open() -> bool {
+        std::env::current_dir()
+            .ok()
+            .map(crate::cli::working_project)
+            .is_some_and(|p| scryer_core::app_view::app_open(&p).is_some())
     }
 
     /// A server pinned to session `id` — how a test stands in for the
@@ -152,7 +185,7 @@ impl ServerHandler for ScryerServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
         Ok(ListToolsResult {
-            tools: self.tools.clone(),
+            tools: self.listed_tools(Self::app_is_open()),
             meta: None,
             next_cursor: None,
         })
@@ -173,9 +206,30 @@ impl ServerHandler for ScryerServer {
                 ..Default::default()
             },
             instructions: Some(instructions_for(project.as_deref(), &self.detected)),
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
+            capabilities: ServerCapabilities::builder().enable_tools().enable_tool_list_changed().build(),
             ..Default::default()
         }
+    }
+
+    fn on_initialized(
+        &self,
+        context: NotificationContext<RoleServer>,
+    ) -> impl std::future::Future<Output = ()> + Send + '_ {
+        let peer = context.peer;
+        tokio::spawn(async move {
+            let mut open = Self::app_is_open();
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                let now = Self::app_is_open();
+                if now != open {
+                    open = now;
+                    if peer.notify_tool_list_changed().await.is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        std::future::ready(())
     }
 
     fn initialize(
@@ -208,7 +262,7 @@ mod surface {
     }
 
     /// The daily set and nothing else: reads of the derived tree, the test
-    /// loop, and the comment threads.
+    /// loop, the comment threads, and pointing the app at a node.
     #[test]
     fn the_surface_is_the_daily_set() {
         let mut names: Vec<String> = descriptions().into_iter().map(|(n, _)| n).collect();
@@ -227,8 +281,19 @@ mod surface {
                 "orient",
                 "read_model",
                 "search_model",
+                "show",
             ]
         );
+    }
+
+    /// While the app has the project open, lists the show tool, and otherwise leaves it out.
+    #[test]
+    fn lists_show_only_while_the_app_is_open() {
+        let server = ScryerServer::new();
+        let names = |open| server.listed_tools(open).into_iter().map(|t| t.name.to_string()).collect::<Vec<_>>();
+        assert!(names(true).contains(&"show".to_string()));
+        assert!(!names(false).contains(&"show".to_string()));
+        assert_eq!(names(false).len() + 1, names(true).len());
     }
 
     /// Nothing points the agent at a rule to fetch: no `Rules:` lines, no

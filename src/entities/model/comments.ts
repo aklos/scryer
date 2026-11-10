@@ -6,6 +6,8 @@
 export type ThreadStatus = "open" | "addressed";
 
 export interface CommentEvent {
+  /** The event's file stem: what deleting it names. */
+  id: string;
   /** Unix milliseconds. */
   at: number;
   author: "human" | "agent";

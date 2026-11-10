@@ -35,6 +35,8 @@ const PORT_GAP = 16;
 const PORT_SPAN = 0.8;
 /** Step between two stretches parted off one line. */
 const TRACK_GAP = 8;
+/** Shortest leg into or out of a port: an arrowhead and the gap before it. */
+const MIN_LEG = 16;
 /** Most stretches on one line whose every track order is tried. */
 const MAX_PERMUTED = 6;
 /** What a turn, a crossing, and running along another edge cost, in px. */
@@ -183,6 +185,14 @@ function routeAll(
   const useH = new Uint16Array(nx * ny), useV = new Uint16Array(nx * ny);
   const throughH = new Uint16Array(nx * ny), throughV = new Uint16Array(nx * ny);
 
+  // The search's per-state cost and back-pointer, shared by every edge's
+  // search in this pass: typed arrays stamped per search, not maps rebuilt.
+  const states = nx * ny * 4;
+  const costOf = new Float64Array(states);
+  const prevOf = new Int32Array(states);
+  const stampOf = new Uint32Array(states);
+  let stamp = 0;
+
   const out = new Map<string, Route>();
   for (const { e, from, to } of ends) {
     const node = (p: Pt) => {
@@ -223,20 +233,26 @@ function routeAll(
     const dirOf = (side: Side) => SIDES.indexOf(side);
     const goalAt = new Map<number, S[]>();
     for (const g of goals) (goalAt.get(g.n) ?? goalAt.set(g.n, []).get(g.n)!).push(g);
+    const gx = goals.map((g) => xs[g.n % nx]), gy = goals.map((g) => ys[Math.floor(g.n / nx)]);
     const h = (n: number) => {
       const x = xs[n % nx], y = ys[Math.floor(n / nx)];
       let best = Infinity;
-      for (const g of goals) best = Math.min(best, Math.abs(x - xs[g.n % nx]) + Math.abs(y - ys[Math.floor(g.n / nx)]));
+      for (let q = 0; q < gx.length; q++) best = Math.min(best, Math.abs(x - gx[q]) + Math.abs(y - gy[q]));
       return best;
     };
     const key = (n: number, d: number) => n * 4 + d;
-    const cost = new Map<number, number>();
-    const prev = new Map<number, number>();
+    stamp++;
+    const costAt = (k: number) => (stampOf[k] === stamp ? costOf[k] : Infinity);
+    const reach = (k: number, c: number, from: number) => {
+      stampOf[k] = stamp;
+      costOf[k] = c;
+      prevOf[k] = from;
+    };
     const origin = new Map<number, S>();
     const heap = new MinHeap();
     for (const s of starts) {
       const k = key(s.n, dirOf(s.p.side));
-      cost.set(k, 0);
+      reach(k, 0, -1);
       origin.set(k, s);
       heap.push(h(s.n), k);
     }
@@ -244,7 +260,7 @@ function routeAll(
     while (heap.size) {
       const [f, k] = heap.pop();
       if (best && f >= best.total) break;
-      const c = cost.get(k)!;
+      const c = costAt(k);
       if (f - h(Math.floor(k / 4)) > c + 1e-6) continue;
       const n = Math.floor(k / 4), d = k % 4;
       for (const g of goalAt.get(n) ?? []) {
@@ -268,23 +284,22 @@ function routeAll(
         const step = len * (1 + SHARE * shared) + (nd === d ? 0 : BEND) + CROSS * crossing;
         const nk = key(m, nd);
         const nc = c + step;
-        if (nc < (cost.get(nk) ?? Infinity)) {
-          cost.set(nk, nc);
-          prev.set(nk, k);
+        if (nc < costAt(nk)) {
+          reach(nk, nc, k);
           heap.push(nc + h(m), nk);
         }
       }
     }
     if (!best) return null;
     const cells: number[] = [];
-    let k: number | undefined = best.k;
-    while (k !== undefined) {
+    let k = best.k;
+    for (;;) {
       cells.push(Math.floor(k / 4));
       if (origin.has(k)) break;
-      k = prev.get(k);
+      k = prevOf[k];
     }
     cells.reverse();
-    return { from: origin.get(k!)!, to: best.goal, cells };
+    return { from: origin.get(k)!, to: best.goal, cells };
   }
 }
 
@@ -293,7 +308,8 @@ function routeAll(
  * step apart about that line, as far as the room to the nearest card allows.
  * The tracks go in the order whose turns cross each other least: a stretch
  * that turns off inside another's span, towards it, crosses it there. A
- * route's first and last stretch, out of a port, stay put.
+ * route's first and last stretch, out of a port, stay put, and a stretch
+ * that turns into a port never comes nearer it than an arrowhead.
  */
 function nudge(routes: Map<string, Route>, boxes: PortBox[]) {
   interface Run { pts: Pt[]; i: number; across: boolean; at: number; lo: number; hi: number; dLo: number; dHi: number; id: string }
@@ -374,25 +390,56 @@ function nudge(routes: Map<string, Route>, boxes: PortBox[]) {
       if (bunch.length < 2) continue;
       const { across, at } = bunch[0];
       const lo = Math.min(...bunch.map((r) => r.lo)), hi = Math.max(...bunch.map((r) => r.hi));
-      // Room either way to the nearest card beside the stretch.
-      let room = MARGIN;
+      // Room on each side to the nearest card beside the stretch.
+      let below = MARGIN, above = MARGIN;
       for (const b of boxes) {
         const [b0, b1, c0, c1] = across ? [b.x, b.x + b.w, b.y, b.y + b.h] : [b.y, b.y + b.h, b.x, b.x + b.w];
         if (b1 <= lo || b0 >= hi) continue;
-        room = Math.min(room, Math.max(0, at <= c0 ? c0 - at : at >= c1 ? at - c1 : 0));
+        if (at <= c0) above = Math.min(above, c0 - at);
+        else if (at >= c1) below = Math.min(below, at - c1);
+        else below = above = 0;
       }
-      const n = bunch.length;
-      const step = Math.min(TRACK_GAP, (2 * Math.max(0, room - 4)) / (n - 1));
-      if (step < 2) continue;
-      arrange(bunch).forEach((run, t) => {
-        const off = (t - (n - 1) / 2) * step;
+      const order = arrange(bunch), n = order.length;
+      // Each track's bounds: clear of the cards beside the line, and, where
+      // there is room for it, a stretch that turns into a port keeps that
+      // last leg an arrowhead long.
+      const clear = { min: -(below - 4), max: above - 4 };
+      const legged = order.map((run) => {
+        let { min, max } = clear;
+        const legs = [run.i === 1 ? run.pts[0] : null, run.i + 2 === run.pts.length - 1 ? run.pts[run.i + 2] : null];
+        for (const port of legs) {
+          if (!port) continue;
+          const p = across ? port.y : port.x;
+          if (at > p) min = Math.max(min, MIN_LEG - (at - p));
+          else max = Math.min(max, p - at - MIN_LEG);
+        }
+        return { min, max };
+      });
+      const offs = place(legged, n) ?? place(order.map(() => clear), n);
+      if (!offs) continue;
+      order.forEach((run, t) => {
         for (const p of [run.pts[run.i], run.pts[run.i + 1]]) {
-          if (across) p.y = at + off;
-          else p.x = at + off;
+          if (across) p.y = at + offs[t];
+          else p.x = at + offs[t];
         }
       });
     }
   }
+}
+
+/** Offsets for `n` tracks in order, the widest step apart (at most
+ *  TRACK_GAP, at least 2) that keeps each within its bounds, centred on the
+ *  line as near as the bounds allow; none when no step fits. */
+function place(bounds: { min: number; max: number }[], n: number): number[] | null {
+  for (let step = TRACK_GAP; step >= 2; step -= 0.5) {
+    const offs = bounds.map((_, t) => (t - (n - 1) / 2) * step);
+    const lowest = Math.max(...bounds.map((b, t) => b.min - offs[t]));
+    const highest = Math.min(...bounds.map((b, t) => b.max - offs[t]));
+    if (lowest > highest) continue;
+    const shift = Math.min(Math.max(0, lowest), highest);
+    return offs.map((o) => o + shift);
+  }
+  return null;
 }
 
 function* permutations<T>(items: T[]): Generator<T[]> {

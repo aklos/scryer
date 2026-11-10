@@ -256,7 +256,7 @@ fn prune(r: &ModelRef, session: &str, planned: &[(String, String)], now: u64) {
     }
 }
 
-fn now_secs() -> u64 {
+pub fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -299,9 +299,47 @@ pub fn session_for_pid(r: &ModelRef, pid: u32) -> Option<String> {
     session_store::session_path(r, &s).map(|_| s)
 }
 
+/// One session as the app needs it to offer following: the task it
+/// oriented on, whether it is working now, and how many files it edited.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionBrief {
+    pub session: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
+    pub live: bool,
+    pub touched: usize,
+}
+
+/// Brief `session` from its log alone, as of `now` (unix seconds).
+pub fn session_brief(r: &ModelRef, session: &str, now: u64) -> SessionBrief {
+    let entries = session_store::read(r, session);
+    let log = SessionLog::from_events(&entries);
+    SessionBrief {
+        session: session.to_string(),
+        task: log.task,
+        live: crate::session_log::working(&entries, now),
+        touched: log.touched.len(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Briefs a session by its task, whether it is working and how many files it edited.
+    #[test]
+    fn briefs_a_session_by_its_task_liveness_and_edits() {
+        let (_dir, r) = project();
+        record_task(&r, "s1", "queue offline saves").unwrap();
+        record_touch(&r, "s1", "src/a.rs").unwrap();
+        record_touch(&r, "s1", "src/a.rs").unwrap();
+        record_touch(&r, "s1", "src/b.rs").unwrap();
+        let b = session_brief(&r, "s1", now_secs());
+        assert_eq!((b.task.as_deref(), b.live, b.touched), (Some("queue offline saves"), true, 2));
+        assert!(!session_brief(&r, "s1", now_secs() + 3600).live, "idle past the working window");
+        assert_eq!(session_brief(&r, "none", now_secs()), SessionBrief { session: "none".into(), task: None, live: false, touched: 0 });
+    }
 
     fn project() -> (tempfile::TempDir, ModelRef) {
         let dir = tempfile::tempdir().unwrap();

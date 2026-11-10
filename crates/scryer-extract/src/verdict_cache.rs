@@ -1109,7 +1109,7 @@ mod tests {
 
     /// End to end on the derived tree: a JUnit report keyed by test name
     /// makes a green claim proven and a red one failing, a claim no report
-    /// covered reads stale and a todo stub planned; editing the exercised
+    /// covered reads unproven and a todo stub planned; editing the exercised
     /// file ages the green verdict; a cargo-mutants report marks the file's
     /// component and counts its survivors.
     #[test]
@@ -1146,9 +1146,9 @@ mod tests {
         let (_, status) = read_derived_status(&r).unwrap();
         assert_eq!(state_of(&status, "saves"), ClaimState::Proven);
         assert_eq!(state_of(&status, "loads"), ClaimState::Failing);
-        assert_eq!(state_of(&status, "splits"), ClaimState::Stale);
+        assert_eq!(state_of(&status, "splits"), ClaimState::Unproven);
         assert_eq!(state_of(&status, "merges"), ClaimState::Planned);
-        assert_eq!((status.totals.proven, status.totals.failing, status.totals.stale, status.totals.planned), (1, 1, 1, 1));
+        assert_eq!((status.totals.proven, status.totals.failing, status.totals.unproven, status.totals.planned), (1, 1, 1, 1));
 
         let mutants = r#"{"outcomes":[
           {"scenario":{"Mutant":{"package":"core","file":"src/draft.rs","function":{"function_name":"save"},"span":{"start":{"line":1,"column":1}},"replacement":"false"}},"summary":"MissedMutant"}

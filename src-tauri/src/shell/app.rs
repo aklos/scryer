@@ -1,13 +1,16 @@
 //! The desktop app's wiring: recover the user's PATH (a macOS app launched
 //! from the Dock or Finder inherits a minimal one), build the Tauri app,
-//! register its managed state and its whole command surface.
+//! register its managed state and its whole command surface, and take
+//! `scryer://` links: one app runs at a time, and a link clicked while it runs
+//! goes to it rather than to a second copy.
 
 use std::sync::Mutex;
 
 use tauri::Manager;
+use tauri_plugin_deep_link::DeepLinkExt;
 
 use crate::shell::state::{AcpState, PreviewState, WatcherState};
-use crate::shell::{authored_model, derived, mcp_setup, observability, preview, project, source_view};
+use crate::shell::{authored_model, derived, links, mcp_setup, observability, preview, project, source_view};
 
 /// macOS GUI apps launched via Spotlight, Dock, or Finder inherit a minimal
 /// PATH (`/usr/bin:/bin:/usr/sbin:/sbin`) that excludes user-installed tools.
@@ -47,6 +50,15 @@ fn ensure_full_path() {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // First, so a second launch (a link clicked while the app runs) hands its arguments over and exits; with the
+        // deep-link feature the link reaches `on_open_url` below.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.webview_windows().values().next() {
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(AcpState(
@@ -56,10 +68,29 @@ pub fn run() {
         .setup(move |app| {
             app.manage(Mutex::new(WatcherState { project: None }));
             app.manage(PreviewState(tokio::sync::Mutex::new(None)));
+            app.manage(links::PendingLink::default());
+            // Installed packages register the scheme; a dev build or a bare AppImage registers itself, so the copy
+            // that ran last takes the links.
+            #[cfg(any(target_os = "linux", windows))]
+            let _ = app.deep_link().register_all();
+            #[cfg(target_os = "linux")]
+            links::ensure_default_handler();
+            let handle = app.handle().clone();
+            app.deep_link().on_open_url(move |event| {
+                let urls: Vec<String> = event.urls().iter().map(|u| u.to_string()).collect();
+                links::receive(&handle, &urls);
+            });
+            // Launched by a link: it is in the arguments, before anything listens.
+            if let Ok(Some(urls)) = app.deep_link().get_current() {
+                let urls: Vec<String> = urls.iter().map(|u| u.to_string()).collect();
+                links::receive(app.handle(), &urls);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             project::watch_project,
+            project::get_session_brief,
+            links::take_link,
             project::read_change_base,
             project::read_base_model,
             project::read_planned,
@@ -95,8 +126,15 @@ pub fn run() {
             derived::list_comments,
             derived::open_comment,
             derived::reply_comment,
+            derived::delete_comment,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
-        .run(|_, _| {});
+        .run(|app, event| {
+            // The agents' MCP servers list `show` while the app has the
+            // project open; a clean exit takes the record with it.
+            if let tauri::RunEvent::Exit = event {
+                project::forget_open_project(&app.state::<Mutex<WatcherState>>());
+            }
+        });
 }
